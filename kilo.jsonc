@@ -9,7 +9,8 @@
   "instructions": [
     ".kilo/rules/00-conventions.md",
     ".kilo/rules/10-workflow.md",
-    ".kilo/rules/20-mcp-conventions.md"
+    ".kilo/rules/20-mcp-conventions.md",
+    ".kilo/rules/30-ask-agent.md"
   ],
 
   // Agent models — explicit per-agent to prevent subagent inheritance bugs
