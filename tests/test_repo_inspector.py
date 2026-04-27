@@ -4,26 +4,26 @@ from repo_finder.repo_inspector import (
     _determine_verdict,
     _evaluate_activity,
     _extract_key_files,
-    _parse_owner_repo,
 )
+from repo_finder.urls import parse_owner_repo
 
 
-def test_parse_owner_repo_slug():
-    assert _parse_owner_repo("owner/repo") == ("owner", "repo")
+def testparse_owner_repo_slug():
+    assert parse_owner_repo("owner/repo") == ("owner", "repo")
 
 
-def test_parse_owner_repo_url():
-    assert _parse_owner_repo("https://github.com/owner/repo") == ("owner", "repo")
+def testparse_owner_repo_url():
+    assert parse_owner_repo("https://github.com/owner/repo") == ("owner", "repo")
 
 
-def test_parse_owner_repo_url_with_trailing_slash():
-    assert _parse_owner_repo("https://github.com/owner/repo/") == ("owner", "repo")
+def testparse_owner_repo_url_with_trailing_slash():
+    assert parse_owner_repo("https://github.com/owner/repo/") == ("owner", "repo")
 
 
-def test_parse_owner_repo_invalid():
-    assert _parse_owner_repo("not-a-repo") is None
-    assert _parse_owner_repo("") is None
-    assert _parse_owner_repo("owner/repo/extra") is None
+def testparse_owner_repo_invalid():
+    assert parse_owner_repo("not-a-repo") is None
+    assert parse_owner_repo("") is None
+    assert parse_owner_repo("owner/repo/extra") is None
 
 
 def test_evaluate_activity_active():

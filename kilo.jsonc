@@ -2,7 +2,7 @@
   "$schema": "https://app.kilo.ai/config.json",
 
   // Change models here — all agents configured in one place
-  "model": "deepseek/deepseek-v4-pro",
+  "model": "deepseek/deepseek-v4-flash",
   "small_model": "deepseek/deepseek-v4-flash",
 
   // Persistent instructions loaded every session. AGENTS.md is auto-loaded by Kilo — only rules need explicit paths.

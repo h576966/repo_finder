@@ -6,7 +6,8 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from . import _now_iso, cache, pattern_extractor, ranker, repo_inspector
+from . import cache, pattern_extractor, ranker, repo_inspector
+from .constants import _now_iso
 from .github_client import get_client
 from .models import (
     CompareItem,
@@ -20,12 +21,13 @@ from .models import (
     RepoStructure,
     RepoSummary,
 )
+from .urls import parse_owner_repo
 
 mcp = FastMCP("RepoFinder")
 
 
 def _parse_url(url_or_slug: str) -> tuple[str, str]:
-    parsed = repo_inspector._parse_owner_repo(url_or_slug)
+    parsed = parse_owner_repo(url_or_slug)
     if parsed is None or not parsed[0] or not parsed[1]:
         raise ToolError(
             f"Invalid repo reference: '{url_or_slug}'. "

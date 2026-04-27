@@ -1,0 +1,34 @@
+{
+  "corpus": [
+    {
+      "owner": "fastapi",
+      "repo": "fastapi",
+      "expected": {
+        "language": "Python",
+        "license_spdx": "MIT",
+        "archived": false,
+        "verdict_possible": ["useful", "maybe"]
+      }
+    },
+    {
+      "owner": "psf",
+      "repo": "requests",
+      "expected": {
+        "language": "Python",
+        "license_spdx": "Apache-2.0",
+        "archived": false,
+        "verdict_possible": ["useful", "maybe"]
+      }
+    },
+    {
+      "owner": "encode",
+      "repo": "httpx",
+      "expected": {
+        "language": "Python",
+        "license_spdx": "BSD-3-Clause",
+        "archived": false,
+        "verdict_possible": ["useful", "maybe"]
+      }
+    }
+  ]
+}

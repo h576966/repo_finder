@@ -1,6 +1,8 @@
 from unittest.mock import patch
 
 from repo_finder import pattern_extractor
+from repo_finder.framework_detector import collect_all_files, detect_framework, read_file
+from repo_finder.language_patterns import identify_language_patterns
 from repo_finder.models import DeepPatternReport
 
 
@@ -12,7 +14,7 @@ def test_detect_framework_fastapi(tmp_path):
     (d / "app").mkdir()
     (d / "app" / "main.py").write_text("app = FastAPI()")
 
-    result = pattern_extractor.detect_framework(str(d))
+    result = detect_framework(str(d))
     assert result == "fastapi"
 
 
@@ -23,7 +25,7 @@ def test_detect_framework_react(tmp_path):
     (d / "src").mkdir()
     (d / "src" / "App.tsx").write_text("export default function App()")
 
-    result = pattern_extractor.detect_framework(str(d))
+    result = detect_framework(str(d))
     assert result == "react"
 
 
@@ -35,7 +37,7 @@ def test_detect_framework_nextjs(tmp_path):
     (d / "app").mkdir()
     (d / "app" / "layout.tsx").write_text("export default function Layout()")
 
-    result = pattern_extractor.detect_framework(str(d))
+    result = detect_framework(str(d))
     assert result == "next.js"
 
 
@@ -44,7 +46,7 @@ def test_detect_framework_none(tmp_path):
     d.mkdir()
     (d / "readme.md").write_text("# My Project")
 
-    result = pattern_extractor.detect_framework(str(d))
+    result = detect_framework(str(d))
     assert result is None
 
 
@@ -54,7 +56,7 @@ def test_go_framework_ignored_if_python_present(tmp_path):
     (d / "go.mod").write_text("module example")
     (d / "pyproject.toml").write_text("[project]")
 
-    result = pattern_extractor.detect_framework(str(d))
+    result = detect_framework(str(d))
     assert result != "go"
 
 
@@ -74,7 +76,7 @@ def test_identify_language_patterns_fastapi(tmp_path):
         "async def list_items():\n    return []"
     )
 
-    patterns = pattern_extractor._identify_language_patterns(str(d), "fastapi")
+    patterns = identify_language_patterns(str(d), "fastapi")
     assert len(patterns) >= 1
     assert any("router" in p.title.lower() for p in patterns)
 
@@ -94,7 +96,7 @@ def test_identify_language_patterns_react(tmp_path):
         "export function Header() {\n  return <h1>Hello</h1>\n}"
     )
 
-    patterns = pattern_extractor._identify_language_patterns(str(d), "react")
+    patterns = identify_language_patterns(str(d), "react")
     assert len(patterns) >= 1
     assert any("component" in p.title.lower() for p in patterns)
 
@@ -102,7 +104,7 @@ def test_identify_language_patterns_react(tmp_path):
 def test_identify_language_patterns_no_framework(tmp_path):
     d = tmp_path / "no_fw"
     d.mkdir()
-    patterns = pattern_extractor._identify_language_patterns(str(d), None)
+    patterns = identify_language_patterns(str(d), None)
     assert patterns == []
 
 
@@ -115,7 +117,7 @@ def test_collect_all_files(tmp_path):
     (d / ".git").mkdir()
     (d / ".git" / "config").write_text("config")
 
-    files = pattern_extractor._collect_all_files(str(d))
+    files = collect_all_files(str(d))
     assert "README.md" in files
     assert "src/main.py" in files or any("main.py" in f for f in files)
     assert not any(".git" in f for f in files)
@@ -124,27 +126,27 @@ def test_collect_all_files(tmp_path):
 def test_read_file(tmp_path):
     f = tmp_path / "test_file.py"
     f.write_text("line1\nline2\nline3\n")
-    content = pattern_extractor._read_file(str(f), max_lines=100)
+    content = read_file(str(f), max_lines=100)
     assert content == "line1\nline2\nline3"
 
 
 def test_read_file_max_lines(tmp_path):
     f = tmp_path / "large_file.py"
     f.write_text("\n".join(f"line_{i}" for i in range(200)))
-    content = pattern_extractor._read_file(str(f), max_lines=5)
+    content = read_file(str(f), max_lines=5)
     assert content is not None
     assert content.count("\n") == 4
 
 
 def test_read_file_nonexistent():
-    content = pattern_extractor._read_file("/nonexistent/path/file.py")
+    content = read_file("/nonexistent/path/file.py")
     assert content is None
 
 
 def test_read_file_binary(tmp_path):
     f = tmp_path / "binary.bin"
     f.write_bytes(b"\x00\x01\x02\x03")
-    content = pattern_extractor._read_file(str(f))
+    content = read_file(str(f))
     assert isinstance(content, str)
 
 

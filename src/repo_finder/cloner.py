@@ -7,24 +7,14 @@ from pathlib import Path
 import git
 from fastmcp.exceptions import ToolError
 
-from . import SKIP_DIRS
+from .constants import SKIP_DIRS
+from .urls import normalize_url
 
 MAX_CLONE_SIZE_MB = 200
 
 
-def _sanitize_url(repo_url: str) -> str:
-    url = repo_url.strip().rstrip("/")
-    if url.endswith(".git"):
-        url = url[:-4]
-    if url.startswith("https://"):
-        url = url[8:]
-    elif url.startswith("http://"):
-        url = url[7:]
-    return url
-
-
 def _clone_path(repo_url: str) -> str:
-    sanitized = _sanitize_url(repo_url)
+    sanitized = normalize_url(repo_url)
     key = hashlib.sha256(sanitized.encode()).hexdigest()[:12]
     return os.path.join(tempfile.gettempdir(), f"repo_finder_{key}")
 
@@ -36,9 +26,9 @@ def clone_repo(repo_url: str) -> str:
     if path.exists():
         try:
             repo = git.Repo(clone_dir)
-            url_normalized = _sanitize_url(repo_url)
+            url_normalized = normalize_url(repo_url)
             remote_url = next(repo.remote().urls, "")
-            remote_normalized = _sanitize_url(remote_url)
+            remote_normalized = normalize_url(remote_url)
             if url_normalized == remote_normalized:
                 return clone_dir
         except git.InvalidGitRepositoryError:

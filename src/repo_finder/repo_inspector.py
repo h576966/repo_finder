@@ -3,23 +3,9 @@ from typing import Any
 
 import httpx
 
-from . import _now_iso
+from .constants import _now_iso
 from .github_client import get_client
 from .models import InspectionResult, QualityReport, RepoStructure
-
-
-def _parse_owner_repo(url_or_slug: str) -> tuple[str, str] | None:
-    cleaned = url_or_slug.strip().rstrip("/")
-    if "github.com/" in cleaned:
-        path = cleaned.split("github.com/", 1)[1]
-        parts = path.split("/")
-        if len(parts) >= 2:
-            return parts[0], parts[1]
-    else:
-        parts = cleaned.split("/")
-        if len(parts) == 2 and parts[0] and parts[1]:
-            return parts[0], parts[1]
-    return None
 
 
 def _evaluate_activity(pushed_at: str | None) -> str:

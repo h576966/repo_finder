@@ -5,7 +5,7 @@ from typing import Any
 
 import duckdb
 
-from . import _now_iso
+from .constants import _now_iso
 
 _cached_connection: duckdb.DuckDBPyConnection | None = None
 

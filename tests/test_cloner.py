@@ -4,28 +4,28 @@ import pytest
 
 from repo_finder.cloner import (
     _clone_path,
-    _sanitize_url,
     cleanup_clone,
     clone_repo,
     format_tree,
     get_directory_tree,
 )
+from repo_finder.urls import normalize_url
 
 
 def test_sanitize_url_removes_git_suffix():
-    assert _sanitize_url("https://github.com/owner/repo.git") == "github.com/owner/repo"
+    assert normalize_url("https://github.com/owner/repo.git") == "github.com/owner/repo"
 
 
 def test_sanitize_url_removes_https_prefix():
-    assert _sanitize_url("https://github.com/owner/repo") == "github.com/owner/repo"
+    assert normalize_url("https://github.com/owner/repo") == "github.com/owner/repo"
 
 
 def test_sanitize_url_trailing_slash():
-    assert _sanitize_url("https://github.com/owner/repo/") == "github.com/owner/repo"
+    assert normalize_url("https://github.com/owner/repo/") == "github.com/owner/repo"
 
 
 def test_sanitize_url_no_change():
-    assert _sanitize_url("github.com/owner/repo") == "github.com/owner/repo"
+    assert normalize_url("github.com/owner/repo") == "github.com/owner/repo"
 
 
 def test_clone_path_deterministic():
