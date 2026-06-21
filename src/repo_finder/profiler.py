@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from . import catalog, lmstudio
@@ -39,7 +40,7 @@ def _profile_messages(card: dict[str, Any]) -> list[dict[str, str]]:
             "role": "user",
             "content": (
                 "Profile this repository card for reuse.\n\n"
-                f"RepositoryCard:\n{compact_card}\n\n"
+                f"RepositoryCard JSON:\n{json.dumps(compact_card, sort_keys=True)}\n\n"
                 "Return exactly this JSON object shape:\n"
                 "{\n"
                 '  "repository_type": '
@@ -118,6 +119,8 @@ async def profile_repository_cards(limit: int, force: bool = False) -> dict[str,
                 model_id=config.gemma_model,
                 messages=_profile_messages(card),
                 config=config,
+                max_tokens=3000,
+                attempts=2,
             )
             profile = validate_gemma_profile(raw_profile)
             catalog.update_repository_card_gemma_profile(str(card["card_id"]), profile)

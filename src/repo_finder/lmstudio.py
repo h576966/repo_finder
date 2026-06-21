@@ -88,8 +88,9 @@ async def chat_json(
     messages: list[dict[str, str]],
     config: LMStudioConfig | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
-    max_tokens: int = 1200,
+    max_tokens: int = 1600,
     temperature: float = 0.1,
+    attempts: int = 2,
 ) -> dict[str, Any]:
     active = config or get_config()
     payload: dict[str, Any] = {
@@ -98,14 +99,27 @@ async def chat_json(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    try:
-        async with httpx.AsyncClient(timeout=active.timeout_seconds, transport=transport) as client:
-            response = await client.post(f"{active.base_url}/chat/completions", json=payload)
-            response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise LMStudioError(f"LM Studio chat completion failed for model '{model_id}'.") from exc
+    last_error: LMStudioError | None = None
+    for _attempt in range(max(1, attempts)):
+        try:
+            async with httpx.AsyncClient(timeout=active.timeout_seconds, transport=transport) as client:
+                response = await client.post(f"{active.base_url}/chat/completions", json=payload)
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise LMStudioError(f"LM Studio chat completion failed for model '{model_id}'.") from exc
 
-    data = response.json()
+        data = response.json()
+        try:
+            content = _extract_message_content(data)
+            return parse_json_content(content)
+        except LMStudioError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise LMStudioError("LM Studio chat completion failed.")
+
+
+def _extract_message_content(data: dict[str, Any]) -> str:
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
         raise LMStudioError("LM Studio returned no chat completion choices.")
@@ -116,7 +130,7 @@ async def chat_json(
     content = message.get("content") if isinstance(message, dict) else None
     if not isinstance(content, str) or not content.strip():
         raise LMStudioError("LM Studio returned an empty chat completion.")
-    return parse_json_content(content)
+    return content
 
 
 def parse_json_content(content: str) -> dict[str, Any]:
