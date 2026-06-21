@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 import os
 import sys
 
@@ -55,6 +56,17 @@ def main() -> None:
     evidence_parser.add_argument("--capability", required=True)
     evidence_parser.add_argument("--limit", type=int, default=30)
 
+    profile_parser = subparsers.add_parser(
+        "profile",
+        help="Profile repository cards with Gemma via LM Studio",
+    )
+    profile_parser.add_argument("--limit", type=int, default=30)
+    profile_parser.add_argument("--force", action="store_true")
+
+    lmstudio_parser = subparsers.add_parser("lmstudio-status", help="Check local LM Studio connectivity")
+    lmstudio_parser.add_argument("--start-server", action="store_true")
+    lmstudio_parser.add_argument("--smoke-test", action="store_true")
+
     serve_parser = subparsers.add_parser("serve-mcp", help="Run the MCP server")
     serve_parser.add_argument("--transport", choices=["stdio", "http"], default=None)
     serve_parser.add_argument("--port", type=int, default=None)
@@ -96,12 +108,61 @@ def main() -> None:
         print(result)
         return
 
+    if args.command == "profile":
+        from .profiler import profile_repository_cards
+
+        result = asyncio.run(profile_repository_cards(args.limit, force=args.force))
+        print(result)
+        return
+
+    if args.command == "lmstudio-status":
+        status_result = asyncio.run(_lmstudio_status(args.start_server, args.smoke_test))
+        print(json.dumps(status_result, indent=2, sort_keys=True))
+        return
+
     if args.command == "gc":
         from .pipeline import gc
 
         result = gc(args.keep_per_repo)
         print(result)
         return
+
+
+async def _lmstudio_status(start_server: bool, smoke_test: bool) -> dict[str, object]:
+    from . import lmstudio
+
+    config = lmstudio.get_config()
+    started = False
+    try:
+        status = await lmstudio.validate_models(config)
+    except lmstudio.LMStudioError as exc:
+        if not start_server:
+            return {
+                "base_url": config.base_url,
+                "reachable": False,
+                "error": str(exc),
+                "hint": "Run repo-finder lmstudio-status --start-server",
+            }
+        lmstudio.start_server()
+        started = True
+        await asyncio.sleep(1)
+        status = await lmstudio.validate_models(config)
+
+    result: dict[str, object] = {"reachable": True, "started_server": started, **status}
+    if smoke_test:
+        try:
+            result["smoke_test"] = await lmstudio.chat_json(
+                model_id=config.gemma_model,
+                messages=[
+                    {"role": "system", "content": "Return only valid JSON."},
+                    {"role": "user", "content": 'Return exactly {"ok": true}.'},
+                ],
+                config=config,
+                max_tokens=100,
+            )
+        except lmstudio.LMStudioError as exc:
+            result["smoke_test"] = {"ok": False, "error": str(exc)}
+    return result
 
 
 if __name__ == "__main__":

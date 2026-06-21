@@ -34,7 +34,25 @@ Useful implementation notes preserved from the old agent-specific setup.
 ## Model Runtime
 
 - LM Studio is the intended local OpenAI-compatible endpoint.
-- Default endpoint: `http://localhost:1234/v1`.
+- Default endpoint: `http://127.0.0.1:1234/v1`.
+- Windows CLI: `C:\Users\Nikla\.lmstudio\bin\lms.exe`.
 - Gemma is for JSON profiling/synthesis after deterministic evidence exists.
 - FastContext is for evidence refinement over read-only `READ`, `GLOB`, and
   `GREP`-style tools, not general code generation.
+
+Local status and smoke tests:
+
+```powershell
+lms ls
+lms server status
+lms server start
+Invoke-RestMethod http://127.0.0.1:1234/v1/models
+repo-finder lmstudio-status --smoke-test
+```
+
+Current local model defaults:
+
+```text
+REPO_FINDER_GEMMA_MODEL=google/gemma-4-12b-qat
+REPO_FINDER_FASTCONTEXT_MODEL=fastcontext-1.0-4b-rl
+```

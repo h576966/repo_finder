@@ -14,13 +14,16 @@ See `docs/repo-finder-direction.md` for the full design direction.
 
 - Python 3.11+
 - GitHub personal access token for public repository access
-- Optional later: LM Studio with local Gemma/FastContext models
+- LM Studio for local Gemma/FastContext profiling
 
 ## Setup
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 $env:GITHUB_TOKEN = "ghp_your_token_here"
+$env:LM_STUDIO_BASE_URL = "http://127.0.0.1:1234/v1"
+$env:REPO_FINDER_GEMMA_MODEL = "google/gemma-4-12b-qat"
+$env:REPO_FINDER_FASTCONTEXT_MODEL = "fastcontext-1.0-4b-rl"
 ```
 
 ## Catalog Workflow
@@ -28,6 +31,8 @@ $env:GITHUB_TOKEN = "ghp_your_token_here"
 ```powershell
 repo-finder scout --domain nextjs-ui --limit 500
 repo-finder qualify --limit 100
+repo-finder lmstudio-status --smoke-test
+repo-finder profile --limit 30
 repo-finder evidence --capability data-table --limit 30
 repo-finder serve-mcp
 ```
@@ -57,6 +62,46 @@ Default tools:
 Legacy generic GitHub tools are hidden by default. Set
 `REPO_FINDER_ENABLE_LEGACY_TOOLS=1` only for debugging older behavior.
 
+## LM Studio
+
+This project is optimized for local LM Studio on Windows. Useful commands:
+
+```powershell
+lms ls
+lms server status
+lms server start
+Invoke-RestMethod http://127.0.0.1:1234/v1/models
+repo-finder lmstudio-status --smoke-test
+```
+
+Default local model IDs:
+
+```text
+Gemma:       google/gemma-4-12b-qat
+FastContext: fastcontext-1.0-4b-rl
+```
+
+`repo-finder profile` uses Gemma to store JSON profiles on repository cards.
+FastContext is configured for status checks now and will be used for evidence
+refinement after Gemma profile quality is measured.
+
+Optional LM Studio MCP config:
+
+```json
+{
+  "mcpServers": {
+    "repo-finder": {
+      "command": "C:\\AI\\Dev\\repo_finder\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "repo_finder", "serve-mcp"],
+      "env": {
+        "PYTHONPATH": "C:\\AI\\Dev\\repo_finder\\src",
+        "REPO_FINDER_HOME": "C:\\AI\\Dev\\repo_finder\\.repo_finder"
+      }
+    }
+  }
+}
+```
+
 ## Local Checks
 
 ```powershell
@@ -80,6 +125,8 @@ src/repo_finder/
   catalog.py         # Persistent DuckDB catalog
   pipeline.py        # Scout/qualify/gc workflow
   evidence.py        # Deterministic evidence extraction
+  lmstudio.py        # Local LM Studio API adapter
+  profiler.py        # Gemma repository-card profiling
   bundles.py         # Source bundle generation
   snapshotter.py     # Commit-SHA local snapshots
   github_client.py   # GitHub REST client

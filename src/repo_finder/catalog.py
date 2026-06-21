@@ -343,6 +343,56 @@ def upsert_repository_card(snapshot_id: str, card: dict[str, Any]) -> str:
     return card_id
 
 
+def list_repository_cards_for_profile(limit: int, force: bool = False) -> list[dict[str, Any]]:
+    conn = get_connection()
+    where = "" if force else "WHERE c.gemma_profile IS NULL"
+    rows = conn.execute(
+        f"""
+        SELECT
+            c.card_id,
+            c.snapshot_id,
+            c.card_version,
+            c.package_manifests,
+            c.tree_summary,
+            c.readme_excerpt,
+            c.stack_signals,
+            c.deterministic_features,
+            c.gemma_profile,
+            s.repo_id,
+            s.commit_sha,
+            r.html_url
+        FROM repository_cards c
+        JOIN snapshots s ON s.snapshot_id = c.snapshot_id
+        JOIN repositories r ON r.repo_id = s.repo_id
+        {where}
+        ORDER BY c.created_at DESC
+        LIMIT ?
+        """,
+        [limit],
+    ).fetchall()
+    columns = [str(c[0]) for c in conn.description]
+    cards: list[dict[str, Any]] = []
+    for row in rows:
+        data = dict(zip(columns, row, strict=False))
+        for key, default in (
+            ("package_manifests", {}),
+            ("tree_summary", {}),
+            ("stack_signals", {}),
+            ("deterministic_features", {}),
+            ("gemma_profile", None),
+        ):
+            data[key] = _json_load(data.get(key), default)
+        cards.append(data)
+    return cards
+
+
+def update_repository_card_gemma_profile(card_id: str, profile: dict[str, Any]) -> None:
+    get_connection().execute(
+        "UPDATE repository_cards SET gemma_profile = ? WHERE card_id = ?",
+        [_json_dump(profile), card_id],
+    )
+
+
 def list_snapshots_for_evidence(limit: int) -> list[dict[str, Any]]:
     conn = get_connection()
     rows = conn.execute(
