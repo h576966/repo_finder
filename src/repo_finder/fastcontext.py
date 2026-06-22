@@ -26,19 +26,30 @@ MAX_READ_LINES = 160
 MAX_READ_FILE_BYTES = 240_000
 MAX_GREP_FILE_BYTES = 1_000_000
 MAX_CITATION_LINES = 240
+MAX_FINAL_CITATION_CHOICES = 24
 RG_TIMEOUT_SECONDS = 10
 LOCAL_CONTEXT_FILE_LIMIT = 80
 LOCAL_CONTEXT_GREP_LIMIT = 30
 LOCAL_EXTRA_SKIP_DIRS = {".next", ".repo_finder", "build", "coverage", "dist"}
 FASTCONTEXT_STRUCTURED_OUTPUT_ENV = "REPO_FINDER_FASTCONTEXT_STRUCTURED_OUTPUT"
+PRIMARY_SOURCE_PREFIXES = ("src/repo_finder/", "src/")
+NOISY_EVIDENCE_PREFIXES = ("tests/", "docs/", "evals/")
+NOISY_EVIDENCE_FILES = {"README.md", "AGENTS.md", "pyproject.toml"}
 LOCAL_TASK_STOPWORDS = {
     "actual",
+    "and",
     "are",
+    "as",
     "before",
+    "be",
     "code",
     "find",
+    "for",
     "from",
     "into",
+    "is",
+    "of",
+    "or",
     "local",
     "registered",
     "repo",
@@ -46,6 +57,7 @@ LOCAL_TASK_STOPWORDS = {
     "that",
     "the",
     "this",
+    "to",
     "where",
     "with",
     "working",
@@ -361,6 +373,7 @@ async def _run_tool_loop(
     trajectory: list[dict[str, Any]] = []
     observation_support = ObservationSupport(files=set(), ranges={})
     final_answer_only_next = False
+    final_answer_retry_used = False
     for turn in range(1, max(1, max_turns) + 1):
         allow_tools = not final_answer_only_next
         completion = await _chat_fastcontext_completion(
@@ -420,13 +433,36 @@ async def _run_tool_loop(
                 active_messages.extend(
                     _legacy_observation_messages(content, observations)
                 )
-            active_messages.append(_final_answer_request_message())
+            active_messages.append(_final_answer_request_message(observation_support))
+            final_answer_retry_used = False
             final_answer_only_next = True
             continue
 
         if parsed.citations:
-            active_messages.extend(_validation_feedback_messages(content, turn_record))
-            final_answer_only_next = False
+            if (
+                not allow_tools
+                and observation_support.ranges
+                and not final_answer_retry_used
+            ):
+                active_messages.extend(
+                    _validation_feedback_messages(
+                        content,
+                        turn_record,
+                        observation_support=observation_support,
+                        final_answer_only=True,
+                    )
+                )
+                final_answer_retry_used = True
+                final_answer_only_next = True
+            else:
+                active_messages.extend(
+                    _validation_feedback_messages(
+                        content,
+                        turn_record,
+                        observation_support=observation_support,
+                    )
+                )
+                final_answer_only_next = False
             continue
 
         if tool_calls and not allow_tools:
@@ -434,20 +470,25 @@ async def _run_tool_loop(
                 "Model returned tool calls during final-answer-only turn; reopening tools."
             )
 
-        active_messages.extend(
-            [
-                {"role": "assistant", "content": content},
-                {
-                    "role": "user",
-                    "content": (
-                        "That final response did not contain usable supported citations. "
-                        "Use Read, Glob, or Grep again only if more evidence is needed, then return "
-                        "final_answer JSON with evidence paths."
-                    ),
-                },
-            ]
-        )
-        final_answer_only_next = False
+        if not allow_tools and observation_support.ranges and not final_answer_retry_used:
+            active_messages.extend(
+                _final_response_feedback_messages(
+                    content,
+                    observation_support=observation_support,
+                    final_answer_only=True,
+                )
+            )
+            final_answer_retry_used = True
+            final_answer_only_next = True
+        else:
+            active_messages.extend(
+                _final_response_feedback_messages(
+                    content,
+                    observation_support=observation_support,
+                    final_answer_only=False,
+                )
+            )
+            final_answer_only_next = False
 
     fallback_evidence = _evidence_from_trajectory(trajectory) or _evidence_from_observation_support(
         observation_support
@@ -711,13 +752,24 @@ def _legacy_observation_messages(
     ]
 
 
-def _final_answer_request_message() -> dict[str, str]:
+def _final_answer_request_message(
+    observation_support: ObservationSupport,
+    *,
+    feedback: str | None = None,
+) -> dict[str, str]:
+    choices_text = _observed_citation_choices_text(observation_support)
+    feedback_text = f"\n\nValidation feedback:\n{feedback}" if feedback else ""
     return {
         "role": "user",
         "content": (
             "Tool observations are now available. Do not call tools on this turn. "
-            "Return final_answer JSON only, citing the smallest useful file and line ranges "
-            "from successful tool observations."
+            "Return final_answer JSON only. Choose only from the observed citation choices below. "
+            "Use exact relative paths and exact path:start-end line ranges. Do not cite directories, "
+            "wildcards, globs, or shortened paths such as /repo_finder/src, repo_finder/src, "
+            "evals/*.py, or src/**. Prefer src/repo_finder choices over tests, docs, and evals "
+            "unless the task explicitly asks for tests or documentation.\n\n"
+            f"{choices_text}"
+            f"{feedback_text}"
         ),
     }
 
@@ -725,20 +777,116 @@ def _final_answer_request_message() -> dict[str, str]:
 def _validation_feedback_messages(
     content: str,
     turn_record: dict[str, Any],
+    *,
+    observation_support: ObservationSupport,
+    final_answer_only: bool = False,
 ) -> list[dict[str, Any]]:
+    feedback = (
+        "Those citations did not validate against the project root or successful tool "
+        "observations:\n"
+        f"{json.dumps(turn_record.get('validation_notes', []), sort_keys=True)}"
+    )
+    if final_answer_only:
+        return [
+            {"role": "assistant", "content": content},
+            _final_answer_request_message(
+                observation_support,
+                feedback=(
+                    f"{feedback}\n\nRetry once without tools. Choose only exact observed "
+                    "path:start-end choices from the list."
+                ),
+            ),
+        ]
     return [
         {"role": "assistant", "content": content},
         {
             "role": "user",
             "content": (
-                "Those citations did not validate against the project root or successful tool "
-                "observations:\n"
-                f"{json.dumps(turn_record.get('validation_notes', []), sort_keys=True)}\n\n"
+                f"{feedback}\n\n"
                 "Use Glob, Grep, or Read to find real relative paths and supported line ranges, "
                 "then return final_answer JSON."
             ),
         },
     ]
+
+
+def _final_response_feedback_messages(
+    content: str,
+    *,
+    observation_support: ObservationSupport,
+    final_answer_only: bool,
+) -> list[dict[str, Any]]:
+    feedback = (
+        "That final response did not contain usable exact citations. "
+        "Glob-style or directory answers are not valid evidence."
+    )
+    if final_answer_only:
+        return [
+            {"role": "assistant", "content": content},
+            _final_answer_request_message(
+                observation_support,
+                feedback=(
+                    f"{feedback} Retry once using only exact observed path:start-end choices."
+                ),
+            ),
+        ]
+    return [
+        {"role": "assistant", "content": content},
+        {
+            "role": "user",
+            "content": (
+                f"{feedback} Use Read, Glob, or Grep again only if more evidence is needed, "
+                "then return final_answer JSON with exact path:start-end evidence paths."
+            ),
+        },
+    ]
+
+
+def _observed_citation_choices_text(support: ObservationSupport) -> str:
+    choices = _observed_citation_choices(support)
+    if not choices:
+        files = "\n".join(
+            f"- {path}"
+            for path in sorted(support.files, key=_evidence_path_sort_key)[:MAX_FINAL_CITATION_CHOICES]
+        )
+        if files:
+            return (
+                "Observed files without line ranges:\n"
+                f"{files}\n\n"
+                "No valid line ranges have been observed yet. Exact line ranges are required."
+            )
+        return "Observed citation choices:\n- none"
+    formatted = "\n".join(f"- {choice}" for choice in choices)
+    return f"Observed citation choices:\n{formatted}"
+
+
+def _observed_citation_choices(
+    support: ObservationSupport,
+    limit: int = MAX_FINAL_CITATION_CHOICES,
+) -> list[str]:
+    choices: list[str] = []
+    for path in sorted(support.ranges, key=_evidence_path_sort_key):
+        for start, end in _merge_ranges(support.ranges[path]):
+            choices.append(f"{path}:{start}-{end}")
+            if len(choices) >= limit:
+                return choices
+    return choices
+
+
+def _evidence_path_sort_key(path: str) -> tuple[int, str]:
+    normalized = path.replace("\\", "/")
+    if normalized.startswith(PRIMARY_SOURCE_PREFIXES):
+        return (0, normalized)
+    if normalized in NOISY_EVIDENCE_FILES or normalized.startswith(NOISY_EVIDENCE_PREFIXES):
+        return (2, normalized)
+    return (1, normalized)
+
+
+def _match_sort_key(match: dict[str, Any]) -> tuple[int, str, int]:
+    path = str(match.get("path", ""))
+    line = _optional_int(match.get("start_line") or match.get("line")) or 0
+    priority, normalized = _evidence_path_sort_key(path)
+    return priority, normalized, line
 
 
 def _tool_observation_content(observation: dict[str, Any]) -> str:
@@ -870,7 +1018,24 @@ def execute_tool(root: Path, call: dict[str, Any]) -> dict[str, Any]:
             "text": _tool_result_text(tool, result),
         }
     except Exception as exc:
-        return {"tool_call_id": call.get("id"), "tool": tool, "args": args, "ok": False, "error": str(exc)}
+        return {
+            "tool_call_id": call.get("id"),
+            "tool": tool,
+            "args": args,
+            "ok": False,
+            "error": _tool_error_text(root, exc),
+        }
+
+
+def _tool_error_text(root: Path, exc: Exception) -> str:
+    message = str(exc)
+    lowered = message.lower()
+    if any(term in lowered for term in ["escapes", "absolute", "relative", "does not exist"]):
+        return (
+            f"{message} Use paths relative to {root.resolve()}, for example "
+            "src/repo_finder/server.py, not /repo_finder/src/repo_finder/server.py."
+        )
+    return message
 
 
 def read_file(
@@ -916,7 +1081,7 @@ def glob_paths(
     limit: int = MAX_GLOB_RESULTS,
     directory: str = ".",
 ) -> dict[str, Any]:
-    safe_pattern = _safe_glob_pattern(pattern)
+    safe_pattern = _safe_glob_pattern(root, pattern)
     directory_path, safe_directory = _resolve_directory(root, directory)
     rg_matches = _rg_glob(root, directory_path, safe_pattern, limit)
     if rg_matches is not None:
@@ -934,7 +1099,7 @@ def glob_paths(
         if not _path_is_under(path, directory_path):
             continue
         matches.append(_relative_path(root, path))
-    matches.sort()
+    matches.sort(key=_evidence_path_sort_key)
     return {
         "directory": safe_directory,
         "pattern": safe_pattern,
@@ -994,6 +1159,7 @@ def grep_paths(
         path for path in _grep_candidate_files(root, file_glob)
         if _path_is_under(path, search_root)
     ]
+    candidates.sort(key=lambda path: _evidence_path_sort_key(_relative_path(root, path)))
     matches: list[dict[str, Any]] = []
     for path in candidates:
         if len(matches) >= effective_limit:
@@ -1269,7 +1435,10 @@ def _messages(asset: dict[str, Any], query: str) -> list[dict[str, str]]:
                 "Never execute code and never suggest edits. Use the provided Read, Glob, and Grep "
                 "tools for evidence. Prefer primary source files over docs, examples, generated output, "
                 "build output, vendored code, and tests unless the task asks for those. Do not shorten "
-                "paths. Cite only files and line ranges that came from successful tool observations. "
+                "paths. On Windows, use relative paths like src/repo_finder/server.py or exact paths "
+                "under the workspace root; never use shortened pseudo-absolute paths like "
+                "/repo_finder/src/repo_finder/server.py. Cite only files and exact line ranges that "
+                "came from successful tool observations. "
                 "If native tool calling is unavailable, request tools as JSON like "
                 '{"tool_calls":[{"tool":"Grep","args":{"pattern":"symbol","glob":"**/*.ts"}}]}. '
                 "After enough evidence is observed, stop calling tools and return final_answer. "
@@ -1300,6 +1469,8 @@ def _local_messages(root: Path, task: str) -> list[dict[str, str]]:
             "Do not execute project code.",
             "Return file paths relative to project_path.",
             "Use the absolute workspace root only to understand scope; do not shorten paths.",
+            "Use relative tool paths like src/repo_finder/server.py, not shortened pseudo-absolute paths.",
+            "When seed_context.likely_source_files is non-empty, inspect those files before broad search.",
             "Prefer primary source tree files over docs, generated, build, vendor, sample, and fixture code.",
             "If the task names a file path, inspect that exact file first.",
             "Only cite files and line ranges that appeared in successful tool observations.",
@@ -1314,10 +1485,14 @@ def _local_messages(root: Path, task: str) -> list[dict[str, str]]:
                 "You are FastContext, a read-only local repository exploration subagent. "
                 "Use the provided Read, Glob, and Grep tools. The user context includes the absolute "
                 "workspace root; do not shorten or invent paths. Start broad when needed, then narrow "
-                "down. Prefer primary source tree files over docs, generated output, build output, "
+                "down. When seed_context.likely_source_files is non-empty, inspect those files before "
+                "broad search. Prefer primary source tree files over docs, generated output, build output, "
                 "vendored code, samples, and fixtures unless the task asks for those. If the task names "
-                "a file, inspect that exact file first. Cite only files and line ranges that appeared "
-                "in successful tool observations. If native tool calling is unavailable, request tools "
+                "a file, inspect that exact file first. On Windows, use relative paths like "
+                "src/repo_finder/server.py or exact paths under the workspace root; never use shortened "
+                "pseudo-absolute paths like /repo_finder/src/repo_finder/server.py. Cite only files and "
+                "exact line ranges that appeared in successful tool observations. If native tool calling "
+                "is unavailable, request tools "
                 "as JSON like "
                 '{"tool_calls":[{"tool":"Grep","args":{"pattern":"symbol","glob":"**/*.ts"}}]}. '
                 "After enough evidence is observed, stop calling tools and return final_answer. "
@@ -1343,7 +1518,9 @@ def _local_seed_context(root: Path, task: str) -> dict[str, Any]:
     matches: list[dict[str, Any]] = []
     if pattern:
         matches = grep_paths(root, pattern, limit=LOCAL_CONTEXT_GREP_LIMIT)["matches"]
+    terms = _task_terms(task)
     return {
+        "likely_source_files": _likely_source_files(root, terms, matches),
         "known_files_sample": files["matches"],
         "known_files_truncated": files["truncated"],
         "initial_grep_pattern": pattern,
@@ -1352,14 +1529,74 @@ def _local_seed_context(root: Path, task: str) -> dict[str, Any]:
 
 
 def _task_grep_pattern(task: str) -> str:
-    terms = []
-    for raw_term in re.findall(r"[A-Za-z_][A-Za-z0-9_-]{2,}", task):
-        term = raw_term.lower().replace("-", "_")
-        if term in LOCAL_TASK_STOPWORDS:
-            continue
-        terms.append(re.escape(raw_term))
-    unique_terms = sorted(set(terms), key=str.lower)
-    return "|".join(unique_terms[:8])
+    return "|".join(re.escape(term) for term in _task_terms(task)[:14])
+
+
+def _task_terms(task: str) -> list[str]:
+    raw_terms = [
+        raw_term.lower().replace("-", "_")
+        for raw_term in re.findall(r"[A-Za-z_][A-Za-z0-9_-]{1,}", task)
+    ]
+    terms: list[str] = []
+
+    def add_term(term: str) -> None:
+        if term not in terms:
+            terms.append(term)
+
+    for term in raw_terms:
+        if len(term) >= 3 and term not in LOCAL_TASK_STOPWORDS:
+            add_term(term)
+            if term.endswith("s") and len(term) > 4:
+                add_term(term[:-1])
+    for left, right in zip(raw_terms, raw_terms[1:]):
+        joined = f"{left}{right}"
+        if len(joined) >= 5 and left not in LOCAL_TASK_STOPWORDS and right not in LOCAL_TASK_STOPWORDS:
+            add_term(joined)
+    return terms
+
+
+def _likely_source_files(
+    root: Path,
+    terms: list[str],
+    grep_matches: list[dict[str, Any]],
+    limit: int = 18,
+) -> list[str]:
+    scores: dict[str, int] = {}
+    term_set = set(terms)
+    for match in grep_matches:
+        path = match.get("path")
+        if isinstance(path, str):
+            priority, _ = _evidence_path_sort_key(path)
+            scores[path] = scores.get(path, 0) + (3 if priority == 0 else 1)
+
+    for path in _iter_files(root):
+        rel_path = _relative_path(root, path)
+        searchable = rel_path.lower().replace("-", "_")
+        stem = path.stem.lower().replace("-", "_")
+        score = sum(5 for term in term_set if term in searchable or term in stem)
+        if {"cli", "command", "commands"} & term_set and path.name in {"__main__.py", "cli.py"}:
+            score += 6
+        if {"mcp", "tool", "tools", "server"} & term_set and path.name in {"server.py"}:
+            score += 5
+        if (
+            {"model", "models", "result", "results", "shape", "shapes"} & term_set
+            and path.name == "models.py"
+        ):
+            score += 6
+        if score:
+            if rel_path.startswith(PRIMARY_SOURCE_PREFIXES):
+                score += 2
+            scores[rel_path] = scores.get(rel_path, 0) + score
+
+    ranked = sorted(
+        scores,
+        key=lambda path: (
+            _evidence_path_sort_key(path)[0],
+            -scores[path],
+            _evidence_path_sort_key(path)[1],
+        ),
+    )
+    return ranked[:limit]
 
 
 def _tool_trace_summary(trajectory: list[dict[str, Any]]) -> list[dict[str, object]]:
@@ -1451,6 +1688,10 @@ def _validated_evidence_paths(
     evidence_paths: list[str] = []
     notes: list[str] = []
     for citation in citations:
+        shape_note = _citation_shape_note(citation)
+        if shape_note is not None:
+            notes.append(shape_note)
+            continue
         try:
             path, safe_rel = _resolve_under_root(root, citation.path)
         except FastContextError as exc:
@@ -1459,23 +1700,34 @@ def _validated_evidence_paths(
         if not path.is_file():
             notes.append(f"Skipped missing citation file: {safe_rel}")
             continue
-        line_note = _line_validation_note(path, safe_rel, citation)
-        if line_note is not None:
-            notes.append(line_note)
-            continue
-        if observation_support is not None and observation_support.files:
-            support_note = _support_validation_note(safe_rel, citation, observation_support)
-            if support_note is not None:
-                notes.append(support_note)
-                continue
         normalized = FastContextCitation(
             path=safe_rel,
             start_line=citation.start_line,
             end_line=citation.end_line,
             reason=citation.reason,
         )
+        line_note = _line_validation_note(path, safe_rel, normalized)
+        if line_note is not None:
+            notes.append(line_note)
+            continue
+        if observation_support is not None and observation_support.files:
+            support_note = _support_validation_note(safe_rel, normalized, observation_support)
+            if support_note is not None:
+                notes.append(support_note)
+                continue
         evidence_paths.append(normalized.evidence_path())
     return sorted(set(evidence_paths)), notes
+
+
+def _citation_shape_note(citation: FastContextCitation) -> str | None:
+    path = citation.path.strip()
+    if _has_glob_meta(path):
+        return f"Skipped wildcard or glob citation: {citation.evidence_path()}"
+    if citation.start_line is None or citation.end_line is None:
+        return f"Skipped citation without exact line range: {citation.evidence_path()}"
+    if path.endswith(("/", "\\")):
+        return f"Skipped directory citation: {citation.evidence_path()}"
+    return None
 
 
 def _line_validation_note(path: Path, safe_rel: str, citation: FastContextCitation) -> str | None:
@@ -1898,7 +2150,7 @@ def _rg_glob(
         for path in matches
         if _is_safe_relative_result(root, path)
     ]
-    return sorted(safe_matches)[:limit]
+    return sorted(safe_matches, key=_evidence_path_sort_key)[:limit]
 
 
 def _rg_grep(
@@ -1921,7 +2173,7 @@ def _rg_grep(
     rg = shutil.which("rg")
     if rg is None:
         return None
-    safe_glob = _safe_glob_pattern(file_glob) if file_glob else None
+    safe_glob = _safe_glob_pattern(root, file_glob) if file_glob else None
     search_arg = safe_search_path or "."
     command = [rg, "--color", "never", "--no-heading", "--with-filename"]
     if line_numbers:
@@ -2000,8 +2252,9 @@ def _parse_rg_output(
 ) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
+    scan_limit = max(limit, limit * 5)
     for raw_line in output.splitlines():
-        if len(matches) >= limit:
+        if len(matches) >= scan_limit:
             break
         line = raw_line.strip()
         if not line:
@@ -2037,7 +2290,7 @@ def _parse_rg_output(
             {"path": path, "count": count}
             for path, count in sorted(counts.items())
         )
-    return matches[:limit]
+    return sorted(matches, key=_match_sort_key)[:limit]
 
 
 def _split_rg_pair(line: str) -> tuple[str, str]:
@@ -2071,7 +2324,7 @@ def _is_safe_relative_result(root: Path, rel_path: str) -> bool:
 
 def _resolve_under_root(root: Path, rel_path: str) -> tuple[Path, str]:
     root_resolved = root.resolve()
-    cleaned = _strip_line_suffix(rel_path.strip()).replace("\\", "/")
+    cleaned = _normalize_workspace_reference(root_resolved, rel_path)
     if not cleaned:
         raise FastContextError("Path is required.")
 
@@ -2097,8 +2350,97 @@ def _relative_path(root: Path, path: Path) -> str:
     return path.resolve().relative_to(root.resolve()).as_posix()
 
 
-def _safe_glob_pattern(pattern: str) -> str:
-    cleaned = pattern.strip().replace("\\", "/") or "**/*"
+def _normalize_workspace_reference(
+    root: Path,
+    value: str,
+    *,
+    strip_line: bool = True,
+    allow_glob: bool = False,
+) -> str:
+    cleaned = value.strip().strip("`\"'").replace("\\", "/")
+    if strip_line:
+        cleaned = _strip_line_suffix(cleaned)
+    if not cleaned:
+        return ""
+    if cleaned == ".":
+        return "."
+
+    root_resolved = root.resolve()
+    root_posix = root_resolved.as_posix().rstrip("/")
+    for candidate_text in (cleaned, cleaned.lstrip("/")):
+        if candidate_text.lower() == root_posix.lower():
+            return "."
+        prefix = f"{root_posix}/"
+        if candidate_text.lower().startswith(prefix.lower()):
+            return candidate_text[len(prefix):] or "."
+
+    if not allow_glob and not _has_glob_meta(cleaned) and Path(cleaned).is_absolute():
+        try:
+            return Path(cleaned).resolve().relative_to(root_resolved).as_posix()
+        except ValueError:
+            pass
+
+    workspace_suffix = _workspace_suffix_reference(root_resolved, cleaned, allow_glob=allow_glob)
+    if workspace_suffix is not None:
+        return workspace_suffix
+    if cleaned.startswith("./"):
+        return cleaned[2:]
+    return cleaned
+
+
+def _workspace_suffix_reference(
+    root: Path,
+    cleaned: str,
+    *,
+    allow_glob: bool,
+) -> str | None:
+    parts = [
+        part
+        for part in PurePosixPath(cleaned).parts
+        if part not in {"", ".", "/"}
+    ]
+    root_name = root.name.lower()
+    for index, part in enumerate(parts):
+        if part.lower() != root_name:
+            continue
+        suffix_parts = parts[index + 1:]
+        if not suffix_parts:
+            return "."
+        suffix = PurePosixPath(*suffix_parts).as_posix()
+        if index == 0 or _workspace_suffix_target_exists(root, suffix, allow_glob=allow_glob):
+            return suffix
+    return None
+
+
+def _workspace_suffix_target_exists(
+    root: Path,
+    suffix: str,
+    *,
+    allow_glob: bool,
+) -> bool:
+    if not allow_glob or not _has_glob_meta(suffix):
+        return (root / suffix).exists()
+    prefix_parts: list[str] = []
+    for part in PurePosixPath(suffix).parts:
+        if _has_glob_meta(part):
+            break
+        prefix_parts.append(part)
+    if not prefix_parts:
+        return True
+    return (root / PurePosixPath(*prefix_parts).as_posix()).exists()
+
+
+def _has_glob_meta(value: str) -> bool:
+    return any(char in value for char in "*?[")
+
+
+def _safe_glob_pattern(root: Path, pattern: str) -> str:
+    cleaned = _normalize_workspace_reference(
+        root.resolve(),
+        pattern,
+        strip_line=False,
+        allow_glob=True,
+    ) or "**/*"
     if Path(cleaned).is_absolute() or cleaned.startswith("/"):
         raise FastContextError(f"Glob pattern must be relative: {pattern}")
     if ".." in PurePosixPath(cleaned).parts:
@@ -2107,7 +2449,7 @@ def _safe_glob_pattern(pattern: str) -> str:
 
 
 def _resolve_directory(root: Path, directory: str) -> tuple[Path, str]:
-    cleaned = directory.strip().replace("\\", "/") or "."
+    cleaned = _normalize_workspace_reference(root.resolve(), directory) or "."
     if cleaned == ".":
         return root.resolve(), "."
     path, safe_rel = _resolve_under_root(root, cleaned)
@@ -2117,7 +2459,7 @@ def _resolve_directory(root: Path, directory: str) -> tuple[Path, str]:
 
 
 def _resolve_search_path(root: Path, search_path: str) -> tuple[Path, str]:
-    cleaned = search_path.strip().replace("\\", "/") or "."
+    cleaned = _normalize_workspace_reference(root.resolve(), search_path) or "."
     if cleaned == ".":
         return root.resolve(), "."
     path, safe_rel = _resolve_under_root(root, cleaned)
@@ -2143,7 +2485,7 @@ def _should_skip_path(root: Path, path: Path) -> bool:
 
 
 def _grep_candidate_files(root: Path, file_glob: str | None) -> list[Path]:
-    safe_pattern = _safe_glob_pattern(file_glob) if file_glob else None
+    safe_pattern = _safe_glob_pattern(root, file_glob) if file_glob else None
     return list(_iter_files(root, file_glob=safe_pattern))
 
 
@@ -2165,7 +2507,7 @@ def _iter_files(root: Path, file_glob: str | None = None) -> list[Path]:
             if file_glob and not PurePosixPath(rel_path).match(file_glob):
                 continue
             matches.append(path)
-    return sorted(matches, key=lambda path: _relative_path(root_resolved, path))
+    return sorted(matches, key=lambda path: _evidence_path_sort_key(_relative_path(root_resolved, path)))
 
 
 def _strip_line_suffix(path: str) -> str:

@@ -185,6 +185,63 @@ def test_grep_is_case_sensitive_unless_ignore_case_requested(
     assert tool_result["result"]["matches"] == []
 
 
+def test_workspace_prefix_paths_are_normalized_safely(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "repo_finder"
+    root.mkdir()
+    _write_snapshot(root)
+    monkeypatch.setattr(fastcontext.shutil, "which", lambda name: None)
+
+    pseudo_absolute = fastcontext.read_file(
+        root,
+        "/repo_finder/src/components/data-table.tsx",
+        start=1,
+        end=1,
+    )
+    prefixed_relative = fastcontext.read_file(
+        root,
+        "repo_finder/src/components/data-table.tsx",
+        start=1,
+        end=1,
+    )
+    suffix_absolute = fastcontext.read_file(
+        root,
+        str(tmp_path / "elsewhere" / "repo_finder" / "src" / "components" / "data-table.tsx"),
+        start=1,
+        end=1,
+    )
+    glob_result = fastcontext.glob_paths(
+        root,
+        "/repo_finder/src/**/*.tsx",
+        directory="/repo_finder/src",
+    )
+    grep_result = fastcontext.grep_paths(
+        root,
+        "useReactTable",
+        file_glob="/repo_finder/src/**/*.tsx",
+        search_path="/repo_finder/src",
+    )
+
+    assert pseudo_absolute["path"] == "src/components/data-table.tsx"
+    assert prefixed_relative["path"] == "src/components/data-table.tsx"
+    assert suffix_absolute["path"] == "src/components/data-table.tsx"
+    assert glob_result["matches"] == ["src/components/data-table.tsx"]
+    assert grep_result["matches"][0]["path"] == "src/components/data-table.tsx"
+
+
+def test_unrelated_absolute_paths_still_fail_closed(tmp_path: Path) -> None:
+    root = tmp_path / "repo_finder"
+    root.mkdir()
+    _write_snapshot(root)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+
+    with pytest.raises(fastcontext.FastContextError, match="escapes snapshot root"):
+        fastcontext.read_file(root, str(outside))
+
+
 def test_parse_fastcontext_json_and_final_answer_formats() -> None:
     tool_response = fastcontext.parse_fastcontext_response(
         json.dumps(
@@ -217,6 +274,8 @@ def test_citation_validation_rejects_bad_ranges_and_unsupported_observations(tmp
                 fastcontext.FastContextCitation("src/components/data-table.tsx", 1, 999),
                 fastcontext.FastContextCitation("src/components/data-table.tsx", 6, 6),
                 fastcontext.FastContextCitation("src/components/data-table.tsx", 1, 2),
+                fastcontext.FastContextCitation("repo_finder/src/**/*.tsx", 1, 2),
+                fastcontext.FastContextCitation("src/components/data-table.tsx"),
             ],
         observation_support=fastcontext.ObservationSupport(
             files={"src/components/data-table.tsx"},
@@ -229,7 +288,45 @@ def test_citation_validation_rejects_bad_ranges_and_unsupported_observations(tmp
     assert any("overly broad citation" in note for note in notes)
     assert any("beyond EOF" in note for note in notes)
     assert any("outside observed line ranges" in note for note in notes)
+    assert any("wildcard or glob citation" in note for note in notes)
+    assert any("without exact line range" in note for note in notes)
 
+
+def test_final_answer_choices_prioritize_primary_source_paths() -> None:
+    support = fastcontext.ObservationSupport(
+        files=set(),
+        ranges={
+            "tests/test_server.py": [(1, 3)],
+            "README.md": [(10, 12)],
+            "src/repo_finder/server.py": [(20, 30)],
+            "src/repo_finder/models.py": [(5, 8)],
+        },
+    )
+
+    choices = fastcontext._observed_citation_choices(support)
+
+    assert choices[:2] == [
+        "src/repo_finder/models.py:5-8",
+        "src/repo_finder/server.py:20-30",
+    ]
+
+
+def test_local_seed_context_includes_likely_source_files(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "src" / "repo_finder").mkdir(parents=True)
+    (root / "src" / "repo_finder" / "lmstudio.py").write_text("def status(): pass\n", encoding="utf-8")
+    (root / "src" / "repo_finder" / "__main__.py").write_text("def cli(): pass\n", encoding="utf-8")
+    (root / "tests").mkdir()
+    (root / "tests" / "test_lmstudio.py").write_text("def test_status(): pass\n", encoding="utf-8")
+    monkeypatch.setattr(fastcontext.shutil, "which", lambda name: None)
+
+    seed = fastcontext._local_seed_context(root, "Find the LM Studio status CLI command")
+
+    likely = seed["likely_source_files"]
+    assert "src/repo_finder/__main__.py" in likely
+    assert "src/repo_finder/lmstudio.py" in likely
+    assert likely.index("src/repo_finder/lmstudio.py") < likely.index("tests/test_lmstudio.py")
 
 @pytest.mark.asyncio
 async def test_fastcontext_uses_structured_output_and_retries_without_schema() -> None:
@@ -334,6 +431,8 @@ async def test_fastcontext_tool_loop_uses_openai_tool_calls(tmp_path: Path) -> N
         assert "src/components/data-table.tsx:1-4" in tool_messages[-1]["content"]
         assert payload["messages"][-1]["role"] == "user"
         assert "final_answer JSON" in payload["messages"][-1]["content"]
+        assert "Observed citation choices" in payload["messages"][-1]["content"]
+        assert "src/components/data-table.tsx:1-4" in payload["messages"][-1]["content"]
         return httpx.Response(
             200,
             json={
@@ -564,6 +663,33 @@ async def test_fastcontext_tool_loop_reopens_tools_after_unusable_final_answer(
                     ]
                 },
             )
+        if chat_calls == 3:
+            assert "tools" not in payload
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "final_answer": {
+                                            "evidence": [
+                                                {
+                                                    "path": "src/missing-again.ts",
+                                                    "start_line": 1,
+                                                    "end_line": 2,
+                                                }
+                                            ],
+                                            "notes": [],
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
         assert "tools" in payload
         return httpx.Response(
             200,
@@ -596,7 +722,7 @@ async def test_fastcontext_tool_loop_reopens_tools_after_unusable_final_answer(
         messages=[{"role": "user", "content": "Find the data table"}],
         model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
         config=lmstudio.get_config(),
-        max_turns=3,
+        max_turns=4,
         transport=httpx.MockTransport(handler),
     )
 
@@ -604,7 +730,208 @@ async def test_fastcontext_tool_loop_reopens_tools_after_unusable_final_answer(
     assert result.notes == ["Recovered after reopening tools."]
     assert result.trajectory[0]["tools_enabled"] is True
     assert result.trajectory[1]["tools_enabled"] is False
-    assert result.trajectory[2]["tools_enabled"] is True
+    assert result.trajectory[2]["tools_enabled"] is False
+    assert result.trajectory[3]["tools_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_fastcontext_tool_loop_retries_glob_style_final_answer_without_tools(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write_snapshot(root)
+    chat_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal chat_calls
+        payload = json.loads(request.content)
+        chat_calls += 1
+        if chat_calls == 1:
+            assert "tools" in payload
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-read",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 1,
+                                                    "limit": 4,
+                                                }
+                                            ),
+                                        },
+                                    }
+                                ],
+                            },
+                        }
+                    ]
+                },
+            )
+        if chat_calls == 2:
+            assert "tools" not in payload
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "final_answer": {
+                                            "evidence": [
+                                                {
+                                                    "path": "src/**/*.tsx",
+                                                    "start_line": 1,
+                                                    "end_line": 4,
+                                                }
+                                            ],
+                                            "notes": [],
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+        assert "tools" not in payload
+        assert "wildcard or glob citation" in payload["messages"][-1]["content"]
+        assert "src/components/data-table.tsx:1-4" in payload["messages"][-1]["content"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "final_answer": {
+                                        "evidence": [
+                                            {
+                                                "path": "src/components/data-table.tsx",
+                                                "start_line": 1,
+                                                "end_line": 4,
+                                            }
+                                        ],
+                                        "notes": ["Used exact observed citation."],
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await fastcontext._run_tool_loop(
+        root=root,
+        messages=[{"role": "user", "content": "Find the data table"}],
+        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        config=lmstudio.get_config(),
+        max_turns=3,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert result.status == "completed"
+    assert result.evidence_paths == ["src/components/data-table.tsx:1-4"]
+    assert result.trajectory[1]["validation_notes"] == [
+        "Skipped wildcard or glob citation: src/**/*.tsx:1-4"
+    ]
+    assert result.trajectory[2]["tools_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_fastcontext_tool_loop_accepts_repaired_final_answer_path(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo_finder"
+    root.mkdir()
+    _write_snapshot(root)
+    chat_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal chat_calls
+        payload = json.loads(request.content)
+        chat_calls += 1
+        if chat_calls == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-read",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "/repo_finder/src/components/data-table.tsx",
+                                                    "offset": 1,
+                                                    "limit": 4,
+                                                }
+                                            ),
+                                        },
+                                    }
+                                ],
+                            },
+                        }
+                    ]
+                },
+            )
+        assert "tools" not in payload
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "final_answer": {
+                                        "evidence": [
+                                            {
+                                                "path": "/repo_finder/src/components/data-table.tsx",
+                                                "start_line": 1,
+                                                "end_line": 4,
+                                            }
+                                        ],
+                                        "notes": ["Path was repaired."],
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await fastcontext._run_tool_loop(
+        root=root,
+        messages=[{"role": "user", "content": "Find the data table"}],
+        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        config=lmstudio.get_config(),
+        max_turns=2,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert result.status == "completed"
+    assert result.evidence_paths == ["src/components/data-table.tsx:1-4"]
 
 
 @pytest.mark.asyncio
