@@ -1,12 +1,12 @@
 # Architecture: GitHub Project Finder MCP
 
 > Historical MVP architecture. The active architecture direction is the
-> catalog-first reuse layer described in `docs/repo-finder-direction.md`.
+> catalog-first reuse layer described in `docs/source-scout-direction.md`.
 
 ## File Tree
 
 ```
-src/repo_finder/
+src/source_scout/
     models.py              # Shared dataclasses for all modules
     github_client.py       # GitHub REST API client (httpx)
     cache.py               # DuckDB-based query/result cache

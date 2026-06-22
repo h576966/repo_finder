@@ -1,5 +1,5 @@
 [project]
-name = "repo-finder"
+name = "source-scout"
 version = "0.1.0"
 description = "MCP server for finding and evaluating GitHub repositories"
 requires-python = ">=3.11"
@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-repo-finder = "repo_finder.__main__:main"
+source-scout = "source_scout.__main__:main"
 
 [build-system]
 requires = ["hatchling"]

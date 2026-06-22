@@ -5,12 +5,12 @@ from typing import Any
 
 import pytest
 
-from repo_finder import catalog, eval_runner
+from source_scout import catalog, eval_runner
 
 
 @pytest.fixture(autouse=True)
 def isolated_catalog(tmp_path, monkeypatch):
-    monkeypatch.setenv("REPO_FINDER_HOME", str(tmp_path / ".repo_finder"))
+    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
     catalog.reset_connection()
     yield
     catalog.reset_connection()
@@ -224,7 +224,7 @@ def test_evaluate_suite_tracks_avoid_violations(tmp_path: Path) -> None:
 
 
 def test_eval_cli_writes_report(tmp_path: Path, monkeypatch, capsys) -> None:
-    import repo_finder.__main__ as main_module
+    import source_scout.__main__ as main_module
 
     _asset(
         tmp_path,
@@ -238,7 +238,7 @@ def test_eval_cli_writes_report(tmp_path: Path, monkeypatch, capsys) -> None:
         sys,
         "argv",
         [
-            "repo-finder",
+            "source-scout",
             "eval",
             "--suite",
             str(suite_path),

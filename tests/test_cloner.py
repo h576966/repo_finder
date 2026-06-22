@@ -2,14 +2,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from repo_finder.cloner import (
+from source_scout.cloner import (
     _clone_path,
     cleanup_clone,
     clone_repo,
     format_tree,
     get_directory_tree,
 )
-from repo_finder.urls import normalize_url
+from source_scout.urls import normalize_url
 
 
 def test_sanitize_url_removes_git_suffix():
@@ -33,7 +33,7 @@ def test_clone_path_deterministic():
     path1 = _clone_path(url)
     path2 = _clone_path(url)
     assert path1 == path2
-    assert "repo_finder_" in path1
+    assert "source_scout_" in path1
 
 
 def test_clone_path_different_urls():
@@ -92,32 +92,32 @@ def test_format_tree_truncated():
     assert result.count("\n") < 250
 
 
-@patch("repo_finder.cloner.git.Repo.clone_from")
+@patch("source_scout.cloner.git.Repo.clone_from")
 def test_clone_repo_new(mock_clone, tmp_path):
     mock_clone.return_value = None
-    with patch("repo_finder.cloner._clone_path", return_value=str(tmp_path / "clone")):
-        with patch("repo_finder.cloner.os.walk", return_value=[]):
+    with patch("source_scout.cloner._clone_path", return_value=str(tmp_path / "clone")):
+        with patch("source_scout.cloner.os.walk", return_value=[]):
             result = clone_repo("https://github.com/owner/repo")
     assert result == str(tmp_path / "clone")
     mock_clone.assert_called_once()
 
 
-@patch("repo_finder.cloner.git.Repo.clone_from")
+@patch("source_scout.cloner.git.Repo.clone_from")
 def test_clone_repo_already_exists(mock_clone, tmp_path):
     clone_dir = tmp_path / "existing"
     clone_dir.mkdir()
-    with patch("repo_finder.cloner._clone_path", return_value=str(clone_dir)):
+    with patch("source_scout.cloner._clone_path", return_value=str(clone_dir)):
         mock_repo = MagicMock()
         mock_remote = MagicMock()
         mock_remote().urls = ["https://github.com/owner/repo"]
         mock_repo.return_value.remote.return_value = mock_remote
-        with patch("repo_finder.cloner.git.Repo", mock_repo):
+        with patch("source_scout.cloner.git.Repo", mock_repo):
             result = clone_repo("https://github.com/owner/repo")
     assert result == str(clone_dir)
     mock_clone.assert_not_called()
 
 
-@patch("repo_finder.cloner.git.Repo.clone_from")
+@patch("source_scout.cloner.git.Repo.clone_from")
 def test_clone_repo_too_large(mock_clone, tmp_path):
     mock_clone.return_value = None
     clone_dir = tmp_path / "large_clone"
@@ -128,9 +128,9 @@ def test_clone_repo_too_large(mock_clone, tmp_path):
     def fake_getsize(filepath):
         return 250 * 1024 * 1024
 
-    with patch("repo_finder.cloner._clone_path", return_value=str(clone_dir)):
-        with patch("repo_finder.cloner.os.walk", fake_walk):
-            with patch("repo_finder.cloner.os.path.getsize", fake_getsize):
+    with patch("source_scout.cloner._clone_path", return_value=str(clone_dir)):
+        with patch("source_scout.cloner.os.walk", fake_walk):
+            with patch("source_scout.cloner.os.path.getsize", fake_getsize):
                 from fastmcp.exceptions import ToolError
 
                 with pytest.raises(ToolError, match="size limit"):

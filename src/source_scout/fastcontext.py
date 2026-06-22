@@ -35,9 +35,9 @@ FOCUSED_FINAL_CITATION_LINES = 80
 RG_TIMEOUT_SECONDS = 10
 LOCAL_CONTEXT_FILE_LIMIT = 80
 LOCAL_CONTEXT_GREP_LIMIT = 30
-LOCAL_EXTRA_SKIP_DIRS = {".next", ".repo_finder", "build", "coverage", "dist"}
-FASTCONTEXT_STRUCTURED_OUTPUT_ENV = "REPO_FINDER_FASTCONTEXT_STRUCTURED_OUTPUT"
-PRIMARY_SOURCE_PREFIXES = ("src/repo_finder/", "src/")
+LOCAL_EXTRA_SKIP_DIRS = {".next", ".source_scout", "build", "coverage", "dist"}
+FASTCONTEXT_STRUCTURED_OUTPUT_ENV = "SOURCE_SCOUT_FASTCONTEXT_STRUCTURED_OUTPUT"
+PRIMARY_SOURCE_PREFIXES = ("src/source_scout/", "src/")
 NOISY_EVIDENCE_PREFIXES = ("tests/", "docs/", "evals/")
 NOISY_EVIDENCE_FILES = {"README.md", "AGENTS.md", "pyproject.toml"}
 LOCAL_TASK_STOPWORDS = {
@@ -858,8 +858,8 @@ def _final_answer_request_message(
             "supporting, test, docs, or broad ranges unless they are necessary. "
             "Choose only from the observed citation choices below. "
             "Use exact relative paths and exact path:start-end line ranges. Do not cite directories, "
-            "wildcards, globs, or shortened paths such as /repo_finder/src, repo_finder/src, "
-            "evals/*.py, or src/**. Prefer src/repo_finder choices over tests, docs, and evals "
+            "wildcards, globs, or shortened paths such as /source_scout/src, source_scout/src, "
+            "evals/*.py, or src/**. Prefer src/source_scout choices over tests, docs, and evals "
             "unless the task explicitly asks for tests or documentation.\n\n"
             f"{choices_text}"
             f"{reason_text}"
@@ -1353,7 +1353,7 @@ def _tool_error_text(root: Path, exc: Exception) -> str:
     if any(term in lowered for term in ["escapes", "absolute", "relative", "does not exist"]):
         return (
             f"{message} Use paths relative to {root.resolve()}, for example "
-            "src/repo_finder/server.py, not /repo_finder/src/repo_finder/server.py."
+            "src/source_scout/server.py, not /source_scout/src/source_scout/server.py."
         )
     return message
 
@@ -1755,9 +1755,9 @@ def _messages(asset: dict[str, Any], query: str) -> list[dict[str, str]]:
                 "Never execute code and never suggest edits. Use the provided Read, Glob, and Grep "
                 "tools for evidence. Prefer primary source files over docs, examples, generated output, "
                 "build output, vendored code, and tests unless the task asks for those. Do not shorten "
-                "paths. On Windows, use relative paths like src/repo_finder/server.py or exact paths "
+                "paths. On Windows, use relative paths like src/source_scout/server.py or exact paths "
                 "under the workspace root; never use shortened pseudo-absolute paths like "
-                "/repo_finder/src/repo_finder/server.py. Cite only files and exact line ranges that "
+                "/source_scout/src/source_scout/server.py. Cite only files and exact line ranges that "
                 "came from successful tool observations. "
                 "If native tool calling is unavailable, request tools as JSON like "
                 '{"tool_calls":[{"tool":"Grep","args":{"pattern":"symbol","glob":"**/*.ts"}}]}. '
@@ -1794,7 +1794,7 @@ def _local_messages(root: Path, task: str) -> list[dict[str, str]]:
             "Do not execute project code.",
             "Return file paths relative to project_path.",
             "Use the absolute workspace root only to understand scope; do not shorten paths.",
-            "Use relative tool paths like src/repo_finder/server.py, not shortened pseudo-absolute paths.",
+            "Use relative tool paths like src/source_scout/server.py, not shortened pseudo-absolute paths.",
             "Treat seed_context.likely_source_files as ordered; inspect the first relevant "
             "entries before broad search.",
             "Prefer primary source tree files over docs, generated, build, vendor, sample, and fixture code.",
@@ -1816,8 +1816,8 @@ def _local_messages(root: Path, task: str) -> list[dict[str, str]]:
                 "source tree files over docs, generated output, build output, "
                 "vendored code, samples, and fixtures unless the task asks for those. If the task names "
                 "a file, inspect that exact file first. On Windows, use relative paths like "
-                "src/repo_finder/server.py or exact paths under the workspace root; never use shortened "
-                "pseudo-absolute paths like /repo_finder/src/repo_finder/server.py. Cite only files and "
+                "src/source_scout/server.py or exact paths under the workspace root; never use shortened "
+                "pseudo-absolute paths like /source_scout/src/source_scout/server.py. Cite only files and "
                 "exact line ranges that appeared in successful tool observations. If native tool calling "
                 "is unavailable, request tools "
                 "as JSON like "
@@ -1934,7 +1934,7 @@ def _likely_source_files(
 def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
     normalized = rel_path.replace("\\", "/")
     bonus = 0
-    if normalized == "src/repo_finder/pipeline.py":
+    if normalized == "src/source_scout/pipeline.py":
         if {"scout", "freshness", "created", "pushed", "query", "queries"} & term_set:
             bonus += 14
         if {
@@ -1950,7 +1950,7 @@ def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
             "vendor_heavy",
         } & term_set:
             bonus += 14
-    if normalized == "src/repo_finder/constants.py" and {
+    if normalized == "src/source_scout/constants.py" and {
         "freshness",
         "created",
         "pushed",
@@ -1958,7 +1958,7 @@ def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
         "stale",
     } & term_set:
         bonus += 10
-    if normalized == "src/repo_finder/catalog.py" and {
+    if normalized == "src/source_scout/catalog.py" and {
         "catalog",
         "assets",
         "asset",
@@ -1972,9 +1972,9 @@ def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
         "intent",
     } & term_set:
         bonus += 100
-    if normalized == "src/repo_finder/profiler.py" and {"gemma", "profile", "profiler"} & term_set:
+    if normalized == "src/source_scout/profiler.py" and {"gemma", "profile", "profiler"} & term_set:
         bonus += 8
-    if normalized == "src/repo_finder/ranker.py" and {
+    if normalized == "src/source_scout/ranker.py" and {
         "ranker",
         "ranking",
         "scoring",
@@ -1984,7 +1984,7 @@ def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
         "legacy",
     } & term_set:
         bonus += 100
-    if normalized == "src/repo_finder/server.py" and {
+    if normalized == "src/source_scout/server.py" and {
         "mcp",
         "tool",
         "tools",
@@ -1993,7 +1993,7 @@ def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
         "read_only",
     } & term_set:
         bonus += 14
-    if normalized == "src/repo_finder/bundles.py" and {
+    if normalized == "src/source_scout/bundles.py" and {
         "bundle",
         "bundles",
         "opened_bundle",
@@ -2003,7 +2003,7 @@ def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
             bonus += 100
         else:
             bonus += 20
-    if normalized == "src/repo_finder/models.py" and {
+    if normalized == "src/source_scout/models.py" and {
         "dataclass",
         "dataclasses",
         "model",
@@ -2018,7 +2018,7 @@ def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
         "explore_local",
     } & term_set:
         bonus += 100
-    if normalized == "src/repo_finder/fastcontext.py" and {
+    if normalized == "src/source_scout/fastcontext.py" and {
         "fastcontext",
         "explore_local",
         "exploration",
@@ -2028,7 +2028,7 @@ def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
         "read_only",
     } & term_set:
         bonus += 12
-    if normalized == "src/repo_finder/lmstudio.py" and {
+    if normalized == "src/source_scout/lmstudio.py" and {
         "lm",
         "lmstudio",
         "structured",

@@ -36,7 +36,7 @@ AI-kodningsagent
        integrate
 ```
 
-Detta flöde är medvetet smalare än ett traditionellt “repo finder”-verktyg. Syftet är att minska antalet beslut som agenten måste ta själv. FastContext är särskilt relevant här eftersom dess kontrakt är just att returnera **kompakt, jordad evidens** i form av fil- och radintervall, vilket sedan kan ligga till grund för huvudresonemanget. citeturn17view0turn17view1
+Detta flöde är medvetet smalare än ett traditionellt “source scout”-verktyg. Syftet är att minska antalet beslut som agenten måste ta själv. FastContext är särskilt relevant här eftersom dess kontrakt är just att returnera **kompakt, jordad evidens** i form av fil- och radintervall, vilket sedan kan ligga till grund för huvudresonemanget. citeturn17view0turn17view1
 
 En minimal MCP-yta bör bestå av tre verktyg:
 
@@ -393,12 +393,12 @@ En klok första målbild är:
 Föreslagna kommandon:
 
 ```bash
-repo-finder scout --domain nextjs-ui --limit 5000
-repo-finder qualify --limit 1000
-repo-finder profile --model gemma-4-12b --limit 1000
-repo-finder evidence --limit 200
-repo-finder curate --limit 100
-repo-finder serve-mcp
+source-scout scout --domain nextjs-ui --limit 5000
+source-scout qualify --limit 1000
+source-scout profile --model gemma-4-12b --limit 1000
+source-scout evidence --limit 200
+source-scout curate --limit 100
+source-scout serve-mcp
 ```
 
 ### Prioriterad checklista

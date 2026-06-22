@@ -1,6 +1,6 @@
 import pytest
 
-from repo_finder.cache import cache_delete, cache_get, cache_set, get_ttl
+from source_scout.cache import cache_delete, cache_get, cache_set, get_ttl
 
 
 @pytest.fixture(autouse=True)

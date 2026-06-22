@@ -4,14 +4,14 @@ from pathlib import Path
 import pytest
 from fastmcp.exceptions import ToolError
 
-from repo_finder import catalog, server
-from repo_finder.models import LocalExploreResult, RateLimitError
-from repo_finder.server import _build_search_query, _format_error, _parse_url
+from source_scout import catalog, server
+from source_scout.models import LocalExploreResult, RateLimitError
+from source_scout.server import _build_search_query, _format_error, _parse_url
 
 
 @pytest.fixture(autouse=True)
 def isolated_catalog(tmp_path, monkeypatch):
-    monkeypatch.setenv("REPO_FINDER_HOME", str(tmp_path / ".repo_finder"))
+    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
     catalog.reset_connection()
     yield
     catalog.reset_connection()
@@ -122,7 +122,7 @@ async def test_explore_local_code_tool_is_read_only_and_ephemeral(monkeypatch, t
             schema_version="fastcontext-evidence-v1",
             analyzer_version="fastcontext-harness-v1",
             status="completed",
-            evidence_paths=["src/repo_finder/server.py:1-20"],
+            evidence_paths=["src/source_scout/server.py:1-20"],
             notes=["MCP tools are registered here."],
             tool_trace=[],
         )
@@ -139,7 +139,7 @@ async def test_explore_local_code_tool_is_read_only_and_ephemeral(monkeypatch, t
         max_turns=2,
     )
 
-    assert result.evidence_paths == ["src/repo_finder/server.py:1-20"]
+    assert result.evidence_paths == ["src/source_scout/server.py:1-20"]
     assert catalog.get_connection().execute("SELECT COUNT(*) FROM reuse_outcomes").fetchone()[0] == 0
     assert catalog.get_connection().execute("SELECT COUNT(*) FROM analysis_runs").fetchone()[0] == 0
 

@@ -79,7 +79,7 @@ def _format_error(exc: Exception) -> str:
 
 
 def _legacy_tools_enabled() -> bool:
-    return os.environ.get("REPO_FINDER_ENABLE_LEGACY_TOOLS") == "1"
+    return os.environ.get("SOURCE_SCOUT_ENABLE_LEGACY_TOOLS") == "1"
 
 
 @mcp.tool(
@@ -397,7 +397,7 @@ async def find_reusable_code(
     next_steps = []
     if not results:
         next_steps.append(
-            "Run repo-finder scout --domain nextjs-ui, qualify, then evidence for the desired capability."
+            "Run source-scout scout --domain nextjs-ui, qualify, then evidence for the desired capability."
         )
     else:
         next_steps.append(

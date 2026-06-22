@@ -47,5 +47,5 @@ def _remove_generated_path(path: Path) -> None:
     home = catalog.ensure_home().resolve()
     resolved = path.resolve()
     if home not in resolved.parents:
-        raise ToolError(f"Refusing to remove path outside repo_finder home: {resolved}")
+        raise ToolError(f"Refusing to remove path outside source_scout home: {resolved}")
     shutil.rmtree(resolved, ignore_errors=True)

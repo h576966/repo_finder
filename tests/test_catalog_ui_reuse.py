@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from repo_finder import bundles, catalog, evidence, pipeline
+from source_scout import bundles, catalog, evidence, pipeline
 
 
 @pytest.fixture(autouse=True)
 def isolated_catalog(tmp_path, monkeypatch):
-    monkeypatch.setenv("REPO_FINDER_HOME", str(tmp_path / ".repo_finder"))
+    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
     catalog.reset_connection()
     yield
     catalog.reset_connection()
@@ -648,8 +648,8 @@ async def _tool_names(module) -> set[str]:
 
 @pytest.mark.asyncio
 async def test_legacy_tools_hidden_by_default(monkeypatch) -> None:
-    monkeypatch.delenv("REPO_FINDER_ENABLE_LEGACY_TOOLS", raising=False)
-    import repo_finder.server as server
+    monkeypatch.delenv("SOURCE_SCOUT_ENABLE_LEGACY_TOOLS", raising=False)
+    import source_scout.server as server
 
     reloaded = importlib.reload(server)
     names = await _tool_names(reloaded)
@@ -659,13 +659,13 @@ async def test_legacy_tools_hidden_by_default(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_legacy_tools_enabled_by_env(monkeypatch) -> None:
-    monkeypatch.setenv("REPO_FINDER_ENABLE_LEGACY_TOOLS", "1")
-    import repo_finder.server as server
+    monkeypatch.setenv("SOURCE_SCOUT_ENABLE_LEGACY_TOOLS", "1")
+    import source_scout.server as server
 
     reloaded = importlib.reload(server)
     names = await _tool_names(reloaded)
     assert "find_repos_for_task" in names
     assert "find_reusable_code" in names
 
-    monkeypatch.delenv("REPO_FINDER_ENABLE_LEGACY_TOOLS", raising=False)
+    monkeypatch.delenv("SOURCE_SCOUT_ENABLE_LEGACY_TOOLS", raising=False)
     importlib.reload(server)

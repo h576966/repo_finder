@@ -39,7 +39,7 @@ Thumbs.db
 # DuckDB cache
 *.duckdb
 *.duckdb.wal
-.repo_finder/
+.source_scout/
 
 # Package
 *.egg-info/

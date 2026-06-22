@@ -1,4 +1,4 @@
-from repo_finder.ranker import (
+from source_scout.ranker import (
     build_repo_summaries,
     rank_repos,
     score_activity,

@@ -16,7 +16,7 @@ MAX_CLONE_SIZE_MB = 200
 def _clone_path(repo_url: str) -> str:
     sanitized = normalize_url(repo_url)
     key = hashlib.sha256(sanitized.encode()).hexdigest()[:12]
-    return os.path.join(tempfile.gettempdir(), f"repo_finder_{key}")
+    return os.path.join(tempfile.gettempdir(), f"source_scout_{key}")
 
 
 def clone_repo(repo_url: str) -> str:

@@ -6,12 +6,12 @@ from typing import Any
 import httpx
 import pytest
 
-from repo_finder import catalog, lmstudio, pipeline, profiler
+from source_scout import catalog, lmstudio, pipeline, profiler
 
 
 @pytest.fixture(autouse=True)
 def isolated_catalog(tmp_path, monkeypatch):
-    monkeypatch.setenv("REPO_FINDER_HOME", str(tmp_path / ".repo_finder"))
+    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
     catalog.reset_connection()
     yield
     catalog.reset_connection()
@@ -19,9 +19,9 @@ def isolated_catalog(tmp_path, monkeypatch):
 
 def test_lmstudio_config_defaults(monkeypatch) -> None:
     monkeypatch.delenv("LM_STUDIO_BASE_URL", raising=False)
-    monkeypatch.delenv("REPO_FINDER_GEMMA_MODEL", raising=False)
-    monkeypatch.delenv("REPO_FINDER_FASTCONTEXT_MODEL", raising=False)
-    monkeypatch.delenv("REPO_FINDER_LMSTUDIO_TIMEOUT", raising=False)
+    monkeypatch.delenv("SOURCE_SCOUT_GEMMA_MODEL", raising=False)
+    monkeypatch.delenv("SOURCE_SCOUT_FASTCONTEXT_MODEL", raising=False)
+    monkeypatch.delenv("SOURCE_SCOUT_LMSTUDIO_TIMEOUT", raising=False)
 
     config = lmstudio.get_config()
     assert config.base_url == "http://127.0.0.1:1234/v1"
@@ -32,9 +32,9 @@ def test_lmstudio_config_defaults(monkeypatch) -> None:
 
 def test_lmstudio_config_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("LM_STUDIO_BASE_URL", "http://localhost:9999/v1/")
-    monkeypatch.setenv("REPO_FINDER_GEMMA_MODEL", "gemma-local")
-    monkeypatch.setenv("REPO_FINDER_FASTCONTEXT_MODEL", "fastcontext-local")
-    monkeypatch.setenv("REPO_FINDER_LMSTUDIO_TIMEOUT", "7")
+    monkeypatch.setenv("SOURCE_SCOUT_GEMMA_MODEL", "gemma-local")
+    monkeypatch.setenv("SOURCE_SCOUT_FASTCONTEXT_MODEL", "fastcontext-local")
+    monkeypatch.setenv("SOURCE_SCOUT_LMSTUDIO_TIMEOUT", "7")
 
     config = lmstudio.get_config()
     assert config.base_url == "http://localhost:9999/v1"
@@ -324,7 +324,7 @@ async def test_profile_repository_cards_stores_gemma_profile(tmp_path, monkeypat
 
 
 def test_lmstudio_status_cli_prints_json(monkeypatch, capsys) -> None:
-    import repo_finder.__main__ as main_module
+    import source_scout.__main__ as main_module
 
     async def fake_status(start_server: bool, smoke_test: bool) -> dict[str, object]:
         assert start_server is True
@@ -332,7 +332,7 @@ def test_lmstudio_status_cli_prints_json(monkeypatch, capsys) -> None:
         return {"reachable": True}
 
     monkeypatch.setattr(main_module, "_lmstudio_status", fake_status)
-    monkeypatch.setattr(sys, "argv", ["repo-finder", "lmstudio-status", "--start-server", "--smoke-test"])
+    monkeypatch.setattr(sys, "argv", ["source-scout", "lmstudio-status", "--start-server", "--smoke-test"])
     main_module.main()
     captured = capsys.readouterr()
     assert '"reachable": true' in captured.out
@@ -340,7 +340,7 @@ def test_lmstudio_status_cli_prints_json(monkeypatch, capsys) -> None:
 
 @pytest.mark.asyncio
 async def test_lmstudio_status_reports_api_downloaded_and_loaded(monkeypatch) -> None:
-    import repo_finder.__main__ as main_module
+    import source_scout.__main__ as main_module
 
     async def fake_validate_models(config: lmstudio.LMStudioConfig) -> dict[str, object]:
         return {
@@ -387,7 +387,7 @@ async def test_lmstudio_status_reports_api_downloaded_and_loaded(monkeypatch) ->
 
 
 def test_profile_cli_invokes_profiler(monkeypatch, capsys) -> None:
-    import repo_finder.__main__ as main_module
+    import source_scout.__main__ as main_module
 
     async def fake_profile(limit: int, force: bool = False) -> dict[str, int]:
         assert limit == 2
@@ -395,7 +395,7 @@ def test_profile_cli_invokes_profiler(monkeypatch, capsys) -> None:
         return {"profiled_cards": 2}
 
     monkeypatch.setattr(profiler, "profile_repository_cards", fake_profile)
-    monkeypatch.setattr(sys, "argv", ["repo-finder", "profile", "--limit", "2", "--force"])
+    monkeypatch.setattr(sys, "argv", ["source-scout", "profile", "--limit", "2", "--force"])
     main_module.main()
     captured = capsys.readouterr()
     assert "{'profiled_cards': 2}" in captured.out

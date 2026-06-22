@@ -29,7 +29,7 @@ def _run_mcp(transport: str, port: int) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Repo Finder — catalog-first local reuse layer for Next.js/React UI code."
+            "Source Scout — catalog-first local reuse layer for Next.js/React UI code."
         ),
     )
     parser.add_argument(
@@ -67,7 +67,7 @@ def main() -> None:
         "eval-local-explore",
         help="Run a FastContext local exploration golden eval suite",
     )
-    local_eval_parser.add_argument("--suite", default="repo-finder")
+    local_eval_parser.add_argument("--suite", default="source-scout")
     local_eval_parser.add_argument("--max-turns", type=int, default=6)
     local_eval_parser.add_argument("--label", default=None)
     local_eval_parser.add_argument("--output", default=None)
@@ -302,7 +302,7 @@ async def _lmstudio_status(start_server: bool, smoke_test: bool) -> dict[str, ob
             return {
                 "reachable": False,
                 "error": str(exc),
-                "hint": "Run repo-finder lmstudio-status --start-server",
+                "hint": "Run source-scout lmstudio-status --start-server",
                 **_status_with_inventory(_offline_status(config), config),
             }
         lmstudio.start_server()
@@ -368,7 +368,7 @@ async def _fastcontext_status(
             return {
                 "reachable": False,
                 "error": str(exc),
-                "hint": "Run repo-finder fastcontext-status --start-server",
+                "hint": "Run source-scout fastcontext-status --start-server",
                 **_status_with_inventory(_offline_status(config), config),
             }
         lmstudio.start_server()

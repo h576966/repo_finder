@@ -1,7 +1,7 @@
 
 import pytest
 
-from repo_finder.github_client import GitHubClient
+from source_scout.github_client import GitHubClient
 
 
 @pytest.fixture

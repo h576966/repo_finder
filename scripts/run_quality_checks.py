@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Quality check script: run repo_finder's inspection against the ground-truth corpus
+"""Quality check script: run source_scout's inspection against the ground-truth corpus
 and generate a pass/fail report.
 
 Usage:
@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from repo_finder import repo_inspector  # noqa: E402
+from source_scout import repo_inspector  # noqa: E402
 
 REPORT_DIR = os.path.join(os.path.dirname(__file__), "..", "reports")
 CORPUS_PATH = os.path.join(

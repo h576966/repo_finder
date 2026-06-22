@@ -23,7 +23,7 @@ class GitHubClient:
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {token}",
             "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "repo-finder-mcp",
+            "User-Agent": "source-scout-mcp",
         }
         self._client = httpx.AsyncClient(
             headers=self._headers,

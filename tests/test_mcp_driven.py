@@ -3,8 +3,8 @@ import os
 
 import pytest
 
-from repo_finder import pattern_extractor, repo_inspector
-from repo_finder.server import _build_search_query
+from source_scout import pattern_extractor, repo_inspector
+from source_scout.server import _build_search_query
 
 _CORPUS_PATH = os.path.join(os.path.dirname(__file__), "corpus", "ground_truth.json")
 
@@ -122,7 +122,7 @@ class TestSearchRanking:
     async def test_search_returns_results(  # noqa: E501
         self, query: str, language: str, min_stars: int | None, expected_repo: str, requires_github_token: str
     ) -> None:
-        from repo_finder.github_client import get_client
+        from source_scout.github_client import get_client
 
         client = get_client()
         search_query = _build_search_query(query, language, min_stars, None, None)

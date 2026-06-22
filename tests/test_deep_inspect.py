@@ -1,9 +1,9 @@
 from unittest.mock import patch
 
-from repo_finder import pattern_extractor
-from repo_finder.framework_detector import collect_all_files, detect_framework, read_file
-from repo_finder.language_patterns import identify_language_patterns
-from repo_finder.models import DeepPatternReport
+from source_scout import pattern_extractor
+from source_scout.framework_detector import collect_all_files, detect_framework, read_file
+from source_scout.language_patterns import identify_language_patterns
+from source_scout.models import DeepPatternReport
 
 
 def test_detect_framework_fastapi(tmp_path):
@@ -151,7 +151,7 @@ def test_read_file_binary(tmp_path):
 
 
 def test_pattern_cache_save_and_lookup():
-    with patch("repo_finder.pattern_extractor._PATTERN_CACHE", {}):
+    with patch("source_scout.pattern_extractor._PATTERN_CACHE", {}):
         report = DeepPatternReport(
             owner="test",
             repo="repo",
@@ -164,6 +164,6 @@ def test_pattern_cache_save_and_lookup():
 
 
 def test_pattern_cache_lookup_miss():
-    with patch("repo_finder.pattern_extractor._PATTERN_CACHE", {}):
+    with patch("source_scout.pattern_extractor._PATTERN_CACHE", {}):
         result = pattern_extractor._PATTERN_CACHE.get("nonexistent/repo")
         assert result is None

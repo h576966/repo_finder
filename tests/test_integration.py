@@ -1,7 +1,7 @@
 import pytest
 
-from repo_finder import pattern_extractor, repo_inspector
-from repo_finder.github_client import get_client
+from source_scout import pattern_extractor, repo_inspector
+from source_scout.github_client import get_client
 
 
 @pytest.mark.integration

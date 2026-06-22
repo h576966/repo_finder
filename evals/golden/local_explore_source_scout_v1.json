@@ -1,6 +1,6 @@
 {
-  "suite_id": "local-explore-repo-finder",
-  "description": "Golden tasks for FastContext standalone local exploration on the repo_finder codebase.",
+  "suite_id": "local-explore-source-scout",
+  "description": "Golden tasks for FastContext standalone local exploration on the source_scout codebase.",
   "default_project_path": ".",
   "pass_threshold": {
     "path_hit_rate": 0.75,
@@ -13,13 +13,13 @@
       "task": "Find where the local exploration eval suite is loaded, scored, and exposed as a CLI command.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/local_explore_eval.py",
+          "path": "src/source_scout/local_explore_eval.py",
           "start_line": 1,
           "end_line": 180,
           "reason": "Local exploration suite loading, validation, evaluation, and report writing live here."
         },
         {
-          "path": "src/repo_finder/__main__.py",
+          "path": "src/source_scout/__main__.py",
           "start_line": 55,
           "end_line": 210,
           "reason": "CLI command registration and dispatch live here."
@@ -32,13 +32,13 @@
       "task": "Find where LM Studio status and FastContext status commands are registered and implemented.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/__main__.py",
+          "path": "src/source_scout/__main__.py",
           "start_line": 70,
           "end_line": 390,
           "reason": "Status subcommands are registered and implemented in the CLI module."
         },
         {
-          "path": "src/repo_finder/lmstudio.py",
+          "path": "src/source_scout/lmstudio.py",
           "start_line": 1,
           "end_line": 180,
           "reason": "LM Studio configuration, model inventory, and load helpers live here."
@@ -51,13 +51,13 @@
       "task": "Find the read-only local project exploration implementation used by explore-local.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/fastcontext.py",
+          "path": "src/source_scout/fastcontext.py",
           "start_line": 226,
           "end_line": 520,
           "reason": "Local exploration calls the shared FastContext tool loop and formats the local result."
         },
         {
-          "path": "src/repo_finder/models.py",
+          "path": "src/source_scout/models.py",
           "start_line": 183,
           "end_line": 205,
           "reason": "The LocalExploreResult dataclass defines the local exploration output shape."
@@ -70,13 +70,13 @@
       "task": "Find where FastContext READ, GLOB, and GREP tools are implemented and sandboxed to the project root.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/fastcontext.py",
+          "path": "src/source_scout/fastcontext.py",
           "start_line": 1294,
           "end_line": 1455,
           "reason": "Read, Glob, and Grep tool dispatch and implementations live here."
         },
         {
-          "path": "src/repo_finder/fastcontext.py",
+          "path": "src/source_scout/fastcontext.py",
           "start_line": 2887,
           "end_line": 3050,
           "reason": "Path normalization, sandbox validation, and skipped directory handling live here."
@@ -89,19 +89,19 @@
       "task": "Find where FastContext sends LM Studio structured output schema and falls back to robust parsing.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/fastcontext.py",
+          "path": "src/source_scout/fastcontext.py",
           "start_line": 648,
           "end_line": 680,
           "reason": "The FastContext text chat helper attaches response_format and retries without it on failure."
         },
         {
-          "path": "src/repo_finder/fastcontext.py",
+          "path": "src/source_scout/fastcontext.py",
           "start_line": 1212,
           "end_line": 1290,
           "reason": "FastContext structured-output schema and robust response parsing live here."
         },
         {
-          "path": "src/repo_finder/lmstudio.py",
+          "path": "src/source_scout/lmstudio.py",
           "start_line": 276,
           "end_line": 345,
           "reason": "The generic LM Studio chat adapter accepts response_format and parses JSON responses."
@@ -114,13 +114,13 @@
       "task": "Find where FastContext refines catalog evidence and writes batch comparison reports.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/fastcontext.py",
+          "path": "src/source_scout/fastcontext.py",
           "start_line": 95,
           "end_line": 290,
           "reason": "Candidate refinement and suite refinement are orchestrated here."
         },
         {
-          "path": "src/repo_finder/fastcontext.py",
+          "path": "src/source_scout/fastcontext.py",
           "start_line": 650,
           "end_line": 820,
           "reason": "Batch metrics and scoring recommendations are computed here."
@@ -133,13 +133,13 @@
       "task": "Find where the catalog-first MCP tools find_reusable_code, get_source_bundle, and record_reuse_outcome are exposed.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/server.py",
+          "path": "src/source_scout/server.py",
           "start_line": 360,
           "end_line": 470,
           "reason": "Catalog-first MCP tools are registered here."
         },
         {
-          "path": "src/repo_finder/models.py",
+          "path": "src/source_scout/models.py",
           "start_line": 130,
           "end_line": 185,
           "reason": "Reusable candidate, bundle, and outcome result types live here."
@@ -152,7 +152,7 @@
       "task": "Find where the MCP tool for standalone local code exploration is exposed as read-only.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/server.py",
+          "path": "src/source_scout/server.py",
           "start_line": 336,
           "end_line": 360,
           "reason": "The explore_local_code MCP tool is registered as read-only here."
@@ -171,7 +171,7 @@
       "task": "Find where the persistent catalog schema stores repositories, snapshots, assets, outcomes, and analysis runs.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/catalog.py",
+          "path": "src/source_scout/catalog.py",
           "start_line": 140,
           "end_line": 330,
           "reason": "Catalog home paths, DuckDB connection, and table schema definitions live here."
@@ -184,7 +184,7 @@
       "task": "Find where catalog assets are searched and scored with freshness gates, Gemma profile weighting, and capability intent.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/catalog.py",
+          "path": "src/source_scout/catalog.py",
           "start_line": 820,
           "end_line": 1040,
           "reason": "Search filtering, scoring, freshness gates, and candidate construction live here."
@@ -197,13 +197,13 @@
       "task": "Find where GitHub scout queries apply created, pushed, archived, mirror, template, public, and size filters.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/pipeline.py",
+          "path": "src/source_scout/pipeline.py",
           "start_line": 48,
           "end_line": 80,
           "reason": "Scout query construction with GitHub search qualifiers lives here."
         },
         {
-          "path": "src/repo_finder/constants.py",
+          "path": "src/source_scout/constants.py",
           "start_line": 1,
           "end_line": 15,
           "reason": "Freshness and size constants live here."
@@ -216,13 +216,13 @@
       "task": "Find where repository qualification rejects old, stale, archived, forked, template, mirror, oversized, docs-only, or vendor-heavy repos.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/pipeline.py",
+          "path": "src/source_scout/pipeline.py",
           "start_line": 124,
           "end_line": 148,
           "reason": "Repository metadata qualification gates reject stale, archived, forked, template, mirror, and oversized repositories."
         },
         {
-          "path": "src/repo_finder/pipeline.py",
+          "path": "src/source_scout/pipeline.py",
           "start_line": 238,
           "end_line": 285,
           "reason": "Snapshot content gates reject docs-only, empty, lockfile-only, and generated/vendor-heavy repositories."
@@ -235,7 +235,7 @@
       "task": "Find where deterministic evidence scans package manifests, dependencies, paths, content hits, and capability signals.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/evidence.py",
+          "path": "src/source_scout/evidence.py",
           "start_line": 269,
           "end_line": 583,
           "reason": "Capability normalization, path scoring, dependency loading, and asset storage live here."
@@ -248,13 +248,13 @@
       "task": "Find where source bundles are created and opened_bundle reuse outcomes are recorded.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/bundles.py",
+          "path": "src/source_scout/bundles.py",
           "start_line": 1,
           "end_line": 85,
           "reason": "Bundle creation, manifest writing, and file copying live here."
         },
         {
-          "path": "src/repo_finder/server.py",
+          "path": "src/source_scout/server.py",
           "start_line": 415,
           "end_line": 465,
           "reason": "MCP bundle opening records opened_bundle outcomes here."
@@ -267,7 +267,7 @@
       "task": "Find where the catalog golden eval suite is loaded, validated, scored, and summarized.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/eval_runner.py",
+          "path": "src/source_scout/eval_runner.py",
           "start_line": 1,
           "end_line": 260,
           "reason": "Catalog golden eval loading, scoring, metrics, and thresholds live here."
@@ -286,7 +286,7 @@
       "task": "Find where GitHub API requests, rate-limit handling, and repository search calls are implemented.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/github_client.py",
+          "path": "src/source_scout/github_client.py",
           "start_line": 1,
           "end_line": 110,
           "reason": "GitHub API client, rate-limit errors, and repository search live here."
@@ -299,7 +299,7 @@
       "task": "Find the legacy generic repository ranking logic and scoring factors.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/ranker.py",
+          "path": "src/source_scout/ranker.py",
           "start_line": 1,
           "end_line": 270,
           "reason": "Legacy generic repository relevance and quality ranking lives here."
@@ -312,7 +312,7 @@
       "task": "Find where Gemma profiles repository cards into strict JSON and stores profile runs.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/profiler.py",
+          "path": "src/source_scout/profiler.py",
           "start_line": 1,
           "end_line": 180,
           "reason": "Gemma profiling prompt, schema normalization, and profile persistence live here."
@@ -363,7 +363,7 @@
       "task": "Find the dataclasses that define reusable candidates, bundles, outcomes, and local exploration results.",
       "expected_citations": [
         {
-          "path": "src/repo_finder/models.py",
+          "path": "src/source_scout/models.py",
           "start_line": 130,
           "end_line": 205,
           "reason": "Reusable candidate, bundle, outcome, and LocalExploreResult dataclasses live here."

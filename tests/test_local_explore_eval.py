@@ -5,13 +5,13 @@ from typing import Any
 
 import pytest
 
-from repo_finder import catalog, local_explore_eval
-from repo_finder.models import LocalExploreResult
+from source_scout import catalog, local_explore_eval
+from source_scout.models import LocalExploreResult
 
 
 @pytest.fixture(autouse=True)
 def isolated_catalog(tmp_path, monkeypatch):
-    monkeypatch.setenv("REPO_FINDER_HOME", str(tmp_path / ".repo_finder"))
+    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
     catalog.reset_connection()
     yield
     catalog.reset_connection()
@@ -70,9 +70,9 @@ def _suite(project_root: Path) -> dict[str, Any]:
 
 
 def test_tracked_local_explore_suite_loads_by_alias() -> None:
-    suite = local_explore_eval.load_suite("repo-finder")
+    suite = local_explore_eval.load_suite("source-scout")
 
-    assert suite["suite_id"] == "local-explore-repo-finder"
+    assert suite["suite_id"] == "local-explore-source-scout"
     assert 15 <= len(suite["tasks"]) <= 25
     assert suite["tasks"][0]["expected_citations"]
 
@@ -308,8 +308,8 @@ async def test_run_local_explore_eval_writes_report(tmp_path: Path, monkeypatch)
 
 
 def test_eval_local_explore_cli_invokes_runner(monkeypatch, capsys, tmp_path: Path) -> None:
-    import repo_finder.__main__ as main_module
-    from repo_finder import local_explore_eval as eval_module
+    import source_scout.__main__ as main_module
+    from source_scout import local_explore_eval as eval_module
 
     output_path = tmp_path / "report.json"
 
@@ -320,13 +320,13 @@ def test_eval_local_explore_cli_invokes_runner(monkeypatch, capsys, tmp_path: Pa
         output_path: Path | None = None,
         limit_tasks: int | None = None,
     ) -> dict[str, object]:
-        assert suite == "repo-finder"
+        assert suite == "source-scout"
         assert max_turns == 2
         assert label == "unit"
         assert output_path == tmp_path / "report.json"
         assert limit_tasks == 3
         return {
-            "suite_id": "local-explore-repo-finder",
+            "suite_id": "local-explore-source-scout",
             "label": label,
             "passed": True,
             "metrics": {"path_hits": 3},
@@ -338,10 +338,10 @@ def test_eval_local_explore_cli_invokes_runner(monkeypatch, capsys, tmp_path: Pa
         sys,
         "argv",
         [
-            "repo-finder",
+            "source-scout",
             "eval-local-explore",
             "--suite",
-            "repo-finder",
+            "source-scout",
             "--max-turns",
             "2",
             "--label",
@@ -356,5 +356,5 @@ def test_eval_local_explore_cli_invokes_runner(monkeypatch, capsys, tmp_path: Pa
     main_module.main()
 
     captured = capsys.readouterr()
-    assert '"suite_id": "local-explore-repo-finder"' in captured.out
+    assert '"suite_id": "local-explore-source-scout"' in captured.out
     assert '"path_hits": 3' in captured.out

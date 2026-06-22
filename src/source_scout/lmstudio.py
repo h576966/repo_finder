@@ -49,14 +49,14 @@ class LMStudioChatCompletion:
 def get_config() -> LMStudioConfig:
     return LMStudioConfig(
         base_url=os.environ.get("LM_STUDIO_BASE_URL", DEFAULT_BASE_URL).rstrip("/"),
-        gemma_model=os.environ.get("REPO_FINDER_GEMMA_MODEL", DEFAULT_GEMMA_MODEL),
-        fastcontext_model=os.environ.get("REPO_FINDER_FASTCONTEXT_MODEL", DEFAULT_FASTCONTEXT_MODEL),
+        gemma_model=os.environ.get("SOURCE_SCOUT_GEMMA_MODEL", DEFAULT_GEMMA_MODEL),
+        fastcontext_model=os.environ.get("SOURCE_SCOUT_FASTCONTEXT_MODEL", DEFAULT_FASTCONTEXT_MODEL),
         timeout_seconds=_get_timeout(),
     )
 
 
 def _get_timeout() -> float:
-    raw = os.environ.get("REPO_FINDER_LMSTUDIO_TIMEOUT")
+    raw = os.environ.get("SOURCE_SCOUT_LMSTUDIO_TIMEOUT")
     if not raw:
         return DEFAULT_TIMEOUT_SECONDS
     try:

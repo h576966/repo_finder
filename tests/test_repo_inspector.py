@@ -1,11 +1,11 @@
 
-from repo_finder.models import RepoStructure
-from repo_finder.repo_inspector import (
+from source_scout.models import RepoStructure
+from source_scout.repo_inspector import (
     _determine_verdict,
     _evaluate_activity,
     _extract_key_files,
 )
-from repo_finder.urls import parse_owner_repo
+from source_scout.urls import parse_owner_repo
 
 
 def testparse_owner_repo_slug():
@@ -58,7 +58,7 @@ def test_determine_verdict_archived():
 
 
 def test_determine_verdict_high_quality():
-    from repo_finder.models import QualityReport
+    from source_scout.models import QualityReport
     quality = QualityReport(signals={"readme": "comprehensive", "license": "MIT", "ci": "present"}, score=0.8)
     metadata = {"archived": False}
     verdict, reasoning = _determine_verdict(metadata, quality)

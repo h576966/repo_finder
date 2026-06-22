@@ -12,8 +12,8 @@ from . import catalog, fastcontext, lmstudio
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_DIR = REPO_ROOT / "evals" / "golden"
 SUITE_ALIASES = {
-    "repo-finder": "local_explore_repo_finder_v1.json",
-    "local-explore-repo-finder": "local_explore_repo_finder_v1.json",
+    "source-scout": "local_explore_source_scout_v1.json",
+    "local-explore-source-scout": "local_explore_source_scout_v1.json",
 }
 PROMPT_VERSION = fastcontext.PROMPT_VERSION
 ANALYZER_VERSION = "local-explore-eval-v1"

@@ -6,12 +6,12 @@ from typing import Any
 import httpx
 import pytest
 
-from repo_finder import catalog, fastcontext, lmstudio
+from source_scout import catalog, fastcontext, lmstudio
 
 
 @pytest.fixture(autouse=True)
 def isolated_catalog(tmp_path, monkeypatch):
-    monkeypatch.setenv("REPO_FINDER_HOME", str(tmp_path / ".repo_finder"))
+    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
     catalog.reset_connection()
     yield
     catalog.reset_connection()
@@ -204,39 +204,39 @@ def test_workspace_prefix_paths_are_normalized_safely(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    root = tmp_path / "repo_finder"
+    root = tmp_path / "source_scout"
     root.mkdir()
     _write_snapshot(root)
     monkeypatch.setattr(fastcontext.shutil, "which", lambda name: None)
 
     pseudo_absolute = fastcontext.read_file(
         root,
-        "/repo_finder/src/components/data-table.tsx",
+        "/source_scout/src/components/data-table.tsx",
         start=1,
         end=1,
     )
     prefixed_relative = fastcontext.read_file(
         root,
-        "repo_finder/src/components/data-table.tsx",
+        "source_scout/src/components/data-table.tsx",
         start=1,
         end=1,
     )
     suffix_absolute = fastcontext.read_file(
         root,
-        str(tmp_path / "elsewhere" / "repo_finder" / "src" / "components" / "data-table.tsx"),
+        str(tmp_path / "elsewhere" / "source_scout" / "src" / "components" / "data-table.tsx"),
         start=1,
         end=1,
     )
     glob_result = fastcontext.glob_paths(
         root,
-        "/repo_finder/src/**/*.tsx",
-        directory="/repo_finder/src",
+        "/source_scout/src/**/*.tsx",
+        directory="/source_scout/src",
     )
     grep_result = fastcontext.grep_paths(
         root,
         "useReactTable",
-        file_glob="/repo_finder/src/**/*.tsx",
-        search_path="/repo_finder/src",
+        file_glob="/source_scout/src/**/*.tsx",
+        search_path="/source_scout/src",
     )
 
     assert pseudo_absolute["path"] == "src/components/data-table.tsx"
@@ -247,7 +247,7 @@ def test_workspace_prefix_paths_are_normalized_safely(
 
 
 def test_unrelated_absolute_paths_still_fail_closed(tmp_path: Path) -> None:
-    root = tmp_path / "repo_finder"
+    root = tmp_path / "source_scout"
     root.mkdir()
     _write_snapshot(root)
     outside = tmp_path / "outside.txt"
@@ -294,7 +294,7 @@ def test_citation_validation_rejects_bad_ranges_and_unsupported_observations(tmp
                 fastcontext.FastContextCitation("src/components/data-table.tsx", 1, 999),
                 fastcontext.FastContextCitation("src/components/data-table.tsx", 6, 6),
                 fastcontext.FastContextCitation("src/components/data-table.tsx", 1, 2),
-                fastcontext.FastContextCitation("repo_finder/src/**/*.tsx", 1, 2),
+                fastcontext.FastContextCitation("source_scout/src/**/*.tsx", 1, 2),
                 fastcontext.FastContextCitation("src/components/data-table.tsx"),
             ],
         observation_support=fastcontext.ObservationSupport(
@@ -352,10 +352,10 @@ def test_evidence_budget_detects_too_many_files() -> None:
 
 
 def test_local_seed_context_prioritizes_known_project_files(tmp_path: Path) -> None:
-    root = tmp_path / "repo_finder"
-    (root / "src" / "repo_finder").mkdir(parents=True)
+    root = tmp_path / "source_scout"
+    (root / "src" / "source_scout").mkdir(parents=True)
     for name in ["catalog.py", "constants.py", "models.py", "pipeline.py", "ranker.py", "server.py"]:
-        (root / "src" / "repo_finder" / name).write_text(
+        (root / "src" / "source_scout" / name).write_text(
             "repository catalog ranking scoring freshness archived template mirror\n",
             encoding="utf-8",
         )
@@ -368,11 +368,11 @@ def test_local_seed_context_prioritizes_known_project_files(tmp_path: Path) -> N
     assert fastcontext._local_seed_context(
         root,
         "Find where repository qualification rejects archived template mirror repos.",
-    )["likely_source_files"][0] == "src/repo_finder/pipeline.py"
+    )["likely_source_files"][0] == "src/source_scout/pipeline.py"
     assert fastcontext._local_seed_context(
         root,
         "Find the legacy generic repository ranking logic and scoring factors.",
-    )["likely_source_files"][0] == "src/repo_finder/ranker.py"
+    )["likely_source_files"][0] == "src/source_scout/ranker.py"
     assert fastcontext._local_seed_context(
         root,
         "Find the project documentation that explains standalone local exploration usage.",
@@ -385,26 +385,26 @@ def test_final_answer_choices_prioritize_primary_source_paths() -> None:
         ranges={
             "tests/test_server.py": [(1, 3)],
             "README.md": [(10, 12)],
-            "src/repo_finder/server.py": [(20, 30)],
-            "src/repo_finder/models.py": [(5, 8)],
+            "src/source_scout/server.py": [(20, 30)],
+            "src/source_scout/models.py": [(5, 8)],
         },
     )
 
     choices = fastcontext._observed_citation_choices(support)
 
     assert choices[:2] == [
-        "src/repo_finder/models.py:5-8",
-        "src/repo_finder/server.py:20-30",
+        "src/source_scout/models.py:5-8",
+        "src/source_scout/server.py:20-30",
     ]
-    assert "C1: src/repo_finder/models.py:5-8" in fastcontext._observed_citation_choices_text(support)
+    assert "C1: src/source_scout/models.py:5-8" in fastcontext._observed_citation_choices_text(support)
 
 
 def test_local_seed_context_includes_likely_source_files(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "repo"
     root.mkdir()
-    (root / "src" / "repo_finder").mkdir(parents=True)
-    (root / "src" / "repo_finder" / "lmstudio.py").write_text("def status(): pass\n", encoding="utf-8")
-    (root / "src" / "repo_finder" / "__main__.py").write_text("def cli(): pass\n", encoding="utf-8")
+    (root / "src" / "source_scout").mkdir(parents=True)
+    (root / "src" / "source_scout" / "lmstudio.py").write_text("def status(): pass\n", encoding="utf-8")
+    (root / "src" / "source_scout" / "__main__.py").write_text("def cli(): pass\n", encoding="utf-8")
     (root / "tests").mkdir()
     (root / "tests" / "test_lmstudio.py").write_text("def test_status(): pass\n", encoding="utf-8")
     monkeypatch.setattr(fastcontext.shutil, "which", lambda name: None)
@@ -412,9 +412,9 @@ def test_local_seed_context_includes_likely_source_files(tmp_path: Path, monkeyp
     seed = fastcontext._local_seed_context(root, "Find the LM Studio status CLI command")
 
     likely = seed["likely_source_files"]
-    assert "src/repo_finder/__main__.py" in likely
-    assert "src/repo_finder/lmstudio.py" in likely
-    assert likely.index("src/repo_finder/lmstudio.py") < likely.index("tests/test_lmstudio.py")
+    assert "src/source_scout/__main__.py" in likely
+    assert "src/source_scout/lmstudio.py" in likely
+    assert likely.index("src/source_scout/lmstudio.py") < likely.index("tests/test_lmstudio.py")
 
 @pytest.mark.asyncio
 async def test_fastcontext_uses_structured_output_and_retries_without_schema() -> None:
@@ -811,8 +811,8 @@ async def test_fastcontext_tool_loop_keeps_tools_enabled_for_noisy_ranges(
         "def test_fastcontext_setup():\n    assert True\n",
         encoding="utf-8",
     )
-    (root / "src" / "repo_finder").mkdir(parents=True)
-    (root / "src" / "repo_finder" / "fastcontext.py").write_text(
+    (root / "src" / "source_scout").mkdir(parents=True)
+    (root / "src" / "source_scout" / "fastcontext.py").write_text(
         "\n".join(f"line {line}" for line in range(1, 130)),
         encoding="utf-8",
     )
@@ -840,7 +840,7 @@ async def test_fastcontext_tool_loop_keeps_tools_enabled_for_noisy_ranges(
                                             "name": "Read",
                                             "arguments": json.dumps(
                                                 {
-                                                    "path": "src/repo_finder/fastcontext.py",
+                                                    "path": "src/source_scout/fastcontext.py",
                                                     "offset": 1,
                                                     "limit": 120,
                                                 }
@@ -1450,7 +1450,7 @@ async def test_fastcontext_tool_loop_uses_local_fallback_after_failed_final_retr
 async def test_fastcontext_tool_loop_accepts_repaired_final_answer_path(
     tmp_path: Path,
 ) -> None:
-    root = tmp_path / "repo_finder"
+    root = tmp_path / "source_scout"
     root.mkdir()
     _write_snapshot(root)
     chat_calls = 0
@@ -1476,7 +1476,7 @@ async def test_fastcontext_tool_loop_accepts_repaired_final_answer_path(
                                             "name": "Read",
                                             "arguments": json.dumps(
                                                 {
-                                                    "path": "/repo_finder/src/components/data-table.tsx",
+                                                    "path": "/source_scout/src/components/data-table.tsx",
                                                     "offset": 1,
                                                     "limit": 4,
                                                 }
@@ -1501,7 +1501,7 @@ async def test_fastcontext_tool_loop_accepts_repaired_final_answer_path(
                                     "final_answer": {
                                         "evidence": [
                                             {
-                                                "path": "/repo_finder/src/components/data-table.tsx",
+                                                "path": "/source_scout/src/components/data-table.tsx",
                                                 "start_line": 1,
                                                 "end_line": 4,
                                             }
@@ -1894,7 +1894,7 @@ async def test_explore_local_project_writes_trace_file(tmp_path: Path) -> None:
     root = tmp_path / "local"
     root.mkdir()
     _write_snapshot(root)
-    trace_path = ".repo_finder/fastcontext_traces/unit.json"
+    trace_path = ".source_scout/fastcontext_traces/unit.json"
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/models":
@@ -2035,7 +2035,7 @@ async def test_refine_suite_writes_comparison_report(tmp_path: Path, monkeypatch
 
 
 def test_fastcontext_status_cli_prints_json(monkeypatch, capsys) -> None:
-    import repo_finder.__main__ as main_module
+    import source_scout.__main__ as main_module
 
     async def fake_status(
         start_server: bool,
@@ -2056,7 +2056,7 @@ def test_fastcontext_status_cli_prints_json(monkeypatch, capsys) -> None:
         sys,
         "argv",
         [
-            "repo-finder",
+            "source-scout",
             "fastcontext-status",
             "--start-server",
             "--smoke-test",
@@ -2070,7 +2070,7 @@ def test_fastcontext_status_cli_prints_json(monkeypatch, capsys) -> None:
 
 @pytest.mark.asyncio
 async def test_fastcontext_status_loads_model_when_requested(monkeypatch) -> None:
-    import repo_finder.__main__ as main_module
+    import source_scout.__main__ as main_module
 
     loaded = False
 
@@ -2138,7 +2138,7 @@ async def test_fastcontext_status_loads_model_when_requested(monkeypatch) -> Non
 
 
 def test_refine_evidence_cli_invokes_fastcontext(monkeypatch, capsys) -> None:
-    import repo_finder.__main__ as main_module
+    import source_scout.__main__ as main_module
 
     async def fake_refine_candidate(
         candidate_id: str,
@@ -2155,7 +2155,7 @@ def test_refine_evidence_cli_invokes_fastcontext(monkeypatch, capsys) -> None:
         sys,
         "argv",
         [
-            "repo-finder",
+            "source-scout",
             "refine-evidence",
             "--candidate-id",
             "abc",
@@ -2171,7 +2171,7 @@ def test_refine_evidence_cli_invokes_fastcontext(monkeypatch, capsys) -> None:
 
 
 def test_refine_evidence_cli_invokes_suite_batch(monkeypatch, capsys, tmp_path: Path) -> None:
-    import repo_finder.__main__ as main_module
+    import source_scout.__main__ as main_module
 
     output_path = tmp_path / "report.json"
 
@@ -2202,7 +2202,7 @@ def test_refine_evidence_cli_invokes_suite_batch(monkeypatch, capsys, tmp_path: 
         sys,
         "argv",
         [
-            "repo-finder",
+            "source-scout",
             "refine-evidence",
             "--suite",
             "ui-reuse",
@@ -2225,7 +2225,7 @@ def test_refine_evidence_cli_invokes_suite_batch(monkeypatch, capsys, tmp_path: 
 
 
 def test_explore_local_cli_invokes_fastcontext(monkeypatch, capsys, tmp_path: Path) -> None:
-    import repo_finder.__main__ as main_module
+    import source_scout.__main__ as main_module
 
     async def fake_explore_local_project(
         task: str,
@@ -2245,7 +2245,7 @@ def test_explore_local_cli_invokes_fastcontext(monkeypatch, capsys, tmp_path: Pa
             schema_version=fastcontext.SCHEMA_VERSION,
             analyzer_version=fastcontext.ANALYZER_VERSION,
             status="completed",
-            evidence_paths=["src/repo_finder/server.py:1-20"],
+            evidence_paths=["src/source_scout/server.py:1-20"],
             notes=["MCP tools are registered here."],
             tool_trace=[],
         )
@@ -2255,7 +2255,7 @@ def test_explore_local_cli_invokes_fastcontext(monkeypatch, capsys, tmp_path: Pa
         sys,
         "argv",
         [
-            "repo-finder",
+            "source-scout",
             "explore-local",
             "--task",
             "Find MCP tools",
@@ -2271,5 +2271,5 @@ def test_explore_local_cli_invokes_fastcontext(monkeypatch, capsys, tmp_path: Pa
     )
     main_module.main()
     captured = capsys.readouterr()
-    assert "src/repo_finder/server.py:1-20" in captured.out
+    assert "src/source_scout/server.py:1-20" in captured.out
     assert "MCP tools are registered here." in captured.out

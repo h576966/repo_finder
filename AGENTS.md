@@ -1,6 +1,6 @@
 # Project Instructions
 
-Local-first Codex development for `repo_finder`. Be concise, avoid over-engineering,
+Local-first Codex development for `source_scout`. Be concise, avoid over-engineering,
 and keep changes focused on the requested outcome.
 
 ## Workflow
@@ -23,7 +23,7 @@ external/hosted PR review service.
 ## Current Direction
 
 The product direction is a catalog-first local reuse layer for Next.js/React UI
-code. Keep the full design reference in `docs/repo-finder-direction.md`.
+code. Keep the full design reference in `docs/source-scout-direction.md`.
 
 Near-term priorities:
 
@@ -32,7 +32,7 @@ Near-term priorities:
 3. Add Gemma/FastContext only after baseline shortlist quality is measured.
 
 Standalone local exploration is also available through the global
-`fastcontext-local` Codex skill or `repo-finder explore-local`. Use it before
+`fastcontext-local` Codex skill or `source-scout explore-local`. Use it before
 broad manual grep/read loops when the relevant files in a local repo are
 unknown. Treat its output as read-only navigation; Codex still owns edits and
 tests. Read only the top one or two tight cited ranges first. If citations are
@@ -46,7 +46,7 @@ filenames before falling back to `rg`.
 - Do not leave debug logs, TODO comments, or commented-out code.
 - Do not execute arbitrary cloned repository code.
 - Tie source analysis to exact commit SHAs.
-- Keep local generated data under `.repo_finder/`.
+- Keep local generated data under `.source_scout/`.
 - Keep all model outputs versioned by model, prompt, schema, and analyzer version.
 
 ## Quality Checks

@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import shutil
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,16 @@ from typing import Any
 import duckdb
 
 from .constants import MAX_REPO_AGE_DAYS, MAX_REPOSITORY_SIZE_KB, MAX_STALE_DAYS, _now_iso
-from .models import ReusableCandidate
+from .models import (
+    AdaptationStep,
+    AssessmentDimensions,
+    CouplingRisk,
+    EvidenceBackedReason,
+    MissingEvidenceRequest,
+    RequirementAssessment,
+    ReusableCandidate,
+    ReuseAssessmentResult,
+)
 
 ANALYZER_VERSION = "deterministic-ui-v1"
 DEFAULT_DB_NAME = "cache.duckdb"
@@ -144,15 +154,15 @@ _connection: duckdb.DuckDBPyConnection | None = None
 _connection_path: str | None = None
 
 
-def repo_finder_home() -> Path:
-    configured = os.environ.get("REPO_FINDER_HOME")
+def source_scout_home() -> Path:
+    configured = os.environ.get("SOURCE_SCOUT_HOME")
     if configured:
         return Path(configured).expanduser().resolve()
-    return (Path.cwd() / ".repo_finder").resolve()
+    return (Path.cwd() / ".source_scout").resolve()
 
 
 def ensure_home() -> Path:
-    home = repo_finder_home()
+    home = source_scout_home()
     (home / "repos").mkdir(parents=True, exist_ok=True)
     (home / "bundles").mkdir(parents=True, exist_ok=True)
     (home / "logs").mkdir(parents=True, exist_ok=True)
@@ -310,6 +320,43 @@ def initialize_catalog(conn: duckdb.DuckDBPyConnection | None = None) -> None:
             evidence_paths TEXT NOT NULL,
             notes TEXT NOT NULL,
             trajectory TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    active.execute("""
+        CREATE TABLE IF NOT EXISTS reuse_assessments (
+            assessment_id TEXT PRIMARY KEY,
+            candidate_id TEXT NOT NULL,
+            repo_id TEXT NOT NULL,
+            snapshot_id TEXT NOT NULL,
+            commit_sha TEXT NOT NULL,
+            task TEXT NOT NULL,
+            task_signature TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            analyzer_version TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            fastcontext_policy TEXT NOT NULL,
+            fastcontext_status TEXT NOT NULL,
+            license_status TEXT NOT NULL,
+            recommended_verdict TEXT NOT NULL,
+            final_verdict TEXT NOT NULL,
+            reuse_score DOUBLE NOT NULL,
+            model_confidence DOUBLE NOT NULL,
+            confidence DOUBLE NOT NULL,
+            evidence_coverage DOUBLE NOT NULL,
+            requirement_count INTEGER NOT NULL,
+            satisfied_requirement_count INTEGER NOT NULL,
+            evidence_requirement_count INTEGER NOT NULL,
+            dimensions TEXT NOT NULL,
+            requirements TEXT NOT NULL,
+            reasons TEXT NOT NULL,
+            adaptation_steps TEXT NOT NULL,
+            coupling_risks TEXT NOT NULL,
+            missing_evidence TEXT NOT NULL,
+            evidence_ledger TEXT NOT NULL,
+            validation_notes TEXT NOT NULL,
             created_at TEXT NOT NULL
         )
     """)
@@ -1137,6 +1184,203 @@ def store_evidence_refinement(
         ],
     )
     return refinement_id
+
+
+def _json_dicts(value: str | None) -> list[dict[str, Any]]:
+    loaded = _json_load(value, [])
+    if not isinstance(loaded, list):
+        return []
+    return [item for item in loaded if isinstance(item, dict)]
+
+
+def _reuse_assessment_from_row(data: dict[str, Any]) -> ReuseAssessmentResult:
+    dimensions_data = _json_load(data.get("dimensions"), {})
+    if not isinstance(dimensions_data, dict):
+        dimensions_data = {}
+    dimensions = AssessmentDimensions(
+        functional_fit=float(dimensions_data.get("functional_fit", 0.0)),
+        extractability=float(dimensions_data.get("extractability", 0.0)),
+        dependency_fit=float(dimensions_data.get("dependency_fit", 0.0)),
+        coupling_risk=float(dimensions_data.get("coupling_risk", 0.0)),
+        maintenance_risk=float(dimensions_data.get("maintenance_risk", 0.0)),
+    )
+    return ReuseAssessmentResult(
+        assessment_id=str(data["assessment_id"]),
+        candidate_id=str(data["candidate_id"]),
+        repo_id=str(data["repo_id"]),
+        snapshot_id=str(data["snapshot_id"]),
+        commit_sha=str(data["commit_sha"]),
+        task=str(data["task"]),
+        task_signature=str(data["task_signature"]),
+        model_id=str(data["model_id"]),
+        prompt_version=str(data["prompt_version"]),
+        schema_version=str(data["schema_version"]),
+        analyzer_version=str(data["analyzer_version"]),
+        input_fingerprint=str(data["input_fingerprint"]),
+        fastcontext_policy=str(data["fastcontext_policy"]),
+        fastcontext_status=str(data["fastcontext_status"]),
+        license_status=str(data["license_status"]),
+        recommended_verdict=str(data["recommended_verdict"]),
+        final_verdict=str(data["final_verdict"]),
+        reuse_score=float(data["reuse_score"]),
+        model_confidence=float(data["model_confidence"]),
+        confidence=float(data["confidence"]),
+        evidence_coverage=float(data["evidence_coverage"]),
+        requirement_count=int(data["requirement_count"]),
+        satisfied_requirement_count=int(data["satisfied_requirement_count"]),
+        evidence_requirement_count=int(data["evidence_requirement_count"]),
+        dimensions=dimensions,
+        requirements=[
+            RequirementAssessment(
+                requirement=str(item.get("requirement", "")),
+                satisfied=bool(item.get("satisfied", False)),
+                evidence_paths=[str(path) for path in item.get("evidence_paths", [])],
+                notes=[str(note) for note in item.get("notes", [])],
+            )
+            for item in _json_dicts(data.get("requirements"))
+        ],
+        reasons=[
+            EvidenceBackedReason(
+                reason=str(item.get("reason", "")),
+                evidence_paths=[str(path) for path in item.get("evidence_paths", [])],
+            )
+            for item in _json_dicts(data.get("reasons"))
+        ],
+        adaptation_steps=[
+            AdaptationStep(
+                summary=str(item.get("summary", "")),
+                source_paths=[str(path) for path in item.get("source_paths", [])],
+                target_hint=str(item.get("target_hint", "")),
+                notes=[str(note) for note in item.get("notes", [])],
+            )
+            for item in _json_dicts(data.get("adaptation_steps"))
+        ],
+        coupling_risks=[
+            CouplingRisk(
+                risk=str(item.get("risk", "")),
+                severity=str(item.get("severity", "medium")),
+                evidence_paths=[str(path) for path in item.get("evidence_paths", [])],
+                mitigation=str(item.get("mitigation", "")),
+                hard_blocker=bool(item.get("hard_blocker", False)),
+            )
+            for item in _json_dicts(data.get("coupling_risks"))
+        ],
+        missing_evidence=[
+            MissingEvidenceRequest(
+                question=str(item.get("question", "")),
+                suggested_paths=[str(path) for path in item.get("suggested_paths", [])],
+                reason=str(item.get("reason", "")),
+            )
+            for item in _json_dicts(data.get("missing_evidence"))
+        ],
+        evidence_ledger=_json_dicts(data.get("evidence_ledger")),
+        validation_notes=[
+            str(note) for note in _json_load(data.get("validation_notes"), [])
+        ],
+        created_at=str(data["created_at"]),
+    )
+
+
+def store_reuse_assessment(assessment: ReuseAssessmentResult) -> str:
+    created_at = assessment.created_at or _now_iso()
+    assessment_id = assessment.assessment_id or _hash_id(
+        assessment.candidate_id,
+        assessment.task_signature,
+        assessment.input_fingerprint,
+        created_at,
+    )
+    get_connection().execute(
+        """
+        INSERT INTO reuse_assessments (
+            assessment_id, candidate_id, repo_id, snapshot_id, commit_sha,
+            task, task_signature, model_id, prompt_version, schema_version,
+            analyzer_version, input_fingerprint, fastcontext_policy,
+            fastcontext_status, license_status, recommended_verdict,
+            final_verdict, reuse_score, model_confidence, confidence,
+            evidence_coverage, requirement_count, satisfied_requirement_count,
+            evidence_requirement_count, dimensions, requirements, reasons,
+            adaptation_steps, coupling_risks, missing_evidence, evidence_ledger,
+            validation_notes, created_at
+        )
+        VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        )
+        """,
+        [
+            assessment_id,
+            assessment.candidate_id,
+            assessment.repo_id,
+            assessment.snapshot_id,
+            assessment.commit_sha,
+            assessment.task,
+            assessment.task_signature,
+            assessment.model_id,
+            assessment.prompt_version,
+            assessment.schema_version,
+            assessment.analyzer_version,
+            assessment.input_fingerprint,
+            assessment.fastcontext_policy,
+            assessment.fastcontext_status,
+            assessment.license_status,
+            assessment.recommended_verdict,
+            assessment.final_verdict,
+            assessment.reuse_score,
+            assessment.model_confidence,
+            assessment.confidence,
+            assessment.evidence_coverage,
+            assessment.requirement_count,
+            assessment.satisfied_requirement_count,
+            assessment.evidence_requirement_count,
+            _json_dump(asdict(assessment.dimensions)),
+            _json_dump([asdict(item) for item in assessment.requirements]),
+            _json_dump([asdict(item) for item in assessment.reasons]),
+            _json_dump([asdict(item) for item in assessment.adaptation_steps]),
+            _json_dump([asdict(item) for item in assessment.coupling_risks]),
+            _json_dump([asdict(item) for item in assessment.missing_evidence]),
+            _json_dump(assessment.evidence_ledger),
+            _json_dump(assessment.validation_notes),
+            created_at,
+        ],
+    )
+    return assessment_id
+
+
+def get_reuse_assessment(assessment_id: str) -> ReuseAssessmentResult | None:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM reuse_assessments WHERE assessment_id = ?",
+        [assessment_id],
+    ).fetchone()
+    if row is None:
+        return None
+    columns = [str(c[0]) for c in conn.description]
+    return _reuse_assessment_from_row(dict(zip(columns, row, strict=False)))
+
+
+def get_latest_reuse_assessment(
+    candidate_id: str,
+    task_signature: str,
+    input_fingerprint: str,
+) -> ReuseAssessmentResult | None:
+    conn = get_connection()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM reuse_assessments
+        WHERE candidate_id = ?
+            AND task_signature = ?
+            AND input_fingerprint = ?
+        ORDER BY created_at DESC, assessment_id DESC
+        LIMIT 1
+        """,
+        [candidate_id, task_signature, input_fingerprint],
+    ).fetchone()
+    if row is None:
+        return None
+    columns = [str(c[0]) for c in conn.description]
+    return _reuse_assessment_from_row(dict(zip(columns, row, strict=False)))
 
 
 def garbage_collect_snapshots(keep_per_repo: int) -> dict[str, int]:

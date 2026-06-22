@@ -30,8 +30,8 @@ Useful implementation notes preserved from the old agent-specific setup.
 
 - Clone or fetch by commit SHA, not moving branch names.
 - Never execute code from cloned repositories.
-- Store generated catalog data under `.repo_finder/`.
-- Garbage-collect old snapshots through `repo-finder gc`.
+- Store generated catalog data under `.source_scout/`.
+- Garbage-collect old snapshots through `source-scout gc`.
 
 ## Model Runtime
 
@@ -42,8 +42,8 @@ Useful implementation notes preserved from the old agent-specific setup.
 - FastContext is for evidence refinement over read-only `READ`, `GLOB`, and
   `GREP`-style tools, not general code generation.
 - Standalone FastContext exploration is evaluated through
-  `evals/golden/local_explore_repo_finder_v1.json` and
-  `repo-finder eval-local-explore --suite repo-finder --max-turns 6`.
+  `evals/golden/local_explore_source_scout_v1.json` and
+  `source-scout eval-local-explore --suite source-scout --max-turns 6`.
 - Final FastContext evidence is budgeted to at most three citations across at
   most three files, with one or two tight ranges preferred.
 
@@ -54,12 +54,12 @@ lms ls
 lms server status
 lms server start
 Invoke-RestMethod http://127.0.0.1:1234/v1/models
-repo-finder lmstudio-status --smoke-test
+source-scout lmstudio-status --smoke-test
 ```
 
 Current local model defaults:
 
 ```text
-REPO_FINDER_GEMMA_MODEL=google/gemma-4-12b-qat
-REPO_FINDER_FASTCONTEXT_MODEL=fastcontext-1.0-4b-rl
+SOURCE_SCOUT_GEMMA_MODEL=google/gemma-4-12b-qat
+SOURCE_SCOUT_FASTCONTEXT_MODEL=fastcontext-1.0-4b-rl
 ```
