@@ -87,6 +87,47 @@ def test_validate_suite_rejects_missing_expected_citations() -> None:
         )
 
 
+def test_score_citations_reports_budget_violations(tmp_path: Path) -> None:
+    for name in ["a.py", "b.py", "c.py", "d.py"]:
+        (tmp_path / name).write_text("line\n", encoding="utf-8")
+
+    scoring = local_explore_eval._score_citations(
+        tmp_path,
+        [local_explore_eval.ExpectedCitation("a.py", 1, 1)],
+        [],
+        [
+            local_explore_eval.ReturnedCitation("a.py", 1, 1, "a.py:1-1"),
+            local_explore_eval.ReturnedCitation("b.py", 1, 1, "b.py:1-1"),
+            local_explore_eval.ReturnedCitation("c.py", 1, 1, "c.py:1-1"),
+            local_explore_eval.ReturnedCitation("d.py", 1, 1, "d.py:1-1"),
+        ],
+    )
+    metrics = local_explore_eval._metrics(
+        [
+            {
+                "status": "completed",
+                "passed": False,
+                "any_expected_path_hit": scoring["any_expected_path_hit"],
+                "any_line_overlap_hit": scoring["any_line_overlap_hit"],
+                "bad_citation_count": scoring["bad_citation_count"],
+                "invalid_citation_count": scoring["invalid_citation_count"],
+                "manual_search": {"file_count": 1},
+                "manual_search_file_reduction": 0.0,
+                "duration_seconds": 0.1,
+                "tool_call_count": 1,
+                "turn_count": 1,
+                "tool_trace": [],
+                **scoring,
+            }
+        ]
+    )
+
+    assert scoring["over_budget"] is True
+    assert scoring["citation_budget_violation_count"] == 2
+    assert metrics["over_budget_task_count"] == 1
+    assert metrics["citation_budget_violation_count"] == 2
+
+
 @pytest.mark.asyncio
 async def test_evaluate_suite_scores_hits_bad_citations_and_manual_search(
     tmp_path: Path,
@@ -139,13 +180,30 @@ async def test_evaluate_suite_scores_hits_bad_citations_and_manual_search(
     assert report["metrics"]["bad_citation_count"] == 0
     assert report["metrics"]["invalid_citation_count"] == 0
     assert report["metrics"]["tool_call_count"] == 1
+    assert report["metrics"]["average_citation_count"] == 2.0
+    assert report["metrics"]["over_budget_task_count"] == 0
+    assert report["metrics"]["citation_budget_violation_count"] == 0
     assert report["metrics"]["average_file_precision"] == 1.0
     assert report["metrics"]["average_file_recall"] == 1.0
     assert report["metrics"]["average_line_f1"] > 0
+    assert report["metrics"]["average_explore_score"] > 0
     task = report["tasks"][0]
+    assert task["returned_citation_count"] == 2
+    assert task["over_budget"] is False
+    assert task["citation_budget_violation_count"] == 0
     assert task["manual_search"]["file_count"] == 2
     assert task["returned_file_count"] == 2
     assert task["manual_search_file_reduction"] == 0.0
+    assert task["failure_buckets"] == {
+        "no_tool_calls": False,
+        "wrong_file": False,
+        "right_file_wrong_range": False,
+        "invalid_final_citation": False,
+        "unsupported_final_citation": False,
+        "final_answer_oscillation": False,
+        "fallback_observations": False,
+    }
+    assert report["metrics"]["failure_bucket_counts"]["wrong_file"] == 0
 
 
 @pytest.mark.asyncio
@@ -186,6 +244,8 @@ async def test_evaluate_suite_does_not_pass_fallback_observations(
     assert report["metrics"]["failed_tasks"] == 1
     assert report["tasks"][0]["status"] == "fallback_observations"
     assert report["tasks"][0]["passed"] is False
+    assert report["tasks"][0]["failure_buckets"]["fallback_observations"] is True
+    assert report["metrics"]["failure_bucket_counts"]["fallback_observations"] == 1
 
 
 @pytest.mark.asyncio

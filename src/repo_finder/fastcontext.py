@@ -27,6 +27,11 @@ MAX_READ_FILE_BYTES = 240_000
 MAX_GREP_FILE_BYTES = 1_000_000
 MAX_CITATION_LINES = 240
 MAX_FINAL_CITATION_CHOICES = 24
+MAX_FINAL_CITATIONS = 3
+MAX_FALLBACK_CITATIONS = 3
+MAX_FINAL_FILES = 3
+TARGET_FINAL_CITATIONS = 2
+FOCUSED_FINAL_CITATION_LINES = 80
 RG_TIMEOUT_SECONDS = 10
 LOCAL_CONTEXT_FILE_LIMIT = 80
 LOCAL_CONTEXT_GREP_LIMIT = 30
@@ -92,6 +97,7 @@ class FastContextCitation:
 class ParsedFastContextResponse:
     tool_calls: list[dict[str, Any]]
     citations: list[FastContextCitation]
+    citation_ids: list[str]
     notes: list[str]
 
 
@@ -99,6 +105,18 @@ class ParsedFastContextResponse:
 class ObservationSupport:
     files: set[str]
     ranges: dict[str, list[tuple[int, int]]]
+
+
+@dataclass(frozen=True)
+class EvidenceBudgetResult:
+    evidence_paths: list[str]
+    notes: list[str]
+    over_budget: bool
+    truncated: bool
+    original_count: int
+    accepted_count: int
+    original_file_count: int
+    accepted_file_count: int
 
 
 @dataclass(frozen=True)
@@ -374,6 +392,7 @@ async def _run_tool_loop(
     observation_support = ObservationSupport(files=set(), ranges={})
     final_answer_only_next = False
     final_answer_retry_used = False
+    budget_retry_used = False
     for turn in range(1, max(1, max_turns) + 1):
         allow_tools = not final_answer_only_next
         completion = await _chat_fastcontext_completion(
@@ -396,22 +415,37 @@ async def _run_tool_loop(
             "tools_enabled": allow_tools,
             "tool_calls": tool_calls,
             "final_citations": [citation.evidence_path() for citation in parsed.citations],
+            "selected_citation_ids": parsed.citation_ids,
         }
         trajectory.append(turn_record)
 
-        if parsed.citations:
-            evidence_paths, validation_notes = _validated_evidence_paths(
+        if parsed.citation_ids or parsed.citations:
+            evidence_paths, validation_notes = _validated_response_evidence_paths(
                 root,
-                parsed.citations,
-                observation_support=observation_support,
+                parsed,
+                observation_support,
             )
             if validation_notes:
                 turn_record["validation_notes"] = validation_notes
             if evidence_paths:
+                budget_result = _apply_evidence_budget(evidence_paths)
+                _record_budget_result(turn_record, budget_result)
+                if budget_result.over_budget and not budget_retry_used:
+                    active_messages.extend(
+                        _budget_feedback_messages(
+                            content,
+                            observation_support=observation_support,
+                            budget_notes=budget_result.notes,
+                        )
+                    )
+                    budget_retry_used = True
+                    final_answer_only_next = True
+                    continue
+                turn_record["final_citations"] = budget_result.evidence_paths
                 return FastContextLoopResult(
                     status="completed",
-                    evidence_paths=evidence_paths,
-                    notes=[*parsed.notes, *validation_notes],
+                    evidence_paths=budget_result.evidence_paths,
+                    notes=[*parsed.notes, *validation_notes, *budget_result.notes],
                     trajectory=trajectory,
                 )
 
@@ -433,12 +467,23 @@ async def _run_tool_loop(
                 active_messages.extend(
                     _legacy_observation_messages(content, observations)
                 )
-            active_messages.append(_final_answer_request_message(observation_support))
+            finalization_reason = _finalization_reason(turn, max_turns, observation_support)
+            turn_record["finalization_reason"] = finalization_reason
+            if finalization_reason:
+                active_messages.append(
+                    _final_answer_request_message(
+                        observation_support,
+                        finalization_reason=finalization_reason,
+                    )
+                )
+            elif tool_mode_response:
+                active_messages.append(_continue_exploration_message(observation_support))
             final_answer_retry_used = False
-            final_answer_only_next = True
+            budget_retry_used = False
+            final_answer_only_next = finalization_reason is not None
             continue
 
-        if parsed.citations:
+        if parsed.citation_ids or parsed.citations:
             if (
                 not allow_tools
                 and observation_support.ranges
@@ -454,6 +499,15 @@ async def _run_tool_loop(
                 )
                 final_answer_retry_used = True
                 final_answer_only_next = True
+            elif not allow_tools and observation_support.ranges and allow_observation_fallback:
+                return _fallback_observation_result(
+                    observation_support,
+                    trajectory,
+                    note=(
+                        "FastContext final-answer retry did not validate; "
+                        "showing supported tool observations only."
+                    ),
+                )
             else:
                 active_messages.extend(
                     _validation_feedback_messages(
@@ -480,6 +534,15 @@ async def _run_tool_loop(
             )
             final_answer_retry_used = True
             final_answer_only_next = True
+        elif not allow_tools and observation_support.ranges and allow_observation_fallback:
+            return _fallback_observation_result(
+                observation_support,
+                trajectory,
+                note=(
+                    "FastContext final-answer retry did not produce citations; "
+                    "showing supported tool observations only."
+                ),
+            )
         else:
             active_messages.extend(
                 _final_response_feedback_messages(
@@ -494,14 +557,23 @@ async def _run_tool_loop(
         observation_support
     )
     if fallback_evidence:
+        fallback_budget = _apply_evidence_budget(
+            fallback_evidence,
+            max_citations=MAX_FALLBACK_CITATIONS,
+            max_files=MAX_FALLBACK_CITATIONS,
+        )
         trajectory.append(
             {
                 "turn": max(1, max_turns) + 1,
                 "model_response": "",
                 "finish_reason": "max_turn_observation_fallback",
+                "tools_enabled": False,
                 "tool_calls": [],
                 "tool_observations": [],
-                "final_citations": fallback_evidence,
+                "final_citations": fallback_budget.evidence_paths,
+                "selected_citation_ids": [],
+                "finalization_reason": "max_turn_observation_fallback",
+                "citation_budget": _budget_trace(fallback_budget),
                 "validation_notes": [
                     "FastContext reached max_turns without a final answer; using supported tool observations."
                 ],
@@ -510,10 +582,11 @@ async def _run_tool_loop(
         if allow_observation_fallback:
             return FastContextLoopResult(
                 status="fallback_observations",
-                evidence_paths=fallback_evidence,
+                evidence_paths=fallback_budget.evidence_paths,
                 notes=[
                     "FastContext reached max_turns without a valid final answer; "
-                    "showing supported tool observations only."
+                    "showing supported tool observations only.",
+                    *fallback_budget.notes,
                 ],
                 trajectory=trajectory,
             )
@@ -752,23 +825,44 @@ def _legacy_observation_messages(
     ]
 
 
+def _continue_exploration_message(observation_support: ObservationSupport) -> dict[str, str]:
+    return {
+        "role": "user",
+        "content": (
+            "Tool observations are available, but there is not enough strong citation support yet. "
+            "Continue using Read, Glob, or Grep to gather focused file/line evidence. If you are "
+            "already certain, you may return final_answer JSON with 1-3 citation_ids, ideally "
+            f"{TARGET_FINAL_CITATIONS}, from the observed choices below.\n\n"
+            f"{_observed_citation_choices_text(observation_support)}"
+        ),
+    }
+
+
 def _final_answer_request_message(
     observation_support: ObservationSupport,
     *,
     feedback: str | None = None,
+    finalization_reason: str | None = None,
 ) -> dict[str, str]:
     choices_text = _observed_citation_choices_text(observation_support)
     feedback_text = f"\n\nValidation feedback:\n{feedback}" if feedback else ""
+    reason_text = f"\n\nFinalization reason: {finalization_reason}" if finalization_reason else ""
     return {
         "role": "user",
         "content": (
             "Tool observations are now available. Do not call tools on this turn. "
-            "Return final_answer JSON only. Choose only from the observed citation choices below. "
+            "Return final_answer JSON only. Prefer citation_ids from the observed choices below, "
+            "for example {\"final_answer\":{\"citation_ids\":[\"C1\"],\"notes\":[\"why\"]}}. "
+            f"Choose 1-{MAX_FINAL_CITATIONS} citation IDs, ideally {TARGET_FINAL_CITATIONS}. "
+            "Use the smallest set that directly answers the task. Do not include background, "
+            "supporting, test, docs, or broad ranges unless they are necessary. "
+            "Choose only from the observed citation choices below. "
             "Use exact relative paths and exact path:start-end line ranges. Do not cite directories, "
             "wildcards, globs, or shortened paths such as /repo_finder/src, repo_finder/src, "
             "evals/*.py, or src/**. Prefer src/repo_finder choices over tests, docs, and evals "
             "unless the task explicitly asks for tests or documentation.\n\n"
             f"{choices_text}"
+            f"{reason_text}"
             f"{feedback_text}"
         ),
     }
@@ -842,9 +936,33 @@ def _final_response_feedback_messages(
     ]
 
 
+def _budget_feedback_messages(
+    content: str,
+    *,
+    observation_support: ObservationSupport,
+    budget_notes: list[str],
+) -> list[dict[str, Any]]:
+    feedback = (
+        "The final answer selected too many citations:\n"
+        f"{json.dumps(budget_notes, sort_keys=True)}\n\n"
+        f"Retry once without tools. Choose only the strongest 1-{MAX_FINAL_CITATIONS} "
+        f"observed citation IDs, ideally {TARGET_FINAL_CITATIONS}. Prefer the smallest set "
+        "that directly answers the task. Do not include background, test, docs, or supporting "
+        "ranges unless they are necessary."
+    )
+    return [
+        {"role": "assistant", "content": content},
+        _final_answer_request_message(
+            observation_support,
+            feedback=feedback,
+            finalization_reason="citation_budget_retry",
+        ),
+    ]
+
+
 def _observed_citation_choices_text(support: ObservationSupport) -> str:
-    choices = _observed_citation_choices(support)
-    if not choices:
+    choice_items = _observed_citation_choice_items(support)
+    if not choice_items:
         files = "\n".join(
             f"- {path}"
             for path in sorted(support.files, key=_evidence_path_sort_key)[:MAX_FINAL_CITATION_CHOICES]
@@ -856,7 +974,10 @@ def _observed_citation_choices_text(support: ObservationSupport) -> str:
                 "No valid line ranges have been observed yet. Exact line ranges are required."
             )
         return "Observed citation choices:\n- none"
-    formatted = "\n".join(f"- {choice}" for choice in choices)
+    formatted = "\n".join(
+        f"- {choice_id}: {citation.evidence_path()} ({_citation_choice_label(citation)})"
+        for choice_id, citation in choice_items
+    )
     return f"Observed citation choices:\n{formatted}"
 
 
@@ -864,22 +985,215 @@ def _observed_citation_choices(
     support: ObservationSupport,
     limit: int = MAX_FINAL_CITATION_CHOICES,
 ) -> list[str]:
-    choices: list[str] = []
+    return [
+        citation.evidence_path()
+        for _choice_id, citation in _observed_citation_choice_items(support, limit=limit)
+    ]
+
+
+def _observed_citation_choice_items(
+    support: ObservationSupport,
+    limit: int = MAX_FINAL_CITATION_CHOICES,
+) -> list[tuple[str, FastContextCitation]]:
+    choices: list[tuple[str, FastContextCitation]] = []
     for path in sorted(support.ranges, key=_evidence_path_sort_key):
         for start, end in _merge_ranges(support.ranges[path]):
-            choices.append(f"{path}:{start}-{end}")
+            choice_id = f"C{len(choices) + 1}"
+            choices.append((choice_id, FastContextCitation(path=path, start_line=start, end_line=end)))
             if len(choices) >= limit:
                 return choices
     return choices
 
 
+def _observed_citation_choice_map(support: ObservationSupport) -> dict[str, FastContextCitation]:
+    return {
+        choice_id: citation
+        for choice_id, citation in _observed_citation_choice_items(support)
+    }
+
+
+def _apply_evidence_budget(
+    evidence_paths: list[str],
+    *,
+    max_citations: int = MAX_FINAL_CITATIONS,
+    max_files: int = MAX_FINAL_FILES,
+) -> EvidenceBudgetResult:
+    unique_paths = sorted(set(evidence_paths), key=_evidence_citation_sort_key)
+    original_count = len(unique_paths)
+    original_file_count = len(_citation_files(unique_paths))
+    over_budget = original_count > max_citations or original_file_count > max_files
+    accepted = unique_paths[:max_citations]
+    accepted_file_count = len(_citation_files(accepted))
+    truncated = accepted != unique_paths
+    notes: list[str] = []
+    if over_budget:
+        notes.append(
+            "Citation budget exceeded: "
+            f"{original_count} citations across {original_file_count} files; "
+            f"maximum is {max_citations} citations across {max_files} files."
+        )
+    if truncated:
+        notes.append(
+            "Citation budget applied: "
+            f"accepted {len(accepted)} citations across {accepted_file_count} files."
+        )
+    return EvidenceBudgetResult(
+        evidence_paths=accepted,
+        notes=notes,
+        over_budget=over_budget,
+        truncated=truncated,
+        original_count=original_count,
+        accepted_count=len(accepted),
+        original_file_count=original_file_count,
+        accepted_file_count=accepted_file_count,
+    )
+
+
+def _record_budget_result(
+    turn_record: dict[str, Any],
+    budget_result: EvidenceBudgetResult,
+) -> None:
+    turn_record["citation_budget"] = _budget_trace(budget_result)
+    if budget_result.notes:
+        turn_record.setdefault("validation_notes", []).extend(budget_result.notes)
+
+
+def _budget_trace(budget_result: EvidenceBudgetResult) -> dict[str, Any]:
+    return {
+        "original_count": budget_result.original_count,
+        "accepted_count": budget_result.accepted_count,
+        "original_file_count": budget_result.original_file_count,
+        "accepted_file_count": budget_result.accepted_file_count,
+        "over_budget": budget_result.over_budget,
+        "truncated": budget_result.truncated,
+    }
+
+
+def _citation_files(evidence_paths: list[str]) -> set[str]:
+    return {_citation_path(path) for path in evidence_paths if _citation_path(path)}
+
+
+def _citation_path(evidence_path: str) -> str:
+    match = re.match(r"(?P<path>.+?):\d+(?:-\d+)?$", evidence_path)
+    if match:
+        return match.group("path")
+    return evidence_path
+
+
+def _evidence_citation_sort_key(evidence_path: str) -> tuple[int, str, int, str]:
+    path = _citation_path(evidence_path)
+    start_line = 0
+    match = re.match(r".+?:(?P<start>\d+)(?:-\d+)?$", evidence_path)
+    if match:
+        start_line = int(match.group("start"))
+    priority, normalized = _evidence_path_sort_key(path)
+    return priority, normalized, start_line, evidence_path
+
+
+def _finalization_reason(
+    turn: int,
+    max_turns: int,
+    support: ObservationSupport,
+) -> str | None:
+    choices = _observed_citation_choice_items(support)
+    primary_choices = [
+        citation
+        for _choice_id, citation in choices
+        if _is_primary_source_path(citation.path)
+    ]
+    focused_primary_count = sum(
+        1 for citation in primary_choices if _is_focused_citation(citation)
+    )
+    if len(primary_choices) >= 2:
+        return "enough_primary_source_ranges"
+    if turn >= max(1, max_turns - 1):
+        return "last_available_turn"
+    if len(choices) >= 3:
+        if not primary_choices and turn < max(2, max_turns - 2):
+            return None
+        if len(primary_choices) == 1 and focused_primary_count == 0 and turn < max(2, max_turns - 2):
+            return None
+        return "enough_observed_ranges"
+    return None
+
+
+def _fallback_observation_result(
+    support: ObservationSupport,
+    trajectory: list[dict[str, Any]],
+    *,
+    note: str,
+) -> FastContextLoopResult:
+    budget_result = _apply_evidence_budget(
+        _evidence_from_observation_support(support),
+        max_citations=MAX_FALLBACK_CITATIONS,
+        max_files=MAX_FALLBACK_CITATIONS,
+    )
+    evidence = budget_result.evidence_paths
+    trajectory.append(
+        {
+            "turn": int(trajectory[-1].get("turn", 0)) + 1 if trajectory else 1,
+            "model_response": "",
+            "finish_reason": "final_answer_retry_observation_fallback",
+            "tools_enabled": False,
+            "tool_calls": [],
+            "tool_observations": [],
+            "final_citations": evidence,
+            "selected_citation_ids": [],
+            "finalization_reason": "supported_observation_fallback",
+            "citation_budget": _budget_trace(budget_result),
+            "validation_notes": [note, *budget_result.notes],
+        }
+    )
+    return FastContextLoopResult(
+        status="fallback_observations",
+        evidence_paths=evidence,
+        notes=[note, *budget_result.notes],
+        trajectory=trajectory,
+    )
+
+
 def _evidence_path_sort_key(path: str) -> tuple[int, str]:
     normalized = path.replace("\\", "/")
-    if normalized.startswith(PRIMARY_SOURCE_PREFIXES):
+    if _is_primary_source_path(normalized):
         return (0, normalized)
-    if normalized in NOISY_EVIDENCE_FILES or normalized.startswith(NOISY_EVIDENCE_PREFIXES):
+    if _is_noisy_evidence_path(normalized):
         return (2, normalized)
     return (1, normalized)
+
+
+def _is_primary_source_path(path: str) -> bool:
+    return path.replace("\\", "/").startswith(PRIMARY_SOURCE_PREFIXES)
+
+
+def _is_noisy_evidence_path(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    return normalized in NOISY_EVIDENCE_FILES or normalized.startswith(NOISY_EVIDENCE_PREFIXES)
+
+
+def _citation_choice_label(citation: FastContextCitation) -> str:
+    if _is_primary_source_path(citation.path):
+        if _is_focused_citation(citation):
+            return "primary source, focused"
+        return "primary source, broad"
+    if _is_noisy_evidence_path(citation.path):
+        return "supporting/noisy"
+    if _is_focused_citation(citation):
+        return "supporting, focused"
+    return "supporting, broad"
+
+
+def _is_focused_citation(citation: FastContextCitation) -> bool:
+    span = _citation_line_span(citation)
+    return span is not None and span <= FOCUSED_FINAL_CITATION_LINES
+
+
+def _citation_line_span(citation: FastContextCitation) -> int | None:
+    if citation.start_line is None:
+        return None
+    end_line = citation.end_line if citation.end_line is not None else citation.start_line
+    if end_line < citation.start_line:
+        return None
+    return end_line - citation.start_line + 1
 
 
 def _match_sort_key(match: dict[str, Any]) -> tuple[int, str, int]:
@@ -935,6 +1249,10 @@ def _fastcontext_response_format() -> dict[str, Any]:
                     "final_answer": {
                         "type": "object",
                         "properties": {
+                            "citation_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
                             "evidence": {
                                 "type": "array",
                                 "items": citation_schema,
@@ -961,12 +1279,14 @@ def parse_fastcontext_response(content: str) -> ParsedFastContextResponse:
         return ParsedFastContextResponse(
             tool_calls=_parse_function_style_tool_calls(content),
             citations=_parse_final_answer_citations(content),
+            citation_ids=_parse_final_answer_citation_ids(content),
             notes=[],
         )
 
     return ParsedFastContextResponse(
         tool_calls=_extract_tool_calls(parsed),
         citations=_extract_citations(parsed),
+        citation_ids=_extract_citation_ids(parsed),
         notes=_extract_notes(parsed),
     )
 
@@ -1442,9 +1762,14 @@ def _messages(asset: dict[str, Any], query: str) -> list[dict[str, str]]:
                 "If native tool calling is unavailable, request tools as JSON like "
                 '{"tool_calls":[{"tool":"Grep","args":{"pattern":"symbol","glob":"**/*.ts"}}]}. '
                 "After enough evidence is observed, stop calling tools and return final_answer. "
+                f"Return the smallest useful evidence set: 1-{MAX_FINAL_CITATIONS} citations, "
+                f"ideally {TARGET_FINAL_CITATIONS}. Avoid background/supporting ranges unless "
+                "they are necessary. When observed citation IDs are provided, prefer citation_ids "
+                "over rewriting paths. "
                 "When done, return only JSON in this shape: "
-                '{"final_answer":{"evidence":[{"path":"relative/file.ts","start_line":1,'
-                '"end_line":20,"reason":"why this matters"}],"notes":["short note"]}}'
+                '{"final_answer":{"citation_ids":["C1"],"notes":["short note"]}}. '
+                "If citation IDs are unavailable, use evidence objects like "
+                '{"path":"relative/file.ts","start_line":1,"end_line":20,"reason":"why this matters"}.'
             ),
         },
         {
@@ -1470,7 +1795,8 @@ def _local_messages(root: Path, task: str) -> list[dict[str, str]]:
             "Return file paths relative to project_path.",
             "Use the absolute workspace root only to understand scope; do not shorten paths.",
             "Use relative tool paths like src/repo_finder/server.py, not shortened pseudo-absolute paths.",
-            "When seed_context.likely_source_files is non-empty, inspect those files before broad search.",
+            "Treat seed_context.likely_source_files as ordered; inspect the first relevant "
+            "entries before broad search.",
             "Prefer primary source tree files over docs, generated, build, vendor, sample, and fixture code.",
             "If the task names a file path, inspect that exact file first.",
             "Only cite files and line ranges that appeared in successful tool observations.",
@@ -1484,9 +1810,10 @@ def _local_messages(root: Path, task: str) -> list[dict[str, str]]:
             "content": (
                 "You are FastContext, a read-only local repository exploration subagent. "
                 "Use the provided Read, Glob, and Grep tools. The user context includes the absolute "
-                "workspace root; do not shorten or invent paths. Start broad when needed, then narrow "
-                "down. When seed_context.likely_source_files is non-empty, inspect those files before "
-                "broad search. Prefer primary source tree files over docs, generated output, build output, "
+                "workspace root; do not shorten or invent paths. Treat seed_context.likely_source_files "
+                "as ordered and inspect the first relevant entries before broad search. Start broad only "
+                "when the ordered hints are insufficient, then narrow down. Prefer primary "
+                "source tree files over docs, generated output, build output, "
                 "vendored code, samples, and fixtures unless the task asks for those. If the task names "
                 "a file, inspect that exact file first. On Windows, use relative paths like "
                 "src/repo_finder/server.py or exact paths under the workspace root; never use shortened "
@@ -1496,10 +1823,14 @@ def _local_messages(root: Path, task: str) -> list[dict[str, str]]:
                 "as JSON like "
                 '{"tool_calls":[{"tool":"Grep","args":{"pattern":"symbol","glob":"**/*.ts"}}]}. '
                 "After enough evidence is observed, stop calling tools and return final_answer. "
-                "Return the smallest useful set of evidence. "
+                f"Return the smallest useful evidence set: 1-{MAX_FINAL_CITATIONS} citations, "
+                f"ideally {TARGET_FINAL_CITATIONS}. Avoid background/supporting ranges unless "
+                "they are necessary. When observed citation IDs are provided, prefer citation_ids "
+                "over rewriting paths. "
                 "When done, return only JSON in this shape: "
-                '{"final_answer":{"evidence":[{"path":"relative/file.ts","start_line":1,'
-                '"end_line":20,"reason":"why this matters"}],"notes":["short note"]}}'
+                '{"final_answer":{"citation_ids":["C1"],"notes":["short note"]}}. '
+                "If citation IDs are unavailable, use evidence objects like "
+                '{"path":"relative/file.ts","start_line":1,"end_line":20,"reason":"why this matters"}.'
             ),
         },
         {
@@ -1574,6 +1905,7 @@ def _likely_source_files(
         searchable = rel_path.lower().replace("-", "_")
         stem = path.stem.lower().replace("-", "_")
         score = sum(5 for term in term_set if term in searchable or term in stem)
+        score += _task_file_bonus(rel_path, term_set)
         if {"cli", "command", "commands"} & term_set and path.name in {"__main__.py", "cli.py"}:
             score += 6
         if {"mcp", "tool", "tools", "server"} & term_set and path.name in {"server.py"}:
@@ -1591,12 +1923,133 @@ def _likely_source_files(
     ranked = sorted(
         scores,
         key=lambda path: (
-            _evidence_path_sort_key(path)[0],
+            _seed_path_priority(path, term_set),
             -scores[path],
             _evidence_path_sort_key(path)[1],
         ),
     )
     return ranked[:limit]
+
+
+def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
+    normalized = rel_path.replace("\\", "/")
+    bonus = 0
+    if normalized == "src/repo_finder/pipeline.py":
+        if {"scout", "freshness", "created", "pushed", "query", "queries"} & term_set:
+            bonus += 14
+        if {
+            "qualification",
+            "rejects",
+            "reject",
+            "archived",
+            "forked",
+            "template",
+            "mirror",
+            "oversized",
+            "docs_only",
+            "vendor_heavy",
+        } & term_set:
+            bonus += 14
+    if normalized == "src/repo_finder/constants.py" and {
+        "freshness",
+        "created",
+        "pushed",
+        "size",
+        "stale",
+    } & term_set:
+        bonus += 10
+    if normalized == "src/repo_finder/catalog.py" and {
+        "catalog",
+        "assets",
+        "asset",
+        "searched",
+        "scored",
+        "search",
+        "score",
+        "gemma",
+        "profile",
+        "capability",
+        "intent",
+    } & term_set:
+        bonus += 100
+    if normalized == "src/repo_finder/profiler.py" and {"gemma", "profile", "profiler"} & term_set:
+        bonus += 8
+    if normalized == "src/repo_finder/ranker.py" and {
+        "ranker",
+        "ranking",
+        "scoring",
+        "score",
+        "factors",
+        "factor",
+        "legacy",
+    } & term_set:
+        bonus += 100
+    if normalized == "src/repo_finder/server.py" and {
+        "mcp",
+        "tool",
+        "tools",
+        "server",
+        "exposed",
+        "read_only",
+    } & term_set:
+        bonus += 14
+    if normalized == "src/repo_finder/bundles.py" and {
+        "bundle",
+        "bundles",
+        "opened_bundle",
+        "source",
+    } & term_set:
+        if {"source", "created", "opened_bundle", "recorded"} & term_set:
+            bonus += 100
+        else:
+            bonus += 20
+    if normalized == "src/repo_finder/models.py" and {
+        "dataclass",
+        "dataclasses",
+        "model",
+        "models",
+        "result",
+        "results",
+        "shape",
+        "shapes",
+        "candidate",
+        "bundle",
+        "outcome",
+        "explore_local",
+    } & term_set:
+        bonus += 100
+    if normalized == "src/repo_finder/fastcontext.py" and {
+        "fastcontext",
+        "explore_local",
+        "exploration",
+        "structured",
+        "output",
+        "schema",
+        "read_only",
+    } & term_set:
+        bonus += 12
+    if normalized == "src/repo_finder/lmstudio.py" and {
+        "lm",
+        "lmstudio",
+        "structured",
+        "output",
+        "schema",
+        "json",
+    } & term_set:
+        bonus += 10
+    if normalized == "README.md" and {"documentation", "docs", "readme", "usage"} & term_set:
+        bonus += 18
+    if normalized == "AGENTS.md" and {"documentation", "docs", "agents", "usage"} & term_set:
+        bonus += 12
+    return bonus
+
+
+def _seed_path_priority(path: str, term_set: set[str]) -> int:
+    if {"documentation", "docs", "readme", "usage"} & term_set:
+        normalized = path.replace("\\", "/")
+        if normalized in {"README.md", "AGENTS.md"} or normalized.startswith("docs/"):
+            return -1
+    return _evidence_path_sort_key(path)[0]
 
 
 def _tool_trace_summary(trajectory: list[dict[str, Any]]) -> list[dict[str, object]]:
@@ -1605,10 +2058,13 @@ def _tool_trace_summary(trajectory: list[dict[str, Any]]) -> list[dict[str, obje
         tool_calls = turn.get("tool_calls", [])
         observations = turn.get("tool_observations", [])
         final_citations = turn.get("final_citations", [])
+        selected_citation_ids = turn.get("selected_citation_ids", [])
         validation_notes = turn.get("validation_notes", [])
+        citation_budget = turn.get("citation_budget", {})
         summary.append(
             {
                 "turn": int(turn.get("turn", 0)),
+                "tools_enabled": bool(turn.get("tools_enabled", False)),
                 "tool_calls": [
                     _canonical_tool_name(_tool_name(call))
                     for call in tool_calls
@@ -1617,6 +2073,11 @@ def _tool_trace_summary(trajectory: list[dict[str, Any]]) -> list[dict[str, obje
                 "tool_call_count": len(tool_calls) if isinstance(tool_calls, list) else 0,
                 "observation_count": len(observations) if isinstance(observations, list) else 0,
                 "final_citations": final_citations if isinstance(final_citations, list) else [],
+                "selected_citation_ids": selected_citation_ids
+                if isinstance(selected_citation_ids, list)
+                else [],
+                "finalization_reason": str(turn.get("finalization_reason") or ""),
+                "citation_budget": citation_budget if isinstance(citation_budget, dict) else {},
                 "validation_notes": validation_notes if isinstance(validation_notes, list) else [],
             }
         )
@@ -1717,6 +2178,56 @@ def _validated_evidence_paths(
                 continue
         evidence_paths.append(normalized.evidence_path())
     return sorted(set(evidence_paths)), notes
+
+
+def _validated_response_evidence_paths(
+    root: Path,
+    parsed: ParsedFastContextResponse,
+    observation_support: ObservationSupport,
+) -> tuple[list[str], list[str]]:
+    notes: list[str] = []
+    if parsed.citation_ids:
+        id_paths, id_notes = _validated_citation_id_paths(
+            root,
+            parsed.citation_ids,
+            observation_support,
+        )
+        notes.extend(id_notes)
+        if id_paths:
+            return id_paths, notes
+    if parsed.citations:
+        raw_paths, raw_notes = _validated_evidence_paths(
+            root,
+            parsed.citations,
+            observation_support=observation_support,
+        )
+        notes.extend(raw_notes)
+        return raw_paths, notes
+    return [], notes
+
+
+def _validated_citation_id_paths(
+    root: Path,
+    citation_ids: list[str],
+    observation_support: ObservationSupport,
+) -> tuple[list[str], list[str]]:
+    id_map = _observed_citation_choice_map(observation_support)
+    citations: list[FastContextCitation] = []
+    notes: list[str] = []
+    for citation_id in citation_ids:
+        normalized = citation_id.strip().upper()
+        citation = id_map.get(normalized)
+        if citation is None:
+            notes.append(f"Skipped unknown citation_id: {citation_id}")
+            continue
+        citations.append(citation)
+    evidence_paths, validation_notes = _validated_evidence_paths(
+        root,
+        citations,
+        observation_support=observation_support,
+    )
+    notes.extend(validation_notes)
+    return evidence_paths, notes
 
 
 def _citation_shape_note(citation: FastContextCitation) -> str | None:
@@ -1938,6 +2449,16 @@ def _extract_citations(parsed: dict[str, Any]) -> list[FastContextCitation]:
     return _citations_from_value(evidence)
 
 
+def _extract_citation_ids(parsed: dict[str, Any]) -> list[str]:
+    final_answer = parsed.get("final_answer")
+    raw_ids: Any
+    if isinstance(final_answer, dict):
+        raw_ids = final_answer.get("citation_ids") or final_answer.get("evidence_ids") or []
+    else:
+        raw_ids = parsed.get("citation_ids") or parsed.get("evidence_ids") or []
+    return _citation_ids_from_value(raw_ids)
+
+
 def _extract_notes(parsed: dict[str, Any]) -> list[str]:
     final_answer = parsed.get("final_answer")
     notes = final_answer.get("notes") if isinstance(final_answer, dict) else parsed.get("notes")
@@ -1972,6 +2493,17 @@ def _citations_from_value(value: Any) -> list[FastContextCitation]:
     return citations
 
 
+def _citation_ids_from_value(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return _parse_citation_ids(value)
+    if not isinstance(value, list):
+        return []
+    ids: list[str] = []
+    for item in value:
+        ids.extend(_parse_citation_ids(str(item)))
+    return _dedupe_preserve_order(ids)
+
+
 def _parse_final_answer_citations(content: str) -> list[FastContextCitation]:
     block = re.search(
         r"<final_answer>\s*(?P<body>.*?)\s*</final_answer>",
@@ -1981,6 +2513,36 @@ def _parse_final_answer_citations(content: str) -> list[FastContextCitation]:
     if block:
         return _parse_citation_lines(block.group("body"))
     return _parse_citation_lines(content)
+
+
+def _parse_final_answer_citation_ids(content: str) -> list[str]:
+    block = re.search(
+        r"<final_answer>\s*(?P<body>.*?)\s*</final_answer>",
+        content,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if block:
+        return _parse_citation_ids(block.group("body"))
+    return _parse_citation_ids(content)
+
+
+def _parse_citation_ids(text: str) -> list[str]:
+    return _dedupe_preserve_order(
+        match.group(0).upper()
+        for match in re.finditer(r"\bC\d+\b", text, flags=re.IGNORECASE)
+    )
+
+
+def _dedupe_preserve_order(values: Any) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        normalized = str(value).strip().upper()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
 
 
 def _parse_citation_lines(text: str) -> list[FastContextCitation]:

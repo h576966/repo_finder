@@ -263,6 +263,7 @@ async def _evaluate_task(
         and bool(report["any_line_overlap_hit"])
         and int(report["invalid_citation_count"]) == 0
     )
+    report["failure_buckets"] = _failure_bucket_flags(report)
     return report
 
 
@@ -365,7 +366,18 @@ def _score_citations(
         accepted_lines = returned_lines
     line_precision = _ratio(len(returned_lines & accepted_lines), len(returned_lines))
     line_recall = _ratio(len(returned_lines & expected_lines), len(expected_lines))
+    citation_count = len(returned)
+    over_budget = (
+        citation_count > fastcontext.MAX_FINAL_CITATIONS
+        or len(returned_paths) > fastcontext.MAX_FINAL_FILES
+    )
+    budget_violation_count = max(0, citation_count - fastcontext.MAX_FINAL_CITATIONS) + max(
+        0,
+        len(returned_paths) - fastcontext.MAX_FINAL_FILES,
+    )
+    expected_label_count = max(1, len(expected_paths))
     return {
+        "returned_citation_count": citation_count,
         "returned_file_count": len(returned_paths),
         "expected_path_hits": sorted(set(path_hits)),
         "line_overlap_hits": sorted(set(line_hits)),
@@ -381,11 +393,70 @@ def _score_citations(
         "line_precision": line_precision,
         "line_recall": line_recall,
         "line_f1": _f1(line_precision, line_recall),
+        "file_explore_score": _explore_score(
+            file_precision,
+            file_recall,
+            citation_count,
+            expected_label_count,
+        ),
+        "line_explore_score": _explore_score(
+            line_precision,
+            line_recall,
+            citation_count,
+            expected_label_count,
+        ),
+        "explore_score": round(
+            (
+                _explore_score(file_precision, file_recall, citation_count, expected_label_count)
+                + _explore_score(line_precision, line_recall, citation_count, expected_label_count)
+            )
+            / 2,
+            4,
+        ),
+        "over_budget": over_budget,
+        "citation_budget_violation_count": budget_violation_count,
         "valid_citation_rate": _ratio(len(returned) - len(invalid_citations), len(returned)),
         "any_expected_path_hit": bool(path_hits),
         "all_required_paths_hit": all_required_paths_hit,
         "any_line_overlap_hit": bool(line_hits),
     }
+
+
+def _failure_bucket_flags(report: dict[str, Any]) -> dict[str, bool]:
+    status = str(report.get("status") or "")
+    tool_trace = report.get("tool_trace", [])
+    returned_file_count = int(report.get("returned_file_count", 0))
+    expected_path_hit = bool(report.get("any_expected_path_hit"))
+    line_overlap_hit = bool(report.get("any_line_overlap_hit"))
+    flags = {
+        "no_tool_calls": int(report.get("tool_call_count", 0)) == 0,
+        "wrong_file": returned_file_count > 0 and not expected_path_hit,
+        "right_file_wrong_range": expected_path_hit and not line_overlap_hit,
+        "invalid_final_citation": int(report.get("invalid_citation_count", 0)) > 0,
+        "unsupported_final_citation": _unsupported_citation_count(report) > 0,
+        "final_answer_oscillation": _has_final_answer_oscillation(tool_trace),
+        "fallback_observations": status == "fallback_observations",
+    }
+    return flags
+
+
+def _has_final_answer_oscillation(tool_trace: Any) -> bool:
+    if not isinstance(tool_trace, list):
+        return False
+    seen_disabled_after_tools = False
+    seen_tool_turn = False
+    for turn in tool_trace:
+        if not isinstance(turn, dict):
+            continue
+        tools_enabled = bool(turn.get("tools_enabled", False))
+        tool_call_count = int(turn.get("tool_call_count", 0))
+        if seen_disabled_after_tools and tools_enabled:
+            return True
+        if seen_tool_turn and not tools_enabled:
+            seen_disabled_after_tools = True
+        if tool_call_count > 0:
+            seen_tool_turn = True
+    return False
 
 
 def _invalid_citation_reason(project_root: Path, citation: ReturnedCitation) -> str | None:
@@ -444,6 +515,25 @@ def _f1(precision: float, recall: float) -> float:
     return round((2 * precision * recall) / (precision + recall), 4)
 
 
+def _explore_score(
+    precision: float,
+    recall: float,
+    citation_count: int,
+    expected_count: int,
+    *,
+    beta: float = 0.5,
+    penalty_weight: float = 0.1,
+) -> float:
+    if precision + recall <= 0:
+        f_beta = 0.0
+    else:
+        beta_squared = beta**2
+        f_beta = ((1 + beta_squared) * precision * recall) / ((beta_squared * precision) + recall)
+    label_count = max(1, expected_count)
+    penalty = penalty_weight * max(0.0, (citation_count - label_count) / label_count)
+    return round(f_beta - penalty, 4)
+
+
 def _metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(task_reports)
     completed = sum(1 for task in task_reports if task["status"] == "completed")
@@ -452,6 +542,11 @@ def _metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
     line_hits = sum(1 for task in task_reports if task["any_line_overlap_hit"])
     bad_citations = sum(int(task["bad_citation_count"]) for task in task_reports)
     invalid_citations = sum(int(task["invalid_citation_count"]) for task in task_reports)
+    citation_budget_violations = sum(
+        int(task.get("citation_budget_violation_count", 0))
+        for task in task_reports
+    )
+    over_budget_tasks = sum(1 for task in task_reports if bool(task.get("over_budget", False)))
     unsupported_citations = sum(_unsupported_citation_count(task) for task in task_reports)
     total_duration = sum(float(task["duration_seconds"]) for task in task_reports)
     manual_files = [
@@ -464,6 +559,7 @@ def _metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
         for task in task_reports
         if task["manual_search_file_reduction"] is not None
     ]
+    failure_bucket_counts = _failure_bucket_counts(task_reports)
     return {
         "task_count": total,
         "completed_tasks": completed,
@@ -476,12 +572,18 @@ def _metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
         "bad_citation_count": bad_citations,
         "invalid_citation_count": invalid_citations,
         "unsupported_citation_count": unsupported_citations,
+        "average_citation_count": _average_metric(task_reports, "returned_citation_count"),
+        "over_budget_task_count": over_budget_tasks,
+        "citation_budget_violation_count": citation_budget_violations,
         "average_file_precision": _average_metric(task_reports, "file_precision"),
         "average_file_recall": _average_metric(task_reports, "file_recall"),
         "average_file_f1": _average_metric(task_reports, "file_f1"),
         "average_line_precision": _average_metric(task_reports, "line_precision"),
         "average_line_recall": _average_metric(task_reports, "line_recall"),
         "average_line_f1": _average_metric(task_reports, "line_f1"),
+        "average_file_explore_score": _average_metric(task_reports, "file_explore_score"),
+        "average_line_explore_score": _average_metric(task_reports, "line_explore_score"),
+        "average_explore_score": _average_metric(task_reports, "explore_score"),
         "average_valid_citation_rate": _average_metric(task_reports, "valid_citation_rate"),
         "total_duration_seconds": round(total_duration, 4),
         "average_duration_seconds": round(total_duration / total, 4) if total else 0.0,
@@ -491,9 +593,30 @@ def _metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
         "average_file_reduction": round(sum(reductions) / len(reductions), 4)
         if reductions
         else 0.0,
+        "failure_bucket_counts": failure_bucket_counts,
         "tool_call_count": sum(int(task["tool_call_count"]) for task in task_reports),
         "turn_count": sum(int(task["turn_count"]) for task in task_reports),
     }
+
+
+def _failure_bucket_counts(task_reports: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {
+        "no_tool_calls": 0,
+        "wrong_file": 0,
+        "right_file_wrong_range": 0,
+        "invalid_final_citation": 0,
+        "unsupported_final_citation": 0,
+        "final_answer_oscillation": 0,
+        "fallback_observations": 0,
+    }
+    for task in task_reports:
+        flags = task.get("failure_buckets", {})
+        if not isinstance(flags, dict):
+            continue
+        for bucket in counts:
+            if bool(flags.get(bucket)):
+                counts[bucket] += 1
+    return counts
 
 
 def _unsupported_citation_count(task: dict[str, Any]) -> int:

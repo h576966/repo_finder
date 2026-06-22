@@ -56,6 +56,21 @@ def _write_snapshot(root: Path) -> None:
     )
 
 
+def _write_budget_snapshot(root: Path) -> None:
+    _write_snapshot(root)
+    (root / "README.md").write_text("Project docs\n", encoding="utf-8")
+    (root / "src" / "components" / "form.tsx").write_text(
+        "\n".join(
+            [
+                "export function Form() {",
+                "  return <form />",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def _payload_message_text(payload: dict[str, Any]) -> str:
     return "\n".join(
         str(message.get("content") or "")
@@ -261,6 +276,11 @@ def test_parse_fastcontext_json_and_final_answer_formats() -> None:
     )
     assert final_response.citations[0].evidence_path() == "src/components/data-table.tsx:1-4"
 
+    id_response = fastcontext.parse_fastcontext_response(
+        json.dumps({"final_answer": {"citation_ids": ["c1", "C2", "C1"], "notes": []}})
+    )
+    assert id_response.citation_ids == ["C1", "C2"]
+
 
 def test_citation_validation_rejects_bad_ranges_and_unsupported_observations(tmp_path: Path) -> None:
     root = tmp_path / "snapshot"
@@ -292,6 +312,73 @@ def test_citation_validation_rejects_bad_ranges_and_unsupported_observations(tmp
     assert any("without exact line range" in note for note in notes)
 
 
+def test_citation_id_validation_rejects_unknown_ids(tmp_path: Path) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write_snapshot(root)
+
+    evidence, notes = fastcontext._validated_response_evidence_paths(
+        root,
+        fastcontext.ParsedFastContextResponse(
+            tool_calls=[],
+            citations=[],
+            citation_ids=["C99"],
+            notes=[],
+        ),
+        fastcontext.ObservationSupport(
+            files={"src/components/data-table.tsx"},
+            ranges={"src/components/data-table.tsx": [(1, 4)]},
+        ),
+    )
+
+    assert evidence == []
+    assert notes == ["Skipped unknown citation_id: C99"]
+
+
+def test_evidence_budget_detects_too_many_files() -> None:
+    result = fastcontext._apply_evidence_budget(
+        [
+            "src/a.ts:1-1",
+            "src/b.ts:1-1",
+            "src/c.ts:1-1",
+            "src/d.ts:1-1",
+        ]
+    )
+
+    assert result.over_budget is True
+    assert result.truncated is True
+    assert result.accepted_count == fastcontext.MAX_FINAL_CITATIONS
+    assert result.accepted_file_count == fastcontext.MAX_FINAL_FILES
+
+
+def test_local_seed_context_prioritizes_known_project_files(tmp_path: Path) -> None:
+    root = tmp_path / "repo_finder"
+    (root / "src" / "repo_finder").mkdir(parents=True)
+    for name in ["catalog.py", "constants.py", "models.py", "pipeline.py", "ranker.py", "server.py"]:
+        (root / "src" / "repo_finder" / name).write_text(
+            "repository catalog ranking scoring freshness archived template mirror\n",
+            encoding="utf-8",
+        )
+    (root / "README.md").write_text(
+        "Standalone local exploration usage documentation\n",
+        encoding="utf-8",
+    )
+    (root / "AGENTS.md").write_text("FastContext local usage\n", encoding="utf-8")
+
+    assert fastcontext._local_seed_context(
+        root,
+        "Find where repository qualification rejects archived template mirror repos.",
+    )["likely_source_files"][0] == "src/repo_finder/pipeline.py"
+    assert fastcontext._local_seed_context(
+        root,
+        "Find the legacy generic repository ranking logic and scoring factors.",
+    )["likely_source_files"][0] == "src/repo_finder/ranker.py"
+    assert fastcontext._local_seed_context(
+        root,
+        "Find the project documentation that explains standalone local exploration usage.",
+    )["likely_source_files"][:2] == ["README.md", "AGENTS.md"]
+
+
 def test_final_answer_choices_prioritize_primary_source_paths() -> None:
     support = fastcontext.ObservationSupport(
         files=set(),
@@ -309,6 +396,7 @@ def test_final_answer_choices_prioritize_primary_source_paths() -> None:
         "src/repo_finder/models.py:5-8",
         "src/repo_finder/server.py:20-30",
     ]
+    assert "C1: src/repo_finder/models.py:5-8" in fastcontext._observed_citation_choices_text(support)
 
 
 def test_local_seed_context_includes_likely_source_files(tmp_path: Path, monkeypatch) -> None:
@@ -405,7 +493,7 @@ async def test_fastcontext_tool_loop_uses_openai_tool_calls(tmp_path: Path) -> N
                                 "content": None,
                                 "tool_calls": [
                                     {
-                                        "id": "call-read",
+                                        "id": "call-read-1",
                                         "type": "function",
                                         "function": {
                                             "name": "Read",
@@ -413,7 +501,21 @@ async def test_fastcontext_tool_loop_uses_openai_tool_calls(tmp_path: Path) -> N
                                                 {
                                                     "path": "src/components/data-table.tsx",
                                                     "offset": 1,
-                                                    "limit": 4,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-read-2",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 3,
+                                                    "limit": 1,
                                                 }
                                             ),
                                         },
@@ -427,12 +529,12 @@ async def test_fastcontext_tool_loop_uses_openai_tool_calls(tmp_path: Path) -> N
 
         assert "tools" not in payload
         tool_messages = [message for message in payload["messages"] if message["role"] == "tool"]
-        assert tool_messages[-1]["tool_call_id"] == "call-read"
-        assert "src/components/data-table.tsx:1-4" in tool_messages[-1]["content"]
+        assert tool_messages[-1]["tool_call_id"] == "call-read-2"
+        assert "src/components/data-table.tsx:3-3" in tool_messages[-1]["content"]
         assert payload["messages"][-1]["role"] == "user"
         assert "final_answer JSON" in payload["messages"][-1]["content"]
         assert "Observed citation choices" in payload["messages"][-1]["content"]
-        assert "src/components/data-table.tsx:1-4" in payload["messages"][-1]["content"]
+        assert "C1: src/components/data-table.tsx:1-1" in payload["messages"][-1]["content"]
         return httpx.Response(
             200,
             json={
@@ -442,13 +544,7 @@ async def test_fastcontext_tool_loop_uses_openai_tool_calls(tmp_path: Path) -> N
                             "content": json.dumps(
                                 {
                                     "final_answer": {
-                                        "evidence": [
-                                            {
-                                                "path": "src/components/data-table.tsx",
-                                                "start_line": 1,
-                                                "end_line": 4,
-                                            }
-                                        ],
+                                        "citation_ids": ["C1"],
                                         "notes": ["Observed with Read."],
                                     }
                                 }
@@ -469,12 +565,13 @@ async def test_fastcontext_tool_loop_uses_openai_tool_calls(tmp_path: Path) -> N
     )
 
     assert result.status == "completed"
-    assert result.evidence_paths == ["src/components/data-table.tsx:1-4"]
+    assert result.evidence_paths == ["src/components/data-table.tsx:1-1"]
     assert result.notes == ["Observed with Read."]
     assert result.trajectory[0]["tools_enabled"] is True
     assert result.trajectory[1]["tools_enabled"] is False
+    assert result.trajectory[1]["selected_citation_ids"] == ["C1"]
     assert result.trajectory[0]["tool_calls"][0]["tool"] == "Read"
-    assert result.trajectory[0]["tool_observations"][0]["tool_call_id"] == "call-read"
+    assert result.trajectory[0]["tool_observations"][0]["tool_call_id"] == "call-read-1"
 
 
 @pytest.mark.asyncio
@@ -592,8 +689,27 @@ async def test_fastcontext_tool_loop_downgrades_max_turn_observation_fallback(
     assert result.trajectory[-1]["finish_reason"] == "max_turn_observation_fallback"
 
 
+def test_fastcontext_observation_fallback_is_capped() -> None:
+    result = fastcontext._fallback_observation_result(
+        fastcontext.ObservationSupport(
+            files=set(),
+            ranges={
+                "src/a.ts": [(1, 1)],
+                "src/b.ts": [(1, 1)],
+                "src/c.ts": [(1, 1)],
+                "src/d.ts": [(1, 1)],
+            },
+        ),
+        [],
+        note="fallback",
+    )
+
+    assert result.evidence_paths == ["src/a.ts:1-1", "src/b.ts:1-1", "src/c.ts:1-1"]
+    assert result.trajectory[0]["citation_budget"]["truncated"] is True
+
+
 @pytest.mark.asyncio
-async def test_fastcontext_tool_loop_reopens_tools_after_unusable_final_answer(
+async def test_fastcontext_tool_loop_keeps_tools_enabled_after_insufficient_evidence(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "snapshot"
@@ -637,7 +753,8 @@ async def test_fastcontext_tool_loop_reopens_tools_after_unusable_final_answer(
                 },
             )
         if chat_calls == 2:
-            assert "tools" not in payload
+            assert "tools" in payload
+            assert "not enough strong citation support" in payload["messages"][-1]["content"]
             return httpx.Response(
                 200,
                 json={
@@ -649,12 +766,12 @@ async def test_fastcontext_tool_loop_reopens_tools_after_unusable_final_answer(
                                         "final_answer": {
                                             "evidence": [
                                                 {
-                                                    "path": "src/missing.ts",
+                                                    "path": "src/components/data-table.tsx",
                                                     "start_line": 1,
-                                                    "end_line": 2,
+                                                    "end_line": 4,
                                                 }
                                             ],
-                                            "notes": [],
+                                            "notes": ["Completed after continued tool-enabled turn."],
                                         }
                                     }
                                 )
@@ -663,59 +780,7 @@ async def test_fastcontext_tool_loop_reopens_tools_after_unusable_final_answer(
                     ]
                 },
             )
-        if chat_calls == 3:
-            assert "tools" not in payload
-            return httpx.Response(
-                200,
-                json={
-                    "choices": [
-                        {
-                            "message": {
-                                "content": json.dumps(
-                                    {
-                                        "final_answer": {
-                                            "evidence": [
-                                                {
-                                                    "path": "src/missing-again.ts",
-                                                    "start_line": 1,
-                                                    "end_line": 2,
-                                                }
-                                            ],
-                                            "notes": [],
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                    ]
-                },
-            )
-        assert "tools" in payload
-        return httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "content": json.dumps(
-                                {
-                                    "final_answer": {
-                                        "evidence": [
-                                            {
-                                                "path": "src/components/data-table.tsx",
-                                                "start_line": 1,
-                                                "end_line": 4,
-                                            }
-                                        ],
-                                        "notes": ["Recovered after reopening tools."],
-                                    }
-                                }
-                            )
-                        }
-                    }
-                ]
-            },
-        )
+        raise AssertionError("Unexpected extra chat turn")
 
     result = await fastcontext._run_tool_loop(
         root=root,
@@ -727,11 +792,126 @@ async def test_fastcontext_tool_loop_reopens_tools_after_unusable_final_answer(
     )
 
     assert result.status == "completed"
-    assert result.notes == ["Recovered after reopening tools."]
+    assert result.notes == ["Completed after continued tool-enabled turn."]
     assert result.trajectory[0]["tools_enabled"] is True
-    assert result.trajectory[1]["tools_enabled"] is False
-    assert result.trajectory[2]["tools_enabled"] is False
-    assert result.trajectory[3]["tools_enabled"] is True
+    assert result.trajectory[0]["finalization_reason"] is None
+    assert result.trajectory[1]["tools_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_fastcontext_tool_loop_keeps_tools_enabled_for_noisy_ranges(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write_snapshot(root)
+    (root / "README.md").write_text("FastContext setup notes\n", encoding="utf-8")
+    (root / "tests").mkdir()
+    (root / "tests" / "test_fastcontext.py").write_text(
+        "def test_fastcontext_setup():\n    assert True\n",
+        encoding="utf-8",
+    )
+    (root / "src" / "repo_finder").mkdir(parents=True)
+    (root / "src" / "repo_finder" / "fastcontext.py").write_text(
+        "\n".join(f"line {line}" for line in range(1, 130)),
+        encoding="utf-8",
+    )
+    chat_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal chat_calls
+        payload = json.loads(request.content)
+        chat_calls += 1
+        if chat_calls == 1:
+            assert "tools" in payload
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-read-source",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/repo_finder/fastcontext.py",
+                                                    "offset": 1,
+                                                    "limit": 120,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-read-docs",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {"path": "README.md", "offset": 1, "limit": 1}
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-read-tests",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "tests/test_fastcontext.py",
+                                                    "offset": 1,
+                                                    "limit": 2,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                ],
+                            },
+                        }
+                    ]
+                },
+            )
+        assert "tools" in payload
+        assert "primary source, broad" in payload["messages"][-1]["content"]
+        assert "supporting/noisy" in payload["messages"][-1]["content"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "final_answer": {
+                                        "citation_ids": ["C1"],
+                                        "notes": ["Completed after continued exploration."],
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await fastcontext._run_tool_loop(
+        root=root,
+        messages=[{"role": "user", "content": "Find FastContext implementation"}],
+        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        config=lmstudio.get_config(),
+        max_turns=6,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert result.status == "completed"
+    assert result.trajectory[0]["finalization_reason"] is None
+    assert result.trajectory[1]["tools_enabled"] is True
 
 
 @pytest.mark.asyncio
@@ -759,7 +939,7 @@ async def test_fastcontext_tool_loop_retries_glob_style_final_answer_without_too
                                 "content": None,
                                 "tool_calls": [
                                     {
-                                        "id": "call-read",
+                                        "id": "call-read-1",
                                         "type": "function",
                                         "function": {
                                             "name": "Read",
@@ -767,7 +947,21 @@ async def test_fastcontext_tool_loop_retries_glob_style_final_answer_without_too
                                                 {
                                                     "path": "src/components/data-table.tsx",
                                                     "offset": 1,
-                                                    "limit": 4,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-read-2",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 3,
+                                                    "limit": 1,
                                                 }
                                             ),
                                         },
@@ -807,7 +1001,7 @@ async def test_fastcontext_tool_loop_retries_glob_style_final_answer_without_too
             )
         assert "tools" not in payload
         assert "wildcard or glob citation" in payload["messages"][-1]["content"]
-        assert "src/components/data-table.tsx:1-4" in payload["messages"][-1]["content"]
+        assert "C1: src/components/data-table.tsx:1-1" in payload["messages"][-1]["content"]
         return httpx.Response(
             200,
             json={
@@ -817,13 +1011,7 @@ async def test_fastcontext_tool_loop_retries_glob_style_final_answer_without_too
                             "content": json.dumps(
                                 {
                                     "final_answer": {
-                                        "evidence": [
-                                            {
-                                                "path": "src/components/data-table.tsx",
-                                                "start_line": 1,
-                                                "end_line": 4,
-                                            }
-                                        ],
+                                        "citation_ids": ["C1"],
                                         "notes": ["Used exact observed citation."],
                                     }
                                 }
@@ -844,11 +1032,418 @@ async def test_fastcontext_tool_loop_retries_glob_style_final_answer_without_too
     )
 
     assert result.status == "completed"
-    assert result.evidence_paths == ["src/components/data-table.tsx:1-4"]
+    assert result.evidence_paths == ["src/components/data-table.tsx:1-1"]
+    assert result.trajectory[0]["finalization_reason"] == "enough_primary_source_ranges"
     assert result.trajectory[1]["validation_notes"] == [
         "Skipped wildcard or glob citation: src/**/*.tsx:1-4"
     ]
     assert result.trajectory[2]["tools_enabled"] is False
+    assert result.trajectory[2]["selected_citation_ids"] == ["C1"]
+
+
+@pytest.mark.asyncio
+async def test_fastcontext_tool_loop_retries_over_budget_citation_ids(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write_budget_snapshot(root)
+    chat_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal chat_calls
+        payload = json.loads(request.content)
+        chat_calls += 1
+        if chat_calls == 1:
+            assert "tools" in payload
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-read-1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 1,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-read-2",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 3,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-read-3",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 5,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-read-4",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/form.tsx",
+                                                    "offset": 1,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                ],
+                            },
+                        }
+                    ]
+                },
+            )
+        if chat_calls == 2:
+            assert "tools" not in payload
+            assert "1-3 citation IDs" in payload["messages"][-1]["content"]
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "final_answer": {
+                                            "citation_ids": ["C1", "C2", "C3", "C4"],
+                                            "notes": ["Too many."],
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+        assert "tools" not in payload
+        assert "selected too many citations" in payload["messages"][-1]["content"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "final_answer": {
+                                        "citation_ids": ["C1", "C2"],
+                                        "notes": ["Narrowed."],
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await fastcontext._run_tool_loop(
+        root=root,
+        messages=[{"role": "user", "content": "Find the data table"}],
+        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        config=lmstudio.get_config(),
+        max_turns=4,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert result.status == "completed"
+    assert result.evidence_paths == [
+        "src/components/data-table.tsx:1-1",
+        "src/components/data-table.tsx:3-3",
+    ]
+    assert result.trajectory[1]["citation_budget"]["over_budget"] is True
+    assert result.trajectory[2]["citation_budget"]["over_budget"] is False
+    assert chat_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_fastcontext_tool_loop_truncates_over_budget_retry_source_first(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write_budget_snapshot(root)
+    chat_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal chat_calls
+        payload = json.loads(request.content)
+        chat_calls += 1
+        if chat_calls == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-readme",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {"path": "README.md", "offset": 1, "limit": 1}
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-src-1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 1,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-src-2",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 3,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-src-3",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/form.tsx",
+                                                    "offset": 1,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                ],
+                            },
+                        }
+                    ]
+                },
+            )
+        assert "tools" not in payload
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "final_answer": {
+                                        "citation_ids": ["C1", "C2", "C3", "C4"],
+                                        "notes": ["Still too many."],
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await fastcontext._run_tool_loop(
+        root=root,
+        messages=[{"role": "user", "content": "Find the data table"}],
+        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        config=lmstudio.get_config(),
+        max_turns=3,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert result.status == "completed"
+    assert result.evidence_paths == [
+        "src/components/data-table.tsx:1-1",
+        "src/components/data-table.tsx:3-3",
+        "src/components/form.tsx:1-1",
+    ]
+    assert result.trajectory[-1]["citation_budget"] == {
+        "original_count": 4,
+        "accepted_count": 3,
+        "original_file_count": 3,
+        "accepted_file_count": 2,
+        "over_budget": True,
+        "truncated": True,
+    }
+    assert any("Citation budget applied" in note for note in result.notes)
+
+
+@pytest.mark.asyncio
+async def test_fastcontext_tool_loop_uses_local_fallback_after_failed_final_retry(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write_snapshot(root)
+    chat_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal chat_calls
+        payload = json.loads(request.content)
+        chat_calls += 1
+        if chat_calls == 1:
+            assert "tools" in payload
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-read-1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 1,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-read-2",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 3,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                ],
+                            },
+                        }
+                    ]
+                },
+            )
+        if chat_calls == 2:
+            assert "tools" not in payload
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "final_answer": {
+                                            "citation_ids": ["C99"],
+                                            "notes": [],
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+        if chat_calls == 3:
+            assert "tools" not in payload
+            assert "unknown citation_id" in payload["messages"][-1]["content"]
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "final_answer": {
+                                            "evidence": [
+                                                {
+                                                    "path": "src/missing.ts",
+                                                    "start_line": 1,
+                                                    "end_line": 2,
+                                                }
+                                            ],
+                                            "notes": [],
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+        raise AssertionError("Tools should not reopen after local fallback evidence exists.")
+
+    result = await fastcontext._run_tool_loop(
+        root=root,
+        messages=[{"role": "user", "content": "Find the data table"}],
+        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        config=lmstudio.get_config(),
+        max_turns=4,
+        transport=httpx.MockTransport(handler),
+        allow_observation_fallback=True,
+    )
+
+    assert result.status == "fallback_observations"
+    assert result.evidence_paths == [
+        "src/components/data-table.tsx:1-1",
+        "src/components/data-table.tsx:3-3",
+    ]
+    assert result.trajectory[-1]["finish_reason"] == "final_answer_retry_observation_fallback"
+    assert chat_calls == 3
 
 
 @pytest.mark.asyncio
@@ -1170,24 +1765,14 @@ async def test_explore_local_project_returns_ephemeral_citations(tmp_path: Path)
     assert result.project_path == str(root.resolve())
     assert result.evidence_paths == ["src/components/data-table.tsx:1-4"]
     assert result.notes == ["Inspect this component before editing."]
-    assert result.tool_trace == [
-        {
-            "turn": 1,
-            "tool_calls": ["Grep"],
-            "tool_call_count": 1,
-            "observation_count": 1,
-            "final_citations": [],
-            "validation_notes": [],
-        },
-        {
-            "turn": 2,
-            "tool_calls": [],
-            "tool_call_count": 0,
-            "observation_count": 0,
-            "final_citations": ["src/components/data-table.tsx:1-4"],
-            "validation_notes": [],
-        }
-    ]
+    assert result.tool_trace[0]["tools_enabled"] is True
+    assert result.tool_trace[0]["tool_calls"] == ["Grep"]
+    assert result.tool_trace[0]["tool_call_count"] == 1
+    assert result.tool_trace[0]["observation_count"] == 1
+    assert result.tool_trace[0]["finalization_reason"] == "enough_primary_source_ranges"
+    assert result.tool_trace[1]["tools_enabled"] is False
+    assert result.tool_trace[1]["tool_calls"] == []
+    assert result.tool_trace[1]["final_citations"] == ["src/components/data-table.tsx:1-4"]
 
     conn = catalog.get_connection()
     assert conn.execute("SELECT COUNT(*) FROM evidence_refinements").fetchone()[0] == 0
