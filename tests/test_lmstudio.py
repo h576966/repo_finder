@@ -54,6 +54,72 @@ async def test_list_models_parses_openai_compatible_response() -> None:
     assert models == ["model-a", "model-b"]
 
 
+def test_model_inventory_distinguishes_downloaded_and_loaded(monkeypatch) -> None:
+    def fake_run(command: list[str], **kwargs: Any) -> object:
+        assert kwargs["check"] is True
+        assert kwargs["capture_output"] is True
+        if command[1:] == ["ls", "--json"]:
+            stdout = json.dumps(
+                [
+                    {"modelKey": "google/gemma-4-12b-qat"},
+                    {"modelKey": "fastcontext-1.0-4b-rl"},
+                ]
+            )
+        elif command[1:] == ["ps", "--json"]:
+            stdout = json.dumps(
+                [
+                    {
+                        "modelKey": "fastcontext-1.0-4b-rl",
+                        "identifier": "fastcontext-1.0-4b-rl",
+                        "contextLength": 65536,
+                        "status": "idle",
+                        "parallel": 1,
+                    }
+                ]
+            )
+        else:
+            raise AssertionError(command)
+        return type("Completed", (), {"stdout": stdout, "stderr": ""})()
+
+    monkeypatch.setattr(lmstudio.subprocess, "run", fake_run)
+    inventory = lmstudio.model_inventory()
+
+    configured = inventory["configured_models"]
+    assert configured["gemma"]["downloaded"] is True
+    assert configured["gemma"]["loaded"] is False
+    assert configured["fastcontext"]["downloaded"] is True
+    assert configured["fastcontext"]["loaded"] is True
+    assert configured["fastcontext"]["loaded_detail"]["contextLength"] == 65536
+
+
+def test_load_fastcontext_model_uses_expected_lms_flags(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> object:
+        calls.append(command)
+        assert kwargs["check"] is True
+        return type("Completed", (), {"stdout": "loaded", "stderr": ""})()
+
+    monkeypatch.setattr(lmstudio.subprocess, "run", fake_run)
+
+    result = lmstudio.load_fastcontext_model()
+
+    command = calls[0]
+    assert command[1:] == [
+        "load",
+        lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        "--context-length",
+        "65536",
+        "--gpu",
+        "max",
+        "--identifier",
+        lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+    ]
+    assert result["model_id"] == lmstudio.DEFAULT_FASTCONTEXT_MODEL
+    assert result["context_length"] == 65536
+    assert result["gpu"] == "max"
+
+
 @pytest.mark.asyncio
 async def test_chat_json_posts_chat_completion_and_parses_json() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -76,6 +142,108 @@ async def test_chat_json_posts_chat_completion_and_parses_json() -> None:
         transport=transport,
     )
     assert result == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_posts_tools_and_parses_tool_calls() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/chat/completions"
+        payload = json.loads(request.content)
+        assert payload["tools"][0]["function"]["name"] == "Read"
+        assert payload["tool_choice"] == "auto"
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "Read",
+                                        "arguments": '{"path":"src/app.py","offset":3,"limit":20}',
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ]
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    result = await lmstudio.chat_completion(
+        "fastcontext",
+        [{"role": "user", "content": "find code"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "Read", "parameters": {"type": "object"}},
+            }
+        ],
+        tool_choice="auto",
+        transport=transport,
+    )
+
+    assert result.content == ""
+    assert result.finish_reason == "tool_calls"
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].id == "call-1"
+    assert result.tool_calls[0].name == "Read"
+    assert result.tool_calls[0].arguments == {"path": "src/app.py", "offset": 3, "limit": 20}
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_keeps_malformed_tool_arguments_nonfatal() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {"name": "Grep", "arguments": "{bad"},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await lmstudio.chat_completion(
+        "fastcontext",
+        [{"role": "user", "content": "find code"}],
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert result.tool_calls[0].arguments == {}
+    assert "Invalid tool arguments JSON" in str(result.tool_calls[0].arguments_error)
+
+
+@pytest.mark.asyncio
+async def test_chat_text_still_requires_text_content() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "", "tool_calls": []}}]},
+        )
+
+    with pytest.raises(lmstudio.LMStudioError, match="empty chat completion"):
+        await lmstudio.chat_text(
+            "fastcontext",
+            [{"role": "user", "content": "find code"}],
+            transport=httpx.MockTransport(handler),
+        )
 
 
 def test_parse_json_content_handles_embedded_json() -> None:
@@ -168,6 +336,54 @@ def test_lmstudio_status_cli_prints_json(monkeypatch, capsys) -> None:
     main_module.main()
     captured = capsys.readouterr()
     assert '"reachable": true' in captured.out
+
+
+@pytest.mark.asyncio
+async def test_lmstudio_status_reports_api_downloaded_and_loaded(monkeypatch) -> None:
+    import repo_finder.__main__ as main_module
+
+    async def fake_validate_models(config: lmstudio.LMStudioConfig) -> dict[str, object]:
+        return {
+            "base_url": config.base_url,
+            "models": [config.gemma_model],
+            "gemma_model": config.gemma_model,
+            "fastcontext_model": config.fastcontext_model,
+            "gemma_available": True,
+            "fastcontext_available": False,
+        }
+
+    def fake_model_inventory(config: lmstudio.LMStudioConfig) -> dict[str, object]:
+        return {
+            "downloaded_models": [config.gemma_model, config.fastcontext_model],
+            "loaded_models": [config.fastcontext_model],
+            "configured_models": {
+                "gemma": {
+                    "model_id": config.gemma_model,
+                    "downloaded": True,
+                    "loaded": False,
+                    "loaded_detail": None,
+                },
+                "fastcontext": {
+                    "model_id": config.fastcontext_model,
+                    "downloaded": True,
+                    "loaded": True,
+                    "loaded_detail": {"contextLength": 65536},
+                },
+            },
+        }
+
+    monkeypatch.setattr(lmstudio, "validate_models", fake_validate_models)
+    monkeypatch.setattr(lmstudio, "model_inventory", fake_model_inventory)
+
+    result = await main_module._lmstudio_status(start_server=False, smoke_test=False)
+
+    configured = result["configured_models"]
+    assert configured["gemma"]["downloaded"] is True
+    assert configured["gemma"]["loaded"] is False
+    assert configured["gemma"]["api_listed"] is True
+    assert configured["fastcontext"]["downloaded"] is True
+    assert configured["fastcontext"]["loaded"] is True
+    assert configured["fastcontext"]["api_listed"] is False
 
 
 def test_profile_cli_invokes_profiler(monkeypatch, capsys) -> None:

@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import sys
+from dataclasses import asdict
 
 
 def _require_github_token() -> None:
@@ -62,6 +63,16 @@ def main() -> None:
     eval_parser.add_argument("--label", default=None)
     eval_parser.add_argument("--output", default=None)
 
+    local_eval_parser = subparsers.add_parser(
+        "eval-local-explore",
+        help="Run a FastContext local exploration golden eval suite",
+    )
+    local_eval_parser.add_argument("--suite", default="repo-finder")
+    local_eval_parser.add_argument("--max-turns", type=int, default=6)
+    local_eval_parser.add_argument("--label", default=None)
+    local_eval_parser.add_argument("--output", default=None)
+    local_eval_parser.add_argument("--limit-tasks", type=int, default=None)
+
     profile_parser = subparsers.add_parser(
         "profile",
         help="Profile repository cards with Gemma via LM Studio",
@@ -79,6 +90,9 @@ def main() -> None:
     )
     fastcontext_parser.add_argument("--start-server", action="store_true")
     fastcontext_parser.add_argument("--smoke-test", action="store_true")
+    fastcontext_parser.add_argument("--load-model", action="store_true")
+    fastcontext_parser.add_argument("--context-length", type=int, default=65_536)
+    fastcontext_parser.add_argument("--gpu", default="max")
 
     refine_parser = subparsers.add_parser(
         "refine-evidence",
@@ -92,6 +106,16 @@ def main() -> None:
     refine_parser.add_argument("--output", default=None)
     refine_parser.add_argument("--limit-tasks", type=int, default=None)
     refine_parser.add_argument("--max-turns", type=int, default=6)
+
+    explore_local_parser = subparsers.add_parser(
+        "explore-local",
+        help="Use FastContext to find relevant files and lines in a local project",
+    )
+    explore_local_parser.add_argument("--task", required=True)
+    explore_local_parser.add_argument("--project-path", default=".")
+    explore_local_parser.add_argument("--max-turns", type=int, default=6)
+    explore_local_parser.add_argument("--format", choices=["json", "text"], default="json")
+    explore_local_parser.add_argument("--trace-path", default=None)
 
     serve_parser = subparsers.add_parser("serve-mcp", help="Run the MCP server")
     serve_parser.add_argument("--transport", choices=["stdio", "http"], default=None)
@@ -151,6 +175,31 @@ def main() -> None:
         print(json.dumps(summary, indent=2, sort_keys=True))
         return
 
+    if args.command == "eval-local-explore":
+        from pathlib import Path
+
+        from .local_explore_eval import run_local_explore_eval
+
+        output_path = Path(args.output) if args.output else None
+        result = asyncio.run(
+            run_local_explore_eval(
+                suite=args.suite,
+                max_turns=args.max_turns,
+                label=args.label,
+                output_path=output_path,
+                limit_tasks=args.limit_tasks,
+            )
+        )
+        summary = {
+            "suite_id": result["suite_id"],
+            "label": result["label"],
+            "passed": result["passed"],
+            "metrics": result["metrics"],
+            "report_path": result["report_path"],
+        }
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        return
+
     if args.command == "profile":
         from .profiler import profile_repository_cards
 
@@ -164,7 +213,15 @@ def main() -> None:
         return
 
     if args.command == "fastcontext-status":
-        status_result = asyncio.run(_fastcontext_status(args.start_server, args.smoke_test))
+        status_result = asyncio.run(
+            _fastcontext_status(
+                args.start_server,
+                args.smoke_test,
+                load_model=args.load_model,
+                context_length=args.context_length,
+                gpu=args.gpu,
+            )
+        )
         print(json.dumps(status_result, indent=2, sort_keys=True))
         return
 
@@ -208,6 +265,23 @@ def main() -> None:
         print(json.dumps(result, indent=2, sort_keys=True))
         return
 
+    if args.command == "explore-local":
+        from . import fastcontext
+
+        local_result = asyncio.run(
+            fastcontext.explore_local_project(
+                task=args.task,
+                project_path=args.project_path,
+                max_turns=args.max_turns,
+                trace_path=args.trace_path,
+            )
+        )
+        if args.format == "text":
+            print(_format_local_explore_text(local_result))
+        else:
+            print(json.dumps(asdict(local_result), indent=2, sort_keys=True))
+        return
+
     if args.command == "gc":
         from .pipeline import gc
 
@@ -226,20 +300,24 @@ async def _lmstudio_status(start_server: bool, smoke_test: bool) -> dict[str, ob
     except lmstudio.LMStudioError as exc:
         if not start_server:
             return {
-                "base_url": config.base_url,
                 "reachable": False,
                 "error": str(exc),
                 "hint": "Run repo-finder lmstudio-status --start-server",
+                **_status_with_inventory(_offline_status(config), config),
             }
         lmstudio.start_server()
         started = True
         await asyncio.sleep(1)
         status = await lmstudio.validate_models(config)
 
-    result: dict[str, object] = {"reachable": True, "started_server": started, **status}
+    result: dict[str, object] = {
+        "reachable": True,
+        "started_server": started,
+        **_status_with_inventory(status, config),
+    }
     if smoke_test:
         try:
-            result["smoke_test"] = await lmstudio.chat_json(
+            smoke_result = await lmstudio.chat_json(
                 model_id=config.gemma_model,
                 messages=[
                     {"role": "system", "content": "Return only valid JSON."},
@@ -248,12 +326,37 @@ async def _lmstudio_status(start_server: bool, smoke_test: bool) -> dict[str, ob
                 config=config,
                 max_tokens=100,
             )
+            result["gemma_smoke_test"] = {"completed": True, "response": smoke_result}
         except lmstudio.LMStudioError as exc:
-            result["smoke_test"] = {"ok": False, "error": str(exc)}
+            result["gemma_smoke_test"] = {"completed": False, "error": str(exc)}
     return result
 
 
-async def _fastcontext_status(start_server: bool, smoke_test: bool) -> dict[str, object]:
+def _format_local_explore_text(result: object) -> str:
+    evidence_paths = getattr(result, "evidence_paths")
+    notes = getattr(result, "notes")
+    lines = [
+        f"Task: {getattr(result, 'task')}",
+        f"Project: {getattr(result, 'project_path')}",
+        f"Status: {getattr(result, 'status')}",
+        "",
+        "Citations:",
+    ]
+    lines.extend(f"- {path}" for path in evidence_paths)
+    if notes:
+        lines.append("")
+        lines.append("Notes:")
+        lines.extend(f"- {note}" for note in notes)
+    return "\n".join(lines)
+
+
+async def _fastcontext_status(
+    start_server: bool,
+    smoke_test: bool,
+    load_model: bool = False,
+    context_length: int = 65_536,
+    gpu: str = "max",
+) -> dict[str, object]:
     from . import fastcontext, lmstudio
 
     config = lmstudio.get_config()
@@ -263,23 +366,122 @@ async def _fastcontext_status(start_server: bool, smoke_test: bool) -> dict[str,
     except lmstudio.LMStudioError as exc:
         if not start_server:
             return {
-                "base_url": config.base_url,
                 "reachable": False,
                 "error": str(exc),
                 "hint": "Run repo-finder fastcontext-status --start-server",
+                **_status_with_inventory(_offline_status(config), config),
             }
         lmstudio.start_server()
         started = True
         await asyncio.sleep(1)
         status = await lmstudio.validate_models(config)
 
-    result: dict[str, object] = {"reachable": True, "started_server": started, **status}
+    load_result: dict[str, object] | None = None
+    inventory_status = _status_with_inventory(status, config)
+    fastcontext_state = _configured_model_state(inventory_status, "fastcontext")
+    if load_model and not bool(fastcontext_state.get("loaded")):
+        try:
+            load_result = lmstudio.load_fastcontext_model(
+                config,
+                context_length=context_length,
+                gpu=gpu,
+            )
+            await asyncio.sleep(1)
+            status = await lmstudio.validate_models(config)
+            inventory_status = _status_with_inventory(status, config)
+        except lmstudio.LMStudioError as exc:
+            load_result = {
+                "model_id": config.fastcontext_model,
+                "context_length": context_length,
+                "gpu": gpu,
+                "loaded": False,
+                "error": str(exc),
+            }
+
+    result: dict[str, object] = {
+        "reachable": True,
+        "started_server": started,
+        "load_model_requested": load_model,
+        **inventory_status,
+    }
+    if load_result is not None:
+        result["load_model"] = load_result
     if smoke_test:
         try:
-            result["smoke_test"] = await fastcontext.smoke_test(config)
+            smoke_result = await fastcontext.smoke_test(config)
+            result["fastcontext_smoke_test"] = {"completed": True, "response": smoke_result}
         except (fastcontext.FastContextError, lmstudio.LMStudioError) as exc:
-            result["smoke_test"] = {"ok": False, "error": str(exc)}
+            result["fastcontext_smoke_test"] = {"completed": False, "error": str(exc)}
     return result
+
+
+def _status_with_inventory(
+    status: dict[str, object],
+    config: object,
+) -> dict[str, object]:
+    from . import lmstudio
+
+    result: dict[str, object] = dict(status)
+    api_models = status.get("models")
+    api_model_ids = set(api_models) if isinstance(api_models, list) else set()
+    try:
+        inventory = lmstudio.model_inventory(config if isinstance(config, lmstudio.LMStudioConfig) else None)
+    except lmstudio.LMStudioError as exc:
+        result["inventory_error"] = str(exc)
+        inventory = {
+            "downloaded_models": [],
+            "loaded_models": [],
+            "configured_models": {
+                "gemma": {
+                    "model_id": getattr(config, "gemma_model", lmstudio.DEFAULT_GEMMA_MODEL),
+                    "downloaded": False,
+                    "loaded": False,
+                    "loaded_detail": None,
+                },
+                "fastcontext": {
+                    "model_id": getattr(
+                        config,
+                        "fastcontext_model",
+                        lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+                    ),
+                    "downloaded": False,
+                    "loaded": False,
+                    "loaded_detail": None,
+                },
+            },
+        }
+    configured = inventory["configured_models"]
+    if isinstance(configured, dict):
+        for key, value in configured.items():
+            if isinstance(value, dict):
+                value["api_listed"] = value.get("model_id") in api_model_ids
+    result.update(inventory)
+    return result
+
+
+def _offline_status(config: object) -> dict[str, object]:
+    from . import lmstudio
+
+    return {
+        "base_url": getattr(config, "base_url", lmstudio.DEFAULT_BASE_URL),
+        "models": [],
+        "gemma_model": getattr(config, "gemma_model", lmstudio.DEFAULT_GEMMA_MODEL),
+        "fastcontext_model": getattr(
+            config,
+            "fastcontext_model",
+            lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        ),
+        "gemma_available": False,
+        "fastcontext_available": False,
+    }
+
+
+def _configured_model_state(status: dict[str, object], key: str) -> dict[str, object]:
+    configured = status.get("configured_models")
+    if not isinstance(configured, dict):
+        return {}
+    state = configured.get(key)
+    return state if isinstance(state, dict) else {}
 
 
 if __name__ == "__main__":

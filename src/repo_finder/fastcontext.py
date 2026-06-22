@@ -1,5 +1,8 @@
 import json
+import os
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -9,6 +12,7 @@ import httpx
 
 from . import catalog, lmstudio
 from .constants import SKIP_DIRS
+from .models import LocalExploreResult
 
 PROMPT_VERSION = "fastcontext-refine-v1"
 SCHEMA_VERSION = "fastcontext-evidence-v1"
@@ -21,10 +25,41 @@ MAX_GREP_RESULTS = 80
 MAX_READ_LINES = 160
 MAX_READ_FILE_BYTES = 240_000
 MAX_GREP_FILE_BYTES = 1_000_000
+MAX_CITATION_LINES = 240
+RG_TIMEOUT_SECONDS = 10
+LOCAL_CONTEXT_FILE_LIMIT = 80
+LOCAL_CONTEXT_GREP_LIMIT = 30
+LOCAL_EXTRA_SKIP_DIRS = {".next", ".repo_finder", "build", "coverage", "dist"}
+FASTCONTEXT_STRUCTURED_OUTPUT_ENV = "REPO_FINDER_FASTCONTEXT_STRUCTURED_OUTPUT"
+LOCAL_TASK_STOPWORDS = {
+    "actual",
+    "are",
+    "before",
+    "code",
+    "find",
+    "from",
+    "into",
+    "local",
+    "registered",
+    "repo",
+    "task",
+    "that",
+    "the",
+    "this",
+    "where",
+    "with",
+    "working",
+}
 
 
 class FastContextError(RuntimeError):
     pass
+
+
+class FastContextLoopError(FastContextError):
+    def __init__(self, message: str, trajectory: list[dict[str, Any]]) -> None:
+        super().__init__(message)
+        self.trajectory = trajectory
 
 
 @dataclass(frozen=True)
@@ -48,6 +83,20 @@ class ParsedFastContextResponse:
     notes: list[str]
 
 
+@dataclass(frozen=True)
+class ObservationSupport:
+    files: set[str]
+    ranges: dict[str, list[tuple[int, int]]]
+
+
+@dataclass(frozen=True)
+class FastContextLoopResult:
+    status: str
+    evidence_paths: list[str]
+    notes: list[str]
+    trajectory: list[dict[str, Any]]
+
+
 async def ensure_fastcontext_available(
     config: lmstudio.LMStudioConfig | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
@@ -66,7 +115,7 @@ async def smoke_test(
 ) -> dict[str, Any]:
     active = config or lmstudio.get_config()
     await ensure_fastcontext_available(active, transport=transport)
-    content = await lmstudio.chat_text(
+    content = await _chat_fastcontext(
         model_id=active.fastcontext_model,
         messages=[
             {
@@ -107,84 +156,29 @@ async def refine_candidate(
 
     task_sig = catalog.task_signature(task)
     query = _build_query(asset, task)
-    trajectory: list[dict[str, Any]] = []
 
     try:
         if validate_model:
             await ensure_fastcontext_available(config, transport=transport)
-        messages = _messages(asset, query)
-        for turn in range(1, max(1, max_turns) + 1):
-            content = await lmstudio.chat_text(
-                model_id=config.fastcontext_model,
-                messages=messages,
-                config=config,
-                transport=transport,
-                max_tokens=3000,
-                temperature=0.0,
-            )
-            parsed = parse_fastcontext_response(content)
-            trajectory.append(
-                {
-                    "turn": turn,
-                    "model_response": content,
-                    "tool_calls": parsed.tool_calls,
-                    "final_citations": [citation.evidence_path() for citation in parsed.citations],
-                }
-            )
-
-            if parsed.citations:
-                evidence_paths, validation_notes = _validated_evidence_paths(
-                    snapshot_root,
-                    parsed.citations,
-                )
-                if evidence_paths:
-                    notes = [*parsed.notes, *validation_notes]
-                    return _store_refinement(
-                        asset=asset,
-                        candidate_id=candidate_id,
-                        task_signature=task_sig,
-                        model_id=config.fastcontext_model,
-                        query=query,
-                        evidence_paths=evidence_paths,
-                        notes=notes,
-                        trajectory=trajectory,
-                    )
-
-            if parsed.tool_calls:
-                observations = [
-                    execute_tool(snapshot_root, call)
-                    for call in parsed.tool_calls[:MAX_TOOL_CALLS_PER_TURN]
-                ]
-                trajectory[-1]["tool_observations"] = observations
-                messages.extend(
-                    [
-                        {"role": "assistant", "content": content},
-                        {
-                            "role": "user",
-                            "content": (
-                                "Tool observations JSON:\n"
-                                f"{json.dumps(observations, sort_keys=True)}\n\n"
-                                "Continue. Return either more tool_calls JSON or final_answer JSON."
-                            ),
-                        },
-                    ]
-                )
-                continue
-
-            messages.extend(
-                [
-                    {"role": "assistant", "content": content},
-                    {
-                        "role": "user",
-                        "content": (
-                            "That response did not contain usable tool calls or citations. "
-                            "Return JSON with tool_calls, or JSON final_answer with evidence paths."
-                        ),
-                    },
-                ]
-            )
-
-        raise FastContextError("FastContext did not return usable evidence before max_turns.")
+        loop_result = await _run_tool_loop(
+            root=snapshot_root,
+            messages=_messages(asset, query),
+            model_id=config.fastcontext_model,
+            config=config,
+            max_turns=max_turns,
+            transport=transport,
+            allow_observation_fallback=False,
+        )
+        return _store_refinement(
+            asset=asset,
+            candidate_id=candidate_id,
+            task_signature=task_sig,
+            model_id=config.fastcontext_model,
+            query=query,
+            evidence_paths=loop_result.evidence_paths,
+            notes=loop_result.notes,
+            trajectory=loop_result.trajectory,
+        )
     except Exception as exc:
         catalog.record_analysis_run(
             "fastcontext-refine",
@@ -197,6 +191,55 @@ async def refine_candidate(
             analyzer_version=ANALYZER_VERSION,
         )
         raise
+
+
+async def explore_local_project(
+    task: str,
+    project_path: str | Path = ".",
+    max_turns: int = DEFAULT_MAX_TURNS,
+    transport: httpx.AsyncBaseTransport | None = None,
+    validate_model: bool = True,
+    trace_path: str | Path | None = None,
+) -> LocalExploreResult:
+    if not task.strip():
+        raise FastContextError("task is required.")
+
+    root = Path(project_path).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        raise FastContextError(f"project_path must be an existing directory: {project_path}")
+
+    config = lmstudio.get_config()
+    if validate_model:
+        await ensure_fastcontext_available(config, transport=transport)
+
+    try:
+        loop_result = await _run_tool_loop(
+            root=root,
+            messages=_local_messages(root, task),
+            model_id=config.fastcontext_model,
+            config=config,
+            max_turns=max_turns,
+            transport=transport,
+            allow_observation_fallback=True,
+        )
+    except FastContextLoopError as exc:
+        if trace_path is not None:
+            write_trace(trace_path, root=root, task=task, trajectory=exc.trajectory)
+        raise
+    if trace_path is not None:
+        write_trace(trace_path, root=root, task=task, trajectory=loop_result.trajectory)
+    return LocalExploreResult(
+        task=task.strip(),
+        project_path=str(root),
+        model_id=config.fastcontext_model,
+        prompt_version=PROMPT_VERSION,
+        schema_version=SCHEMA_VERSION,
+        analyzer_version=ANALYZER_VERSION,
+        status=loop_result.status,
+        evidence_paths=loop_result.evidence_paths,
+        notes=loop_result.notes,
+        tool_trace=_tool_trace_summary(loop_result.trajectory),
+    )
 
 
 async def refine_suite(
@@ -278,6 +321,491 @@ def default_refinement_report_path(suite_id: str, label: str | None = None) -> P
     return catalog.ensure_home() / "fastcontext_runs" / suite_id / f"{timestamp}{suffix}.json"
 
 
+def write_trace(
+    trace_path: str | Path,
+    *,
+    root: Path,
+    task: str,
+    trajectory: list[dict[str, Any]],
+) -> Path:
+    path = Path(trace_path).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    resolved = path.resolve()
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "task": task.strip(),
+        "project_path": str(root),
+        "model_id": lmstudio.get_config().fastcontext_model,
+        "prompt_version": PROMPT_VERSION,
+        "schema_version": SCHEMA_VERSION,
+        "analyzer_version": ANALYZER_VERSION,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "trajectory": trajectory,
+    }
+    resolved.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return resolved
+
+
+async def _run_tool_loop(
+    *,
+    root: Path,
+    messages: list[dict[str, Any]],
+    model_id: str,
+    config: lmstudio.LMStudioConfig,
+    max_turns: int,
+    transport: httpx.AsyncBaseTransport | None,
+    allow_observation_fallback: bool = False,
+) -> FastContextLoopResult:
+    active_messages = list(messages)
+    trajectory: list[dict[str, Any]] = []
+    observation_support = ObservationSupport(files=set(), ranges={})
+    final_answer_only_next = False
+    for turn in range(1, max(1, max_turns) + 1):
+        allow_tools = not final_answer_only_next
+        completion = await _chat_fastcontext_completion(
+            model_id=model_id,
+            messages=active_messages,
+            config=config,
+            transport=transport,
+            max_tokens=3000,
+            temperature=0.0,
+            allow_tools=allow_tools,
+        )
+        content = completion.content
+        parsed = parse_fastcontext_response(content)
+        tool_calls = _tool_calls_from_completion(completion) or parsed.tool_calls
+        tool_mode_response = bool(completion.tool_calls)
+        turn_record: dict[str, Any] = {
+            "turn": turn,
+            "model_response": content,
+            "finish_reason": completion.finish_reason,
+            "tools_enabled": allow_tools,
+            "tool_calls": tool_calls,
+            "final_citations": [citation.evidence_path() for citation in parsed.citations],
+        }
+        trajectory.append(turn_record)
+
+        if parsed.citations:
+            evidence_paths, validation_notes = _validated_evidence_paths(
+                root,
+                parsed.citations,
+                observation_support=observation_support,
+            )
+            if validation_notes:
+                turn_record["validation_notes"] = validation_notes
+            if evidence_paths:
+                return FastContextLoopResult(
+                    status="completed",
+                    evidence_paths=evidence_paths,
+                    notes=[*parsed.notes, *validation_notes],
+                    trajectory=trajectory,
+                )
+
+        if tool_calls and allow_tools:
+            observations = [
+                execute_tool(root, call)
+                for call in tool_calls[:MAX_TOOL_CALLS_PER_TURN]
+            ]
+            observation_support = _merge_observation_support(
+                observation_support,
+                _observation_support(observations),
+            )
+            turn_record["tool_observations"] = observations
+            if tool_mode_response:
+                active_messages.extend(
+                    _tool_observation_messages(completion, observations)
+                )
+            else:
+                active_messages.extend(
+                    _legacy_observation_messages(content, observations)
+                )
+            active_messages.append(_final_answer_request_message())
+            final_answer_only_next = True
+            continue
+
+        if parsed.citations:
+            active_messages.extend(_validation_feedback_messages(content, turn_record))
+            final_answer_only_next = False
+            continue
+
+        if tool_calls and not allow_tools:
+            turn_record.setdefault("validation_notes", []).append(
+                "Model returned tool calls during final-answer-only turn; reopening tools."
+            )
+
+        active_messages.extend(
+            [
+                {"role": "assistant", "content": content},
+                {
+                    "role": "user",
+                    "content": (
+                        "That final response did not contain usable supported citations. "
+                        "Use Read, Glob, or Grep again only if more evidence is needed, then return "
+                        "final_answer JSON with evidence paths."
+                    ),
+                },
+            ]
+        )
+        final_answer_only_next = False
+
+    fallback_evidence = _evidence_from_trajectory(trajectory) or _evidence_from_observation_support(
+        observation_support
+    )
+    if fallback_evidence:
+        trajectory.append(
+            {
+                "turn": max(1, max_turns) + 1,
+                "model_response": "",
+                "finish_reason": "max_turn_observation_fallback",
+                "tool_calls": [],
+                "tool_observations": [],
+                "final_citations": fallback_evidence,
+                "validation_notes": [
+                    "FastContext reached max_turns without a final answer; using supported tool observations."
+                ],
+            }
+        )
+        if allow_observation_fallback:
+            return FastContextLoopResult(
+                status="fallback_observations",
+                evidence_paths=fallback_evidence,
+                notes=[
+                    "FastContext reached max_turns without a valid final answer; "
+                    "showing supported tool observations only."
+                ],
+                trajectory=trajectory,
+            )
+    raise FastContextLoopError(
+        "FastContext did not return usable evidence before max_turns.",
+        trajectory,
+    )
+
+
+async def _chat_fastcontext_completion(
+    *,
+    model_id: str,
+    messages: list[dict[str, Any]],
+    config: lmstudio.LMStudioConfig,
+    transport: httpx.AsyncBaseTransport | None,
+    max_tokens: int,
+    temperature: float,
+    allow_tools: bool = True,
+) -> lmstudio.LMStudioChatCompletion:
+    if not allow_tools:
+        return await lmstudio.chat_completion(
+            model_id=model_id,
+            messages=messages,
+            config=config,
+            transport=transport,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+    try:
+        return await lmstudio.chat_completion(
+            model_id=model_id,
+            messages=messages,
+            config=config,
+            transport=transport,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            tools=_fastcontext_tools(),
+            tool_choice="auto",
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+    except lmstudio.LMStudioError:
+        content = await _chat_fastcontext(
+            model_id=model_id,
+            messages=messages,
+            config=config,
+            transport=transport,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        return lmstudio.LMStudioChatCompletion(
+            content=content,
+            tool_calls=[],
+            finish_reason="fallback_content",
+            message={"role": "assistant", "content": content},
+            raw={},
+        )
+
+
+async def _chat_fastcontext(
+    *,
+    model_id: str,
+    messages: list[dict[str, Any]],
+    config: lmstudio.LMStudioConfig,
+    transport: httpx.AsyncBaseTransport | None,
+    max_tokens: int,
+    temperature: float,
+) -> str:
+    response_format = _fastcontext_response_format() if _structured_output_enabled() else None
+    try:
+        return await lmstudio.chat_text(
+            model_id=model_id,
+            messages=messages,
+            config=config,
+            transport=transport,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_format=response_format,
+        )
+    except lmstudio.LMStudioError:
+        if response_format is None:
+            raise
+        return await lmstudio.chat_text(
+            model_id=model_id,
+            messages=messages,
+            config=config,
+            transport=transport,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+
+def _fastcontext_tools() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "Read",
+                "description": "Read a UTF-8 text file under the workspace root by line range.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "File path relative to the workspace root. Do not shorten it.",
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "1-based start line. Defaults to 1.",
+                            "minimum": 1,
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum lines to read.",
+                            "minimum": 1,
+                            "maximum": MAX_READ_LINES,
+                        },
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "Glob",
+                "description": "List files under the workspace root using ripgrep-style glob patterns.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "directory": {
+                            "type": "string",
+                            "description": "Directory relative to the workspace root. Defaults to '.'.",
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "description": "Glob pattern such as '**/*.ts' or 'src/**/*.tsx'.",
+                        },
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "Grep",
+                "description": "Search text under the workspace root with ripgrep-compatible options.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string"},
+                        "path": {
+                            "type": "string",
+                            "description": "Directory or file path relative to the workspace root.",
+                        },
+                        "glob": {"type": "string"},
+                        "output_mode": {
+                            "type": "string",
+                            "enum": ["content", "files", "files_with_matches", "count"],
+                        },
+                        "-A": {"type": "integer", "minimum": 0, "maximum": 20},
+                        "-B": {"type": "integer", "minimum": 0, "maximum": 20},
+                        "-C": {"type": "integer", "minimum": 0, "maximum": 20},
+                        "-n": {"type": "boolean"},
+                        "-i": {"type": "boolean"},
+                        "type": {"type": "string"},
+                        "head_limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": MAX_GREP_RESULTS,
+                        },
+                        "multiline": {"type": "boolean"},
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+    ]
+
+
+def _tool_calls_from_completion(
+    completion: lmstudio.LMStudioChatCompletion,
+) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    for tool_call in completion.tool_calls:
+        calls.append(
+            {
+                "id": tool_call.id,
+                "tool": _canonical_tool_name(tool_call.name),
+                "args": tool_call.arguments,
+                "raw": tool_call.raw,
+                "arguments_error": tool_call.arguments_error,
+            }
+        )
+    return calls
+
+
+def _tool_observation_messages(
+    completion: lmstudio.LMStudioChatCompletion,
+    observations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    assistant_message: dict[str, Any] = {
+        "role": "assistant",
+        "content": completion.content or None,
+        "tool_calls": [call.raw for call in completion.tool_calls],
+    }
+    tool_messages = [
+        {
+            "role": "tool",
+            "tool_call_id": str(observation.get("tool_call_id") or ""),
+            "content": _tool_observation_content(observation),
+        }
+        for observation in observations
+        if observation.get("tool_call_id")
+    ]
+    return [assistant_message, *tool_messages]
+
+
+def _legacy_observation_messages(
+    content: str,
+    observations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {"role": "assistant", "content": content},
+        {
+            "role": "user",
+            "content": (
+                "Tool observations JSON:\n"
+                f"{json.dumps(observations, sort_keys=True)}\n\n"
+                "Continue. Return either more tool_calls JSON or final_answer JSON."
+            ),
+        },
+    ]
+
+
+def _final_answer_request_message() -> dict[str, str]:
+    return {
+        "role": "user",
+        "content": (
+            "Tool observations are now available. Do not call tools on this turn. "
+            "Return final_answer JSON only, citing the smallest useful file and line ranges "
+            "from successful tool observations."
+        ),
+    }
+
+
+def _validation_feedback_messages(
+    content: str,
+    turn_record: dict[str, Any],
+) -> list[dict[str, Any]]:
+    return [
+        {"role": "assistant", "content": content},
+        {
+            "role": "user",
+            "content": (
+                "Those citations did not validate against the project root or successful tool "
+                "observations:\n"
+                f"{json.dumps(turn_record.get('validation_notes', []), sort_keys=True)}\n\n"
+                "Use Glob, Grep, or Read to find real relative paths and supported line ranges, "
+                "then return final_answer JSON."
+            ),
+        },
+    ]
+
+
+def _tool_observation_content(observation: dict[str, Any]) -> str:
+    if observation.get("ok") and isinstance(observation.get("text"), str):
+        return str(observation["text"])
+    return json.dumps(observation, sort_keys=True)
+
+
+def _structured_output_enabled() -> bool:
+    raw = os.environ.get(FASTCONTEXT_STRUCTURED_OUTPUT_ENV, "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _fastcontext_response_format() -> dict[str, Any]:
+    citation_schema = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "start_line": {"type": "integer"},
+            "end_line": {"type": "integer"},
+            "reason": {"type": "string"},
+        },
+        "required": ["path"],
+        "additionalProperties": True,
+    }
+    tool_call_schema = {
+        "type": "object",
+        "properties": {
+            "tool": {"type": "string", "enum": ["READ", "GLOB", "GREP"]},
+            "args": {"type": "object", "additionalProperties": True},
+        },
+        "required": ["tool", "args"],
+        "additionalProperties": True,
+    }
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "fastcontext_response",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "tool_calls": {
+                        "type": "array",
+                        "items": tool_call_schema,
+                    },
+                    "final_answer": {
+                        "type": "object",
+                        "properties": {
+                            "evidence": {
+                                "type": "array",
+                                "items": citation_schema,
+                            },
+                            "notes": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "additionalProperties": True,
+                    },
+                    "ok": {"type": "boolean"},
+                },
+                "additionalProperties": True,
+            },
+        },
+    }
+
+
 def parse_fastcontext_response(content: str) -> ParsedFastContextResponse:
     try:
         parsed = lmstudio.parse_json_content(content)
@@ -296,35 +824,61 @@ def parse_fastcontext_response(content: str) -> ParsedFastContextResponse:
 
 
 def execute_tool(root: Path, call: dict[str, Any]) -> dict[str, Any]:
-    tool = _tool_name(call)
+    tool = _canonical_tool_name(_tool_name(call))
     args = _tool_args(call)
     try:
-        if tool == "READ":
+        if args.get("arguments_error") or call.get("arguments_error"):
+            raise FastContextError(str(args.get("arguments_error") or call["arguments_error"]))
+        if tool == "Read":
             result = read_file(
                 root,
                 str(args.get("path", "")),
-                start=_optional_int(args.get("start") or args.get("start_line")),
+                offset=_optional_int(args.get("offset") or args.get("start") or args.get("start_line")),
+                limit=_optional_int(args.get("limit")),
                 end=_optional_int(args.get("end") or args.get("end_line")),
             )
-        elif tool == "GLOB":
-            result = glob_paths(root, str(args.get("pattern") or args.get("glob") or "**/*"))
-        elif tool == "GREP":
+        elif tool == "Glob":
+            result = glob_paths(
+                root,
+                str(args.get("pattern") or args.get("glob") or "**/*"),
+                directory=str(args.get("directory") or "."),
+            )
+        elif tool == "Grep":
             result = grep_paths(
                 root,
                 str(args.get("pattern", "")),
                 file_glob=str(args["glob"]) if args.get("glob") else None,
+                search_path=str(args.get("path") or "."),
+                output_mode=str(args.get("output_mode") or "content"),
+                before_context=_optional_int(args.get("-B")) or 0,
+                after_context=_optional_int(args.get("-A")) or 0,
+                context=_optional_int(args.get("-C")) or 0,
+                line_numbers=bool(args.get("-n", True)),
+                ignore_case=bool(args.get("-i", False)),
+                file_type=str(args["type"]) if args.get("type") else None,
+                head_limit=_optional_int(args.get("head_limit")) or MAX_GREP_RESULTS,
+                multiline=bool(args.get("multiline", False)),
             )
         else:
             raise FastContextError(f"Unsupported tool: {tool}")
-        return {"tool": tool, "args": args, "ok": True, "result": result}
+        return {
+            "tool_call_id": call.get("id"),
+            "tool": tool,
+            "args": args,
+            "ok": True,
+            "result": result,
+            "text": _tool_result_text(tool, result),
+        }
     except Exception as exc:
-        return {"tool": tool, "args": args, "ok": False, "error": str(exc)}
+        return {"tool_call_id": call.get("id"), "tool": tool, "args": args, "ok": False, "error": str(exc)}
 
 
 def read_file(
     root: Path,
     rel_path: str,
     start: int | None = None,
+    offset: int | None = None,
+    limit: int | None = None,
     end: int | None = None,
 ) -> dict[str, Any]:
     path, safe_rel = _resolve_under_root(root, rel_path)
@@ -335,15 +889,16 @@ def read_file(
 
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     if not lines:
-        return {"path": safe_rel, "start_line": 1, "end_line": 0, "content": ""}
+        return {"path": safe_rel, "start_line": 1, "end_line": 0, "content": "", "line_count": 0}
 
-    start_line = min(max(1, start or 1), len(lines))
-    end_line = min(len(lines), end or start_line + MAX_READ_LINES - 1)
+    start_line = min(max(1, offset or start or 1), len(lines))
+    read_limit = min(max(1, limit or MAX_READ_LINES), MAX_READ_LINES)
+    end_line = min(len(lines), end or start_line + read_limit - 1)
     if end_line - start_line + 1 > MAX_READ_LINES:
         end_line = start_line + MAX_READ_LINES - 1
     selected = lines[start_line - 1 : end_line]
     content = "\n".join(
-        f"{line_number}: {line}"
+        f"{line_number}|{line}"
         for line_number, line in enumerate(selected, start=start_line)
     )
     return {
@@ -351,25 +906,42 @@ def read_file(
         "start_line": start_line,
         "end_line": end_line,
         "content": content,
+        "line_count": len(lines),
     }
 
 
-def glob_paths(root: Path, pattern: str, limit: int = MAX_GLOB_RESULTS) -> dict[str, Any]:
+def glob_paths(
+    root: Path,
+    pattern: str,
+    limit: int = MAX_GLOB_RESULTS,
+    directory: str = ".",
+) -> dict[str, Any]:
     safe_pattern = _safe_glob_pattern(pattern)
+    directory_path, safe_directory = _resolve_directory(root, directory)
+    rg_matches = _rg_glob(root, directory_path, safe_pattern, limit)
+    if rg_matches is not None:
+        return {
+            "directory": safe_directory,
+            "pattern": safe_pattern,
+            "matches": rg_matches[:limit],
+            "truncated": len(rg_matches) >= limit,
+            "backend": "rg",
+        }
     matches: list[str] = []
-    paths = sorted(
-        (path for path in root.glob(safe_pattern)),
-        key=lambda path: path.as_posix().lower(),
-    )
-    for path in paths:
+    for path in _iter_files(root, file_glob=safe_pattern):
         if len(matches) >= limit:
             break
-        if _should_skip_path(root, path):
+        if not _path_is_under(path, directory_path):
             continue
-        if path.is_file():
-            matches.append(_relative_path(root, path))
+        matches.append(_relative_path(root, path))
     matches.sort()
-    return {"pattern": safe_pattern, "matches": matches, "truncated": len(matches) >= limit}
+    return {
+        "directory": safe_directory,
+        "pattern": safe_pattern,
+        "matches": matches,
+        "truncated": len(matches) >= limit,
+        "backend": "python",
+    }
 
 
 def grep_paths(
@@ -377,20 +949,54 @@ def grep_paths(
     pattern: str,
     file_glob: str | None = None,
     limit: int = MAX_GREP_RESULTS,
+    search_path: str = ".",
+    output_mode: str = "content",
+    before_context: int = 0,
+    after_context: int = 0,
+    context: int = 0,
+    line_numbers: bool = True,
+    ignore_case: bool = False,
+    file_type: str | None = None,
+    head_limit: int | None = None,
+    multiline: bool = False,
 ) -> dict[str, Any]:
     if not pattern.strip():
         raise FastContextError("GREP requires a non-empty pattern.")
+    effective_limit = min(max(1, head_limit or limit), MAX_GREP_RESULTS)
+    search_root, safe_search_path = _resolve_search_path(root, search_path)
+    rg_result = _rg_grep(
+        root=root,
+        search_path=search_root,
+        safe_search_path=safe_search_path,
+        pattern=pattern,
+        file_glob=file_glob,
+        limit=effective_limit,
+        output_mode=output_mode,
+        before_context=before_context,
+        after_context=after_context,
+        context=context,
+        line_numbers=line_numbers,
+        ignore_case=ignore_case,
+        file_type=file_type,
+        multiline=multiline,
+    )
+    if rg_result is not None:
+        return rg_result
     try:
-        compiled = re.compile(pattern, flags=re.IGNORECASE)
+        flags = re.IGNORECASE if ignore_case else 0
+        compiled = re.compile(pattern, flags=flags)
         regex_mode = True
     except re.error:
-        compiled = re.compile(re.escape(pattern), flags=re.IGNORECASE)
+        compiled = re.compile(re.escape(pattern), flags=re.IGNORECASE if ignore_case else 0)
         regex_mode = False
 
-    candidates = _grep_candidate_files(root, file_glob)
+    candidates = [
+        path for path in _grep_candidate_files(root, file_glob)
+        if _path_is_under(path, search_root)
+    ]
     matches: list[dict[str, Any]] = []
     for path in candidates:
-        if len(matches) >= limit:
+        if len(matches) >= effective_limit:
             break
         if path.stat().st_size > MAX_GREP_FILE_BYTES:
             continue
@@ -399,26 +1005,43 @@ def grep_paths(
         except OSError:
             continue
         rel_path = _relative_path(root, path)
+        file_matched = False
         for line_number, line in enumerate(lines, start=1):
             if not compiled.search(line):
                 continue
+            file_matched = True
+            if output_mode in {"files", "files_with_matches"}:
+                matches.append({"path": rel_path})
+                break
+            if output_mode == "count":
+                continue
+            start_line = max(1, line_number - (context or before_context))
+            end_line = min(len(lines), line_number + (context or after_context))
             matches.append(
                 {
                     "path": rel_path,
                     "line": line_number,
+                    "start_line": start_line,
+                    "end_line": end_line,
                     "citation": f"{rel_path}:{line_number}-{line_number}",
                     "text": line.strip()[:220],
                 }
             )
-            if len(matches) >= limit:
+            if len(matches) >= effective_limit:
                 break
+        if output_mode == "count" and file_matched:
+            count = sum(1 for line in lines if compiled.search(line))
+            matches.append({"path": rel_path, "count": count})
 
     return {
+        "path": safe_search_path,
         "pattern": pattern,
         "glob": file_glob,
         "regex_mode": regex_mode,
         "matches": matches,
-        "truncated": len(matches) >= limit,
+        "truncated": len(matches) >= effective_limit,
+        "output_mode": output_mode,
+        "backend": "python",
     }
 
 
@@ -643,11 +1266,14 @@ def _messages(asset: dict[str, Any], query: str) -> list[dict[str, str]]:
             "role": "system",
             "content": (
                 "You are FastContext, a read-only repository exploration subagent. "
-                "Never execute code and never suggest edits. Use only these JSON tools:\n"
-                '{"tool_calls":[{"tool":"GREP","args":{"pattern":"string","glob":"**/*.ts"}}]}\n'
-                '{"tool_calls":[{"tool":"GLOB","args":{"pattern":"**/*.tsx"}}]}\n'
-                '{"tool_calls":[{"tool":"READ","args":{"path":"relative/file.ts","start":1,"end":80}}]}\n'
-                "When done, return only JSON: "
+                "Never execute code and never suggest edits. Use the provided Read, Glob, and Grep "
+                "tools for evidence. Prefer primary source files over docs, examples, generated output, "
+                "build output, vendored code, and tests unless the task asks for those. Do not shorten "
+                "paths. Cite only files and line ranges that came from successful tool observations. "
+                "If native tool calling is unavailable, request tools as JSON like "
+                '{"tool_calls":[{"tool":"Grep","args":{"pattern":"symbol","glob":"**/*.ts"}}]}. '
+                "After enough evidence is observed, stop calling tools and return final_answer. "
+                "When done, return only JSON in this shape: "
                 '{"final_answer":{"evidence":[{"path":"relative/file.ts","start_line":1,'
                 '"end_line":20,"reason":"why this matters"}],"notes":["short note"]}}'
             ),
@@ -660,6 +1286,104 @@ def _messages(asset: dict[str, Any], query: str) -> list[dict[str, str]]:
             ),
         },
     ]
+
+
+def _local_messages(root: Path, task: str) -> list[dict[str, str]]:
+    context = {
+        "mode": "local-project-exploration",
+        "project_path": str(root),
+        "absolute_workspace_root": str(root),
+        "task": task.strip(),
+        "seed_context": _local_seed_context(root, task),
+        "rules": [
+            "Read-only exploration only.",
+            "Do not execute project code.",
+            "Return file paths relative to project_path.",
+            "Use the absolute workspace root only to understand scope; do not shorten paths.",
+            "Prefer primary source tree files over docs, generated, build, vendor, sample, and fixture code.",
+            "If the task names a file path, inspect that exact file first.",
+            "Only cite files and line ranges that appeared in successful tool observations.",
+            "After enough evidence is observed, stop calling tools and return final_answer.",
+            "Return compact, relevant line ranges for Codex to inspect before editing.",
+        ],
+    }
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are FastContext, a read-only local repository exploration subagent. "
+                "Use the provided Read, Glob, and Grep tools. The user context includes the absolute "
+                "workspace root; do not shorten or invent paths. Start broad when needed, then narrow "
+                "down. Prefer primary source tree files over docs, generated output, build output, "
+                "vendored code, samples, and fixtures unless the task asks for those. If the task names "
+                "a file, inspect that exact file first. Cite only files and line ranges that appeared "
+                "in successful tool observations. If native tool calling is unavailable, request tools "
+                "as JSON like "
+                '{"tool_calls":[{"tool":"Grep","args":{"pattern":"symbol","glob":"**/*.ts"}}]}. '
+                "After enough evidence is observed, stop calling tools and return final_answer. "
+                "Return the smallest useful set of evidence. "
+                "When done, return only JSON in this shape: "
+                '{"final_answer":{"evidence":[{"path":"relative/file.ts","start_line":1,'
+                '"end_line":20,"reason":"why this matters"}],"notes":["short note"]}}'
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Context JSON:\n{json.dumps(context, sort_keys=True)}\n\n"
+                f"Explore this local project for task:\n{task.strip()}"
+            ),
+        },
+    ]
+
+
+def _local_seed_context(root: Path, task: str) -> dict[str, Any]:
+    files = glob_paths(root, "**/*", limit=LOCAL_CONTEXT_FILE_LIMIT)
+    pattern = _task_grep_pattern(task)
+    matches: list[dict[str, Any]] = []
+    if pattern:
+        matches = grep_paths(root, pattern, limit=LOCAL_CONTEXT_GREP_LIMIT)["matches"]
+    return {
+        "known_files_sample": files["matches"],
+        "known_files_truncated": files["truncated"],
+        "initial_grep_pattern": pattern,
+        "initial_grep_matches": matches,
+    }
+
+
+def _task_grep_pattern(task: str) -> str:
+    terms = []
+    for raw_term in re.findall(r"[A-Za-z_][A-Za-z0-9_-]{2,}", task):
+        term = raw_term.lower().replace("-", "_")
+        if term in LOCAL_TASK_STOPWORDS:
+            continue
+        terms.append(re.escape(raw_term))
+    unique_terms = sorted(set(terms), key=str.lower)
+    return "|".join(unique_terms[:8])
+
+
+def _tool_trace_summary(trajectory: list[dict[str, Any]]) -> list[dict[str, object]]:
+    summary: list[dict[str, object]] = []
+    for turn in trajectory:
+        tool_calls = turn.get("tool_calls", [])
+        observations = turn.get("tool_observations", [])
+        final_citations = turn.get("final_citations", [])
+        validation_notes = turn.get("validation_notes", [])
+        summary.append(
+            {
+                "turn": int(turn.get("turn", 0)),
+                "tool_calls": [
+                    _canonical_tool_name(_tool_name(call))
+                    for call in tool_calls
+                    if isinstance(call, dict)
+                ] if isinstance(tool_calls, list) else [],
+                "tool_call_count": len(tool_calls) if isinstance(tool_calls, list) else 0,
+                "observation_count": len(observations) if isinstance(observations, list) else 0,
+                "final_citations": final_citations if isinstance(final_citations, list) else [],
+                "validation_notes": validation_notes if isinstance(validation_notes, list) else [],
+            }
+        )
+    return summary
 
 
 def _store_refinement(
@@ -722,6 +1446,7 @@ def _store_refinement(
 def _validated_evidence_paths(
     root: Path,
     citations: list[FastContextCitation],
+    observation_support: ObservationSupport | None = None,
 ) -> tuple[list[str], list[str]]:
     evidence_paths: list[str] = []
     notes: list[str] = []
@@ -734,6 +1459,15 @@ def _validated_evidence_paths(
         if not path.is_file():
             notes.append(f"Skipped missing citation file: {safe_rel}")
             continue
+        line_note = _line_validation_note(path, safe_rel, citation)
+        if line_note is not None:
+            notes.append(line_note)
+            continue
+        if observation_support is not None and observation_support.files:
+            support_note = _support_validation_note(safe_rel, citation, observation_support)
+            if support_note is not None:
+                notes.append(support_note)
+                continue
         normalized = FastContextCitation(
             path=safe_rel,
             start_line=citation.start_line,
@@ -742,6 +1476,188 @@ def _validated_evidence_paths(
         )
         evidence_paths.append(normalized.evidence_path())
     return sorted(set(evidence_paths)), notes
+
+
+def _line_validation_note(path: Path, safe_rel: str, citation: FastContextCitation) -> str | None:
+    if citation.start_line is None:
+        return None
+    start_line = citation.start_line
+    end_line = citation.end_line if citation.end_line is not None else start_line
+    if start_line <= 0 or end_line <= 0:
+        return f"Skipped citation with non-positive line range: {safe_rel}:{start_line}-{end_line}"
+    if end_line < start_line:
+        return f"Skipped citation with reversed line range: {safe_rel}:{start_line}-{end_line}"
+    if end_line - start_line + 1 > MAX_CITATION_LINES:
+        return f"Skipped overly broad citation: {safe_rel}:{start_line}-{end_line}"
+    line_count = _line_count(path)
+    if start_line > line_count or end_line > line_count:
+        return (
+            f"Skipped citation beyond EOF: {safe_rel}:{start_line}-{end_line} "
+            f"(file has {line_count} lines)"
+        )
+    return None
+
+
+def _support_validation_note(
+    safe_rel: str,
+    citation: FastContextCitation,
+    support: ObservationSupport,
+) -> str | None:
+    if safe_rel not in support.files:
+        return f"Skipped unsupported citation file from final answer: {citation.evidence_path()}"
+    if citation.start_line is None:
+        return None
+    ranges = support.ranges.get(safe_rel, [])
+    if not ranges:
+        return f"Skipped citation without observed line support: {citation.evidence_path()}"
+    start_line = citation.start_line
+    end_line = citation.end_line if citation.end_line is not None else start_line
+    if any(start <= end_line and start_line <= end for start, end in ranges):
+        return None
+    return f"Skipped citation outside observed line ranges: {citation.evidence_path()}"
+
+
+def _line_count(path: Path) -> int:
+    try:
+        return len(path.read_text(encoding="utf-8", errors="replace").splitlines())
+    except OSError as exc:
+        raise FastContextError(f"Could not read citation file: {path}") from exc
+
+
+def _observation_support(observations: list[dict[str, Any]]) -> ObservationSupport:
+    files: set[str] = set()
+    ranges: dict[str, list[tuple[int, int]]] = {}
+    for observation in observations:
+        if not observation.get("ok"):
+            continue
+        result = observation.get("result")
+        if not isinstance(result, dict):
+            continue
+        tool = str(observation.get("tool", ""))
+        if tool == "Read":
+            path = result.get("path")
+            if isinstance(path, str):
+                files.add(path)
+                start = _optional_int(result.get("start_line"))
+                end = _optional_int(result.get("end_line"))
+                if start is not None and end is not None and end >= start:
+                    ranges.setdefault(path, []).append((start, end))
+            continue
+        matches = result.get("matches")
+        if not isinstance(matches, list):
+            continue
+        for match in matches:
+            if isinstance(match, str):
+                files.add(match)
+                continue
+            if not isinstance(match, dict):
+                continue
+            path = match.get("path")
+            if not isinstance(path, str):
+                continue
+            files.add(path)
+            start = _optional_int(match.get("start_line") or match.get("line"))
+            end = _optional_int(match.get("end_line") or match.get("line"))
+            if start is not None and end is not None and end >= start:
+                ranges.setdefault(path, []).append((start, end))
+    return ObservationSupport(files=files, ranges=ranges)
+
+
+def _merge_observation_support(
+    current: ObservationSupport,
+    incoming: ObservationSupport,
+) -> ObservationSupport:
+    files = set(current.files)
+    files.update(incoming.files)
+    ranges = {path: list(path_ranges) for path, path_ranges in current.ranges.items()}
+    for path, path_ranges in incoming.ranges.items():
+        ranges.setdefault(path, []).extend(path_ranges)
+    return ObservationSupport(files=files, ranges=ranges)
+
+
+def _evidence_from_observation_support(
+    support: ObservationSupport,
+    limit: int = 5,
+) -> list[str]:
+    evidence: list[str] = []
+    for path, path_ranges in sorted(support.ranges.items()):
+        merged = _merge_ranges(path_ranges)
+        for start, end in merged:
+            evidence.append(f"{path}:{start}-{end}")
+            if len(evidence) >= limit:
+                return evidence
+    if evidence:
+        return evidence
+    return sorted(support.files)[:limit]
+
+
+def _evidence_from_trajectory(
+    trajectory: list[dict[str, Any]],
+    limit: int = 5,
+) -> list[str]:
+    evidence: list[str] = []
+    seen: set[str] = set()
+    for turn in reversed(trajectory):
+        observations = turn.get("tool_observations", [])
+        if not isinstance(observations, list):
+            continue
+        for observation in reversed(observations):
+            if not isinstance(observation, dict) or not observation.get("ok"):
+                continue
+            for citation in _citations_from_observation(observation):
+                if citation in seen:
+                    continue
+                seen.add(citation)
+                evidence.append(citation)
+                if len(evidence) >= limit:
+                    return list(reversed(evidence))
+    return list(reversed(evidence))
+
+
+def _citations_from_observation(observation: dict[str, Any]) -> list[str]:
+    result = observation.get("result")
+    if not isinstance(result, dict):
+        return []
+    tool = str(observation.get("tool", ""))
+    if tool == "Read":
+        path = result.get("path")
+        start = _optional_int(result.get("start_line"))
+        end = _optional_int(result.get("end_line"))
+        if not isinstance(path, str) or start is None or end is None or end < start:
+            return []
+        capped_end = min(end, start + 79)
+        return [f"{path}:{start}-{capped_end}"]
+    matches = result.get("matches")
+    if not isinstance(matches, list):
+        return []
+    citations: list[str] = []
+    for match in matches:
+        if not isinstance(match, dict):
+            continue
+        path = match.get("path")
+        start = _optional_int(match.get("start_line") or match.get("line"))
+        end = _optional_int(match.get("end_line") or match.get("line"))
+        if not isinstance(path, str) or start is None or end is None or end < start:
+            continue
+        citations.append(f"{path}:{start}-{min(end, start + 79)}")
+    return citations
+
+
+def _merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(ranges):
+        if start <= 0 or end < start:
+            continue
+        capped_end = min(end, start + MAX_CITATION_LINES - 1)
+        if not merged or start > merged[-1][1] + 1:
+            merged.append((start, capped_end))
+        else:
+            previous_start, previous_end = merged[-1]
+            merged[-1] = (
+                previous_start,
+                min(max(previous_end, capped_end), previous_start + MAX_CITATION_LINES - 1),
+            )
+    return merged
 
 
 def _extract_tool_calls(parsed: dict[str, Any]) -> list[dict[str, Any]]:
@@ -910,6 +1826,249 @@ def _tool_args(call: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _canonical_tool_name(name: str) -> str:
+    normalized = name.strip().upper()
+    if normalized == "READ":
+        return "Read"
+    if normalized == "GLOB":
+        return "Glob"
+    if normalized == "GREP":
+        return "Grep"
+    return name
+
+
+def _tool_result_text(tool: str, result: dict[str, Any]) -> str:
+    if tool == "Read":
+        path = str(result.get("path", ""))
+        start = int(result.get("start_line", 1))
+        end = int(result.get("end_line", start))
+        return f"```{path}:{start}-{end}\n{result.get('content', '')}\n```"
+    if tool == "Glob":
+        matches = result.get("matches")
+        if isinstance(matches, list):
+            return "\n".join(str(match) for match in matches)
+    if tool == "Grep":
+        matches = result.get("matches")
+        if isinstance(matches, list):
+            lines = []
+            for match in matches:
+                if not isinstance(match, dict):
+                    continue
+                path = str(match.get("path", ""))
+                line = match.get("line")
+                text = str(match.get("text", ""))
+                if line is None:
+                    lines.append(path)
+                else:
+                    lines.append(f"{path}:{line}:{text}")
+            return "\n".join(lines)
+    return json.dumps(result, sort_keys=True)
+
+
+def _rg_glob(
+    root: Path,
+    directory_path: Path,
+    pattern: str,
+    limit: int,
+) -> list[str] | None:
+    rg = shutil.which("rg")
+    if rg is None:
+        return None
+    safe_directory = _relative_path(root, directory_path) if directory_path != root.resolve() else "."
+    command = [
+        rg,
+        "--files",
+        safe_directory,
+        "--glob",
+        pattern,
+        *_rg_skip_globs(),
+    ]
+    completed = _run_rg(root, command)
+    if completed is None:
+        return None
+    if completed.returncode not in {0, 1}:
+        return None
+    matches = [
+        _normalize_rg_path(line)
+        for line in completed.stdout.splitlines()
+        if line.strip()
+    ]
+    safe_matches = [
+        path
+        for path in matches
+        if _is_safe_relative_result(root, path)
+    ]
+    return sorted(safe_matches)[:limit]
+
+
+def _rg_grep(
+    *,
+    root: Path,
+    search_path: Path,
+    safe_search_path: str,
+    pattern: str,
+    file_glob: str | None,
+    limit: int,
+    output_mode: str,
+    before_context: int,
+    after_context: int,
+    context: int,
+    line_numbers: bool,
+    ignore_case: bool,
+    file_type: str | None,
+    multiline: bool,
+) -> dict[str, Any] | None:
+    rg = shutil.which("rg")
+    if rg is None:
+        return None
+    safe_glob = _safe_glob_pattern(file_glob) if file_glob else None
+    search_arg = safe_search_path or "."
+    command = [rg, "--color", "never", "--no-heading", "--with-filename"]
+    if line_numbers:
+        command.append("--line-number")
+    if ignore_case:
+        command.append("--ignore-case")
+    if multiline:
+        command.append("--multiline")
+    if output_mode in {"files", "files_with_matches"}:
+        command.append("--files-with-matches")
+    elif output_mode == "count":
+        command.append("--count")
+    if context:
+        command.extend(["-C", str(max(0, context))])
+    else:
+        if before_context:
+            command.extend(["-B", str(max(0, before_context))])
+        if after_context:
+            command.extend(["-A", str(max(0, after_context))])
+    if safe_glob:
+        command.extend(["--glob", safe_glob])
+    if file_type:
+        command.extend(["--type", file_type])
+    command.extend([*_rg_skip_globs(), pattern, search_arg])
+    completed = _run_rg(root, command)
+    if completed is None:
+        return None
+    if completed.returncode not in {0, 1}:
+        return None
+    matches = _parse_rg_output(
+        root=root,
+        output=completed.stdout,
+        output_mode=output_mode,
+        limit=limit,
+    )
+    return {
+        "path": safe_search_path,
+        "pattern": pattern,
+        "glob": safe_glob,
+        "regex_mode": True,
+        "matches": matches,
+        "truncated": len(matches) >= limit,
+        "output_mode": output_mode,
+        "backend": "rg",
+        "searched_path": _relative_path(root, search_path) if search_path != root.resolve() else ".",
+    }
+
+
+def _run_rg(root: Path, command: list[str]) -> subprocess.CompletedProcess[str] | None:
+    try:
+        return subprocess.run(
+            command,
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=RG_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _rg_skip_globs() -> list[str]:
+    args: list[str] = []
+    for dirname in sorted(SKIP_DIRS | LOCAL_EXTRA_SKIP_DIRS):
+        args.extend(["--glob", f"!{dirname}/**"])
+    return args
+
+
+def _parse_rg_output(
+    *,
+    root: Path,
+    output: str,
+    output_mode: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+    for raw_line in output.splitlines():
+        if len(matches) >= limit:
+            break
+        line = raw_line.strip()
+        if not line:
+            continue
+        if output_mode in {"files", "files_with_matches"}:
+            path = _normalize_rg_path(line)
+            if _is_safe_relative_result(root, path):
+                matches.append({"path": path})
+            continue
+        if output_mode == "count":
+            path, raw_count = _split_rg_pair(line)
+            if path and _is_safe_relative_result(root, path):
+                counts[path] = counts.get(path, 0) + (_optional_int(raw_count) or 0)
+            continue
+        parsed = _parse_rg_content_line(line)
+        if parsed is None:
+            continue
+        path, line_number, text = parsed
+        if not _is_safe_relative_result(root, path):
+            continue
+        matches.append(
+            {
+                "path": path,
+                "line": line_number,
+                "start_line": line_number,
+                "end_line": line_number,
+                "citation": f"{path}:{line_number}-{line_number}",
+                "text": text[:220],
+            }
+        )
+    if output_mode == "count":
+        matches.extend(
+            {"path": path, "count": count}
+            for path, count in sorted(counts.items())
+        )
+    return matches[:limit]
+
+
+def _split_rg_pair(line: str) -> tuple[str, str]:
+    if ":" not in line:
+        return _normalize_rg_path(line), ""
+    path, value = line.rsplit(":", 1)
+    return _normalize_rg_path(path), value
+
+
+def _parse_rg_content_line(line: str) -> tuple[str, int, str] | None:
+    match = re.match(r"(?P<path>.*?)(?P<sep>[:-])(?P<line>\d+)(?P=sep)(?P<text>.*)", line)
+    if match is None:
+        return None
+    line_number = _optional_int(match.group("line"))
+    if line_number is None:
+        return None
+    return _normalize_rg_path(match.group("path")), line_number, match.group("text").strip()
+
+
+def _normalize_rg_path(path: str) -> str:
+    return path.strip().replace("\\", "/").lstrip("./")
+
+
+def _is_safe_relative_result(root: Path, rel_path: str) -> bool:
+    try:
+        _resolve_under_root(root, rel_path)
+    except FastContextError:
+        return False
+    return True
+
+
 def _resolve_under_root(root: Path, rel_path: str) -> tuple[Path, str]:
     root_resolved = root.resolve()
     cleaned = _strip_line_suffix(rel_path.strip()).replace("\\", "/")
@@ -929,7 +2088,7 @@ def _resolve_under_root(root: Path, rel_path: str) -> tuple[Path, str]:
     except ValueError as exc:
         raise FastContextError(f"Path escapes snapshot root: {rel_path}") from exc
 
-    if any(part in SKIP_DIRS for part in relative.parts):
+    if any(part in SKIP_DIRS or part in LOCAL_EXTRA_SKIP_DIRS for part in relative.parts):
         raise FastContextError(f"Path is under a skipped directory: {rel_path}")
     return candidate, relative.as_posix()
 
@@ -947,24 +2106,66 @@ def _safe_glob_pattern(pattern: str) -> str:
     return cleaned
 
 
+def _resolve_directory(root: Path, directory: str) -> tuple[Path, str]:
+    cleaned = directory.strip().replace("\\", "/") or "."
+    if cleaned == ".":
+        return root.resolve(), "."
+    path, safe_rel = _resolve_under_root(root, cleaned)
+    if not path.is_dir():
+        raise FastContextError(f"Glob directory is not a directory: {safe_rel}")
+    return path, safe_rel
+
+
+def _resolve_search_path(root: Path, search_path: str) -> tuple[Path, str]:
+    cleaned = search_path.strip().replace("\\", "/") or "."
+    if cleaned == ".":
+        return root.resolve(), "."
+    path, safe_rel = _resolve_under_root(root, cleaned)
+    if not path.exists():
+        raise FastContextError(f"Grep path does not exist: {safe_rel}")
+    return path, safe_rel
+
+
+def _path_is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
 def _should_skip_path(root: Path, path: Path) -> bool:
     try:
         relative = path.resolve().relative_to(root.resolve())
     except ValueError:
         return True
-    return any(part in SKIP_DIRS for part in relative.parts)
+    return any(part in SKIP_DIRS or part in LOCAL_EXTRA_SKIP_DIRS for part in relative.parts)
 
 
 def _grep_candidate_files(root: Path, file_glob: str | None) -> list[Path]:
-    if file_glob:
-        safe_pattern = _safe_glob_pattern(file_glob)
-        candidates = [path for path in root.glob(safe_pattern) if path.is_file()]
-    else:
-        candidates = [path for path in root.rglob("*") if path.is_file()]
-    return sorted(
-        (path for path in candidates if not _should_skip_path(root, path)),
-        key=lambda path: _relative_path(root, path),
-    )
+    safe_pattern = _safe_glob_pattern(file_glob) if file_glob else None
+    return list(_iter_files(root, file_glob=safe_pattern))
+
+
+def _iter_files(root: Path, file_glob: str | None = None) -> list[Path]:
+    root_resolved = root.resolve()
+    matches: list[Path] = []
+    for current_root, dirnames, filenames in os.walk(root_resolved):
+        dirnames[:] = [
+            dirname
+            for dirname in dirnames
+            if dirname not in SKIP_DIRS and dirname not in LOCAL_EXTRA_SKIP_DIRS
+        ]
+        current_path = Path(current_root)
+        for filename in filenames:
+            path = current_path / filename
+            if _should_skip_path(root_resolved, path):
+                continue
+            rel_path = _relative_path(root_resolved, path)
+            if file_glob and not PurePosixPath(rel_path).match(file_glob):
+                continue
+            matches.append(path)
+    return sorted(matches, key=lambda path: _relative_path(root_resolved, path))
 
 
 def _strip_line_suffix(path: str) -> str:

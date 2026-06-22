@@ -31,6 +31,13 @@ Near-term priorities:
 2. Improve evidence quality before adding more model complexity.
 3. Add Gemma/FastContext only after baseline shortlist quality is measured.
 
+Standalone local exploration is also available through the global
+`fastcontext-local` Codex skill or `repo-finder explore-local`. Use it before
+broad manual grep/read loops when the relevant files in a local repo are
+unknown. Treat its output as read-only navigation; Codex still owns edits and
+tests. If citations are sparse or off-target, refine once with concrete symbols,
+subsystem names, or filenames before falling back to `rg`.
+
 ## Engineering Constraints
 
 - Do not add dependencies without discussion.

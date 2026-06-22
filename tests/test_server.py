@@ -5,7 +5,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from repo_finder import catalog, server
-from repo_finder.models import RateLimitError
+from repo_finder.models import LocalExploreResult, RateLimitError
 from repo_finder.server import _build_search_query, _format_error, _parse_url
 
 
@@ -102,6 +102,46 @@ def test_format_error_generic():
     assert parsed["error"] == "Something went wrong"
     assert parsed["recoverable"] is False
     assert parsed["retry_after"] is None
+
+
+@pytest.mark.asyncio
+async def test_explore_local_code_tool_is_read_only_and_ephemeral(monkeypatch, tmp_path: Path) -> None:
+    async def fake_explore_local_project(
+        task: str,
+        project_path: str,
+        max_turns: int = 6,
+    ) -> LocalExploreResult:
+        assert task == "Find MCP tools"
+        assert project_path == str(tmp_path)
+        assert max_turns == 2
+        return LocalExploreResult(
+            task=task,
+            project_path=str(tmp_path),
+            model_id="fastcontext-1.0-4b-rl",
+            prompt_version="fastcontext-refine-v1",
+            schema_version="fastcontext-evidence-v1",
+            analyzer_version="fastcontext-harness-v1",
+            status="completed",
+            evidence_paths=["src/repo_finder/server.py:1-20"],
+            notes=["MCP tools are registered here."],
+            tool_trace=[],
+        )
+
+    monkeypatch.setattr(server.fastcontext, "explore_local_project", fake_explore_local_project)
+
+    tools = await server.mcp.get_tools()
+    assert "explore_local_code" in tools
+    assert tools["explore_local_code"].annotations.readOnlyHint is True
+
+    result = await server.explore_local_code.fn(
+        "Find MCP tools",
+        str(tmp_path),
+        max_turns=2,
+    )
+
+    assert result.evidence_paths == ["src/repo_finder/server.py:1-20"]
+    assert catalog.get_connection().execute("SELECT COUNT(*) FROM reuse_outcomes").fetchone()[0] == 0
+    assert catalog.get_connection().execute("SELECT COUNT(*) FROM analysis_runs").fetchone()[0] == 0
 
 
 def _create_reusable_asset(tmp_path: Path) -> str:

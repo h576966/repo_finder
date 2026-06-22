@@ -177,3 +177,18 @@ class RecordReuseOutcomeResult:
     outcome: str
     recorded: bool
     timestamp: str
+
+
+@dataclass
+class LocalExploreResult:
+    task: str
+    project_path: str
+    model_id: str
+    prompt_version: str
+    schema_version: str
+    analyzer_version: str
+    status: str
+    evidence_paths: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    tool_trace: list[dict[str, object]] = field(default_factory=list)
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())

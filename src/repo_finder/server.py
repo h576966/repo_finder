@@ -7,7 +7,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from . import bundles, cache, catalog, pattern_extractor, ranker, repo_inspector
+from . import bundles, cache, catalog, fastcontext, lmstudio, pattern_extractor, ranker, repo_inspector
 from .constants import _now_iso
 from .github_client import get_client
 from .models import (
@@ -17,6 +17,7 @@ from .models import (
     FindReposResult,
     FindReusableCodeResult,
     InspectionResult,
+    LocalExploreResult,
     PatternReport,
     QualityReport,
     RateLimitError,
@@ -327,6 +328,37 @@ async def deep_inspect_repo(
         raise RuntimeError(_format_error(exc))
 
     return result
+
+
+@mcp.tool(
+    annotations={"readOnlyHint": True},
+)
+async def explore_local_code(
+    task: Annotated[
+        str,
+        Field(description="Natural language coding task or investigation goal"),
+    ],
+    project_path: Annotated[
+        str,
+        Field(description="Absolute or relative path to the local project root to explore"),
+    ],
+    max_turns: Annotated[
+        int,
+        Field(description="Maximum FastContext exploration turns", ge=1, le=12),
+    ] = 6,
+) -> LocalExploreResult:
+    if not task.strip():
+        raise ToolError("Task description is required.")
+    if not project_path.strip():
+        raise ToolError("project_path is required.")
+    try:
+        return await fastcontext.explore_local_project(
+            task=task,
+            project_path=project_path,
+            max_turns=max_turns,
+        )
+    except (fastcontext.FastContextError, lmstudio.LMStudioError, OSError) as exc:
+        raise ToolError(str(exc))
 
 
 @mcp.tool()
