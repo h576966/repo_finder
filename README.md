@@ -35,9 +35,40 @@ source-scout qualify --limit 100
 source-scout lmstudio-status --smoke-test
 source-scout profile --limit 30
 source-scout evidence --capability data-table --limit 30
+source-scout assess --candidate-id <asset_id> --task "Find a reusable route handler"
 source-scout eval --suite ui-reuse --top-k 5
 source-scout serve-mcp
 ```
+
+## Task-Specific Assessment
+
+`source-scout assess` turns one catalog candidate into a task-specific reuse
+assessment:
+
+```powershell
+source-scout assess --candidate-id <asset_id> --task "Find a reusable route handler" --fastcontext-policy auto --max-evidence-rounds 1
+```
+
+Responsibilities stay split:
+
+- Deterministic code validates paths, line ranges, commit SHA, evidence hashes,
+  scoring, verdicts, persistence, and license gates.
+- FastContext only scouts for additional file/line evidence. It never scores or
+  decides reusability.
+- Gemma interprets the validated evidence for the task, returns dimensions and
+  evidence-linked reasons, and never outputs the final score.
+
+Policy modes:
+
+- `never`: use deterministic evidence only.
+- `auto`: assess deterministic evidence first, then run one focused FastContext
+  refinement only when Gemma asks for medium/high-priority FastContext evidence.
+- `always`: attempt one FastContext refinement before the final assessment,
+  unless `--max-evidence-rounds 0` is set.
+
+Assessment evidence is commit-pinned and stored as a validated ledger with
+content hashes. Final verdicts are conservative: non-permissive, missing, or
+unknown licenses prevent `select` even when the implementation looks useful.
 
 ## Standalone Local Exploration
 

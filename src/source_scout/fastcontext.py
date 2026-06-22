@@ -1732,8 +1732,9 @@ def _build_query(asset: dict[str, Any], task: str) -> str:
     return (
         f"{task.strip()}\n"
         f"Capability: {asset['capability']}\n"
-        "Find the smallest set of source files and line ranges that prove whether this "
-        "candidate is reusable for the task."
+        "Find the smallest set of source files and line ranges that help inspect the "
+        "implementation details for this task. Do not decide, score, or prove whether "
+        "the candidate is reusable."
     )
 
 

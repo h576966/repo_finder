@@ -80,6 +80,20 @@ def main() -> None:
     profile_parser.add_argument("--limit", type=int, default=30)
     profile_parser.add_argument("--force", action="store_true")
 
+    assess_parser = subparsers.add_parser(
+        "assess",
+        help="Assess one reusable-code candidate for a task",
+    )
+    assess_parser.add_argument("--candidate-id", required=True)
+    assess_parser.add_argument("--task", required=True)
+    assess_parser.add_argument(
+        "--fastcontext-policy",
+        choices=["auto", "always", "never"],
+        default="auto",
+    )
+    assess_parser.add_argument("--max-evidence-rounds", type=int, default=1)
+    assess_parser.add_argument("--force", action="store_true")
+
     lmstudio_parser = subparsers.add_parser("lmstudio-status", help="Check local LM Studio connectivity")
     lmstudio_parser.add_argument("--start-server", action="store_true")
     lmstudio_parser.add_argument("--smoke-test", action="store_true")
@@ -205,6 +219,28 @@ def main() -> None:
 
         result = asyncio.run(profile_repository_cards(args.limit, force=args.force))
         print(result)
+        return
+
+    if args.command == "assess":
+        if args.max_evidence_rounds < 0 or args.max_evidence_rounds > 2:
+            assess_parser.error("--max-evidence-rounds must be between 0 and 2.")
+        from .assessor import AssessorError, assess_candidate, assessment_to_jsonable
+        from .lmstudio import LMStudioError
+
+        try:
+            assessment_result = asyncio.run(
+                assess_candidate(
+                    candidate_id=args.candidate_id,
+                    task=args.task,
+                    fastcontext_policy=args.fastcontext_policy,
+                    max_evidence_rounds=args.max_evidence_rounds,
+                    force=args.force,
+                )
+            )
+        except (AssessorError, LMStudioError, OSError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(assessment_to_jsonable(assessment_result), sort_keys=True))
         return
 
     if args.command == "lmstudio-status":

@@ -539,6 +539,18 @@ def upsert_snapshot(
     return snapshot_id
 
 
+def get_snapshot(snapshot_id: str) -> dict[str, Any] | None:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM snapshots WHERE snapshot_id = ?",
+        [snapshot_id],
+    ).fetchone()
+    if row is None:
+        return None
+    columns = [str(c[0]) for c in conn.description]
+    return dict(zip(columns, row, strict=False))
+
+
 def upsert_repository_card(snapshot_id: str, card: dict[str, Any]) -> str:
     card_version = str(card.get("card_version", "repo-card-v1"))
     card_id = _hash_id(snapshot_id, card_version)
@@ -575,6 +587,48 @@ def upsert_repository_card(snapshot_id: str, card: dict[str, Any]) -> str:
         ],
     )
     return card_id
+
+
+def get_repository_card_for_snapshot(snapshot_id: str) -> dict[str, Any] | None:
+    conn = get_connection()
+    row = conn.execute(
+        """
+        SELECT
+            c.card_id,
+            c.snapshot_id,
+            c.card_version,
+            c.package_manifests,
+            c.tree_summary,
+            c.readme_excerpt,
+            c.stack_signals,
+            c.deterministic_features,
+            c.gemma_profile,
+            c.created_at,
+            s.repo_id,
+            s.commit_sha,
+            r.html_url
+        FROM repository_cards c
+        JOIN snapshots s ON s.snapshot_id = c.snapshot_id
+        JOIN repositories r ON r.repo_id = s.repo_id
+        WHERE c.snapshot_id = ?
+        ORDER BY c.created_at DESC
+        LIMIT 1
+        """,
+        [snapshot_id],
+    ).fetchone()
+    if row is None:
+        return None
+    columns = [str(c[0]) for c in conn.description]
+    data = dict(zip(columns, row, strict=False))
+    for key, default in (
+        ("package_manifests", {}),
+        ("tree_summary", {}),
+        ("stack_signals", {}),
+        ("deterministic_features", {}),
+        ("gemma_profile", None),
+    ):
+        data[key] = _json_load(data.get(key), default)
+    return data
 
 
 def list_repository_cards_for_profile(limit: int, force: bool = False) -> list[dict[str, Any]]:
@@ -1184,6 +1238,40 @@ def store_evidence_refinement(
         ],
     )
     return refinement_id
+
+
+def list_evidence_refinements(
+    asset_id: str,
+    *,
+    limit: int = 5,
+    task_signature: str | None = None,
+) -> list[dict[str, Any]]:
+    conn = get_connection()
+    where = "WHERE asset_id = ?"
+    params: list[Any] = [asset_id]
+    if task_signature is not None:
+        where += " AND task_signature = ?"
+        params.append(task_signature)
+    params.append(limit)
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM evidence_refinements
+        {where}
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+    columns = [str(c[0]) for c in conn.description]
+    refinements: list[dict[str, Any]] = []
+    for row in rows:
+        data = dict(zip(columns, row, strict=False))
+        for key in ("evidence_paths", "notes", "trajectory"):
+            loaded = _json_load(data.get(key), [])
+            data[key] = loaded if isinstance(loaded, list) else []
+        refinements.append(data)
+    return refinements
 
 
 def _json_dicts(value: str | None) -> list[dict[str, Any]]:

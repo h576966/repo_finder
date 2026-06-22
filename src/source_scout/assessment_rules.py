@@ -123,10 +123,10 @@ def recommend_verdict(
 
     if has_hard_blocker(coupling_risks):
         return VERDICT_REJECT
-    if normalized.functional_fit <= REJECT_MAX_FUNCTIONAL_FIT or reuse_score < REJECT_MAX_REUSE_SCORE:
-        return VERDICT_REJECT
     if not requirements or evidence_coverage < INSUFFICIENT_EVIDENCE_MAX_COVERAGE:
         return VERDICT_INSUFFICIENT_EVIDENCE
+    if normalized.functional_fit <= REJECT_MAX_FUNCTIONAL_FIT or reuse_score < REJECT_MAX_REUSE_SCORE:
+        return VERDICT_REJECT
     if (
         reuse_score >= SELECT_MIN_SCORE
         and confidence >= SELECT_MIN_CONFIDENCE
