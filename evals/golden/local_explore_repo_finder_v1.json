@@ -52,13 +52,13 @@
       "expected_citations": [
         {
           "path": "src/repo_finder/fastcontext.py",
-          "start_line": 171,
-          "end_line": 430,
-          "reason": "Local exploration calls the shared FastContext tool loop and structured output chat helper."
+          "start_line": 226,
+          "end_line": 520,
+          "reason": "Local exploration calls the shared FastContext tool loop and formats the local result."
         },
         {
           "path": "src/repo_finder/models.py",
-          "start_line": 175,
+          "start_line": 183,
           "end_line": 205,
           "reason": "The LocalExploreResult dataclass defines the local exploration output shape."
         }
@@ -71,9 +71,15 @@
       "expected_citations": [
         {
           "path": "src/repo_finder/fastcontext.py",
-          "start_line": 500,
-          "end_line": 780,
-          "reason": "READ, GLOB, GREP, path resolution, and skipped directory handling live here."
+          "start_line": 1294,
+          "end_line": 1455,
+          "reason": "Read, Glob, and Grep tool dispatch and implementations live here."
+        },
+        {
+          "path": "src/repo_finder/fastcontext.py",
+          "start_line": 2887,
+          "end_line": 3050,
+          "reason": "Path normalization, sandbox validation, and skipped directory handling live here."
         }
       ],
       "manual_search_terms": ["execute_tool", "read_file", "grep_paths", "_resolve_under_root"]
@@ -84,14 +90,20 @@
       "expected_citations": [
         {
           "path": "src/repo_finder/fastcontext.py",
-          "start_line": 360,
-          "end_line": 470,
-          "reason": "The FastContext chat helper attaches response_format and retries without it on failure."
+          "start_line": 648,
+          "end_line": 680,
+          "reason": "The FastContext text chat helper attaches response_format and retries without it on failure."
+        },
+        {
+          "path": "src/repo_finder/fastcontext.py",
+          "start_line": 1212,
+          "end_line": 1290,
+          "reason": "FastContext structured-output schema and robust response parsing live here."
         },
         {
           "path": "src/repo_finder/lmstudio.py",
-          "start_line": 250,
-          "end_line": 330,
+          "start_line": 276,
+          "end_line": 345,
           "reason": "The generic LM Studio chat adapter accepts response_format and parses JSON responses."
         }
       ],
@@ -141,14 +153,14 @@
       "expected_citations": [
         {
           "path": "src/repo_finder/server.py",
-          "start_line": 330,
-          "end_line": 365,
+          "start_line": 336,
+          "end_line": 360,
           "reason": "The explore_local_code MCP tool is registered as read-only here."
         },
         {
           "path": "tests/test_server.py",
-          "start_line": 100,
-          "end_line": 160,
+          "start_line": 108,
+          "end_line": 145,
           "reason": "The MCP local exploration test asserts read-only behavior and no catalog writes."
         }
       ],
@@ -186,8 +198,8 @@
       "expected_citations": [
         {
           "path": "src/repo_finder/pipeline.py",
-          "start_line": 45,
-          "end_line": 95,
+          "start_line": 48,
+          "end_line": 80,
           "reason": "Scout query construction with GitHub search qualifiers lives here."
         },
         {
@@ -205,9 +217,15 @@
       "expected_citations": [
         {
           "path": "src/repo_finder/pipeline.py",
-          "start_line": 115,
+          "start_line": 124,
+          "end_line": 148,
+          "reason": "Repository metadata qualification gates reject stale, archived, forked, template, mirror, and oversized repositories."
+        },
+        {
+          "path": "src/repo_finder/pipeline.py",
+          "start_line": 238,
           "end_line": 285,
-          "reason": "Qualification gates and snapshot inspection heuristics live here."
+          "reason": "Snapshot content gates reject docs-only, empty, lockfile-only, and generated/vendor-heavy repositories."
         }
       ],
       "manual_search_terms": ["is_template", "fork", "vendor", "docs-only", "MAX_STALE_DAYS"]

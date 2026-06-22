@@ -56,12 +56,26 @@ calling with read-only `Read`, `Glob`, and `Grep` tools, then returns file and
 line citations. Codex still reads the cited files, edits, and runs tests. If LM
 Studio or FastContext is unavailable, fall back to `rg`.
 
+FastContext output is intentionally compact. Final answers are limited to at
+most three citations across at most three files, with a target of one or two
+tight ranges. The harness prefers citation IDs from observed tool results,
+retries once when the model over-selects, and caps fallback observations so
+broad supporting ranges do not look like real success.
+
 The local exploration eval suite lives at
 `evals/golden/local_explore_repo_finder_v1.json`. It measures expected file/line
 hits, file/line precision and recall, unexpected or invalid citations, runtime,
-tool calls, and a simple manual-search proxy. Add personal repos by giving tasks
-an absolute `project_path` or an env var-expanded path such as
-`%MY_NEXTJS_REPO%`.
+tool calls, citation budget violations, and a simple manual-search proxy. The
+current cleanup baseline is:
+
+```powershell
+repo-finder eval-local-explore --suite repo-finder --max-turns 6 --label cleanup-docs-v1
+```
+
+That run passed with `21/21` completed tasks, `path_hit_rate=0.7619`,
+`line_overlap_rate=0.6190`, `average_citation_count=2.6667`, and zero invalid,
+unsupported, or over-budget citations. Add personal repos by giving tasks an
+absolute `project_path` or an env var-expanded path such as `%MY_NEXTJS_REPO%`.
 
 Generated catalog data is stored under `.repo_finder/` by default:
 

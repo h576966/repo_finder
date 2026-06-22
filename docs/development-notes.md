@@ -41,6 +41,11 @@ Useful implementation notes preserved from the old agent-specific setup.
 - Gemma is for JSON profiling/synthesis after deterministic evidence exists.
 - FastContext is for evidence refinement over read-only `READ`, `GLOB`, and
   `GREP`-style tools, not general code generation.
+- Standalone FastContext exploration is evaluated through
+  `evals/golden/local_explore_repo_finder_v1.json` and
+  `repo-finder eval-local-explore --suite repo-finder --max-turns 6`.
+- Final FastContext evidence is budgeted to at most three citations across at
+  most three files, with one or two tight ranges preferred.
 
 Local status and smoke tests:
 
