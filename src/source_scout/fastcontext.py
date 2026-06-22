@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 
-from . import catalog, lmstudio
+from . import catalog, lmstudio, path_safety
 from .constants import SKIP_DIRS
 from .models import LocalExploreResult
 
@@ -2877,39 +2877,26 @@ def _normalize_rg_path(path: str) -> str:
 
 
 def _is_safe_relative_result(root: Path, rel_path: str) -> bool:
-    try:
-        _resolve_under_root(root, rel_path)
-    except FastContextError:
-        return False
-    return True
+    return path_safety.is_safe_relative_result(
+        root,
+        rel_path,
+        extra_skip_dirs=LOCAL_EXTRA_SKIP_DIRS,
+    )
 
 
 def _resolve_under_root(root: Path, rel_path: str) -> tuple[Path, str]:
-    root_resolved = root.resolve()
-    cleaned = _normalize_workspace_reference(root_resolved, rel_path)
-    if not cleaned:
-        raise FastContextError("Path is required.")
-
-    if Path(cleaned).is_absolute():
-        candidate = Path(cleaned).resolve()
-    else:
-        parts = PurePosixPath(cleaned).parts
-        if ".." in parts:
-            raise FastContextError(f"Path escapes snapshot root: {rel_path}")
-        candidate = (root_resolved / cleaned).resolve()
-
     try:
-        relative = candidate.relative_to(root_resolved)
-    except ValueError as exc:
-        raise FastContextError(f"Path escapes snapshot root: {rel_path}") from exc
-
-    if any(part in SKIP_DIRS or part in LOCAL_EXTRA_SKIP_DIRS for part in relative.parts):
-        raise FastContextError(f"Path is under a skipped directory: {rel_path}")
-    return candidate, relative.as_posix()
+        return path_safety.resolve_under_root(
+            root,
+            rel_path,
+            extra_skip_dirs=LOCAL_EXTRA_SKIP_DIRS,
+        )
+    except path_safety.PathSafetyError as exc:
+        raise FastContextError(str(exc)) from exc
 
 
 def _relative_path(root: Path, path: Path) -> str:
-    return path.resolve().relative_to(root.resolve()).as_posix()
+    return path_safety.relative_path(root, path)
 
 
 def _normalize_workspace_reference(
@@ -2919,35 +2906,12 @@ def _normalize_workspace_reference(
     strip_line: bool = True,
     allow_glob: bool = False,
 ) -> str:
-    cleaned = value.strip().strip("`\"'").replace("\\", "/")
-    if strip_line:
-        cleaned = _strip_line_suffix(cleaned)
-    if not cleaned:
-        return ""
-    if cleaned == ".":
-        return "."
-
-    root_resolved = root.resolve()
-    root_posix = root_resolved.as_posix().rstrip("/")
-    for candidate_text in (cleaned, cleaned.lstrip("/")):
-        if candidate_text.lower() == root_posix.lower():
-            return "."
-        prefix = f"{root_posix}/"
-        if candidate_text.lower().startswith(prefix.lower()):
-            return candidate_text[len(prefix):] or "."
-
-    if not allow_glob and not _has_glob_meta(cleaned) and Path(cleaned).is_absolute():
-        try:
-            return Path(cleaned).resolve().relative_to(root_resolved).as_posix()
-        except ValueError:
-            pass
-
-    workspace_suffix = _workspace_suffix_reference(root_resolved, cleaned, allow_glob=allow_glob)
-    if workspace_suffix is not None:
-        return workspace_suffix
-    if cleaned.startswith("./"):
-        return cleaned[2:]
-    return cleaned
+    return path_safety.normalize_workspace_reference(
+        root,
+        value,
+        strip_line=strip_line,
+        allow_glob=allow_glob,
+    )
 
 
 def _workspace_suffix_reference(
@@ -2956,22 +2920,7 @@ def _workspace_suffix_reference(
     *,
     allow_glob: bool,
 ) -> str | None:
-    parts = [
-        part
-        for part in PurePosixPath(cleaned).parts
-        if part not in {"", ".", "/"}
-    ]
-    root_name = root.name.lower()
-    for index, part in enumerate(parts):
-        if part.lower() != root_name:
-            continue
-        suffix_parts = parts[index + 1:]
-        if not suffix_parts:
-            return "."
-        suffix = PurePosixPath(*suffix_parts).as_posix()
-        if index == 0 or _workspace_suffix_target_exists(root, suffix, allow_glob=allow_glob):
-            return suffix
-    return None
+    return path_safety.workspace_suffix_reference(root, cleaned, allow_glob=allow_glob)
 
 
 def _workspace_suffix_target_exists(
@@ -2980,34 +2929,18 @@ def _workspace_suffix_target_exists(
     *,
     allow_glob: bool,
 ) -> bool:
-    if not allow_glob or not _has_glob_meta(suffix):
-        return (root / suffix).exists()
-    prefix_parts: list[str] = []
-    for part in PurePosixPath(suffix).parts:
-        if _has_glob_meta(part):
-            break
-        prefix_parts.append(part)
-    if not prefix_parts:
-        return True
-    return (root / PurePosixPath(*prefix_parts).as_posix()).exists()
+    return path_safety.workspace_suffix_target_exists(root, suffix, allow_glob=allow_glob)
 
 
 def _has_glob_meta(value: str) -> bool:
-    return any(char in value for char in "*?[")
+    return path_safety.has_glob_meta(value)
 
 
 def _safe_glob_pattern(root: Path, pattern: str) -> str:
-    cleaned = _normalize_workspace_reference(
-        root.resolve(),
-        pattern,
-        strip_line=False,
-        allow_glob=True,
-    ) or "**/*"
-    if Path(cleaned).is_absolute() or cleaned.startswith("/"):
-        raise FastContextError(f"Glob pattern must be relative: {pattern}")
-    if ".." in PurePosixPath(cleaned).parts:
-        raise FastContextError(f"Glob pattern escapes snapshot root: {pattern}")
-    return cleaned
+    try:
+        return path_safety.safe_glob_pattern(root, pattern)
+    except path_safety.PathSafetyError as exc:
+        raise FastContextError(str(exc)) from exc
 
 
 def _resolve_directory(root: Path, directory: str) -> tuple[Path, str]:
@@ -3031,19 +2964,15 @@ def _resolve_search_path(root: Path, search_path: str) -> tuple[Path, str]:
 
 
 def _path_is_under(path: Path, root: Path) -> bool:
-    try:
-        path.resolve().relative_to(root.resolve())
-    except ValueError:
-        return False
-    return True
+    return path_safety.path_is_under(path, root)
 
 
 def _should_skip_path(root: Path, path: Path) -> bool:
-    try:
-        relative = path.resolve().relative_to(root.resolve())
-    except ValueError:
-        return True
-    return any(part in SKIP_DIRS or part in LOCAL_EXTRA_SKIP_DIRS for part in relative.parts)
+    return path_safety.should_skip_path(
+        root,
+        path,
+        extra_skip_dirs=LOCAL_EXTRA_SKIP_DIRS,
+    )
 
 
 def _grep_candidate_files(root: Path, file_glob: str | None) -> list[Path]:
@@ -3073,7 +3002,7 @@ def _iter_files(root: Path, file_glob: str | None = None) -> list[Path]:
 
 
 def _strip_line_suffix(path: str) -> str:
-    return re.sub(r":\d+(?:-\d+)?$", "", path)
+    return path_safety.strip_line_suffix(path)
 
 
 def _optional_int(value: Any) -> int | None:

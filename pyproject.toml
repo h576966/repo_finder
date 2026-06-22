@@ -41,3 +41,6 @@ asyncio_mode = "auto"
 markers = [
     "integration: tests that require GITHUB_TOKEN and network access",
 ]
+filterwarnings = [
+    "ignore:authlib.jose module is deprecated, please use joserfc instead.:authlib.deprecate.AuthlibDeprecationWarning:fastmcp.server.auth.providers.jwt",
+]
