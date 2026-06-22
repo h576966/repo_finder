@@ -28,8 +28,9 @@ code. Keep the full design reference in `docs/source-scout-direction.md`.
 Near-term priorities:
 
 1. Make the deterministic catalog pipeline useful end-to-end.
-2. Improve evidence quality before adding more model complexity.
-3. Add Gemma/FastContext only after baseline shortlist quality is measured.
+2. Harden task-specific assessment before adding MCP or broader product scope.
+3. Keep the role split explicit: deterministic code validates and persists,
+   FastContext scouts evidence, and Gemma assesses validated evidence.
 
 Standalone local exploration is also available through the global
 `fastcontext-local` Codex skill or `source-scout explore-local`. Use it before

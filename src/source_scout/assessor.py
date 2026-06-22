@@ -109,7 +109,11 @@ async def assess_candidate(
     if max_evidence_rounds == 0 or not _has_eligible_fastcontext_request(initial):
         return initial
 
-    existing_paths, existing_events = _existing_fastcontext_evidence(candidate_id)
+    parent_task_signature = catalog.task_signature(task)
+    existing_paths, existing_events = _existing_fastcontext_evidence(
+        candidate_id,
+        parent_task_signature,
+    )
     if existing_paths:
         context = _load_context(
             candidate_id,
@@ -238,7 +242,11 @@ async def _fastcontext_evidence_for_always(
 ) -> tuple[list[str], list[dict[str, Any]], str]:
     if max_evidence_rounds == 0:
         return [], [], "not_requested"
-    existing_paths, existing_events = _existing_fastcontext_evidence(candidate_id)
+    parent_task_signature = catalog.task_signature(task)
+    existing_paths, existing_events = _existing_fastcontext_evidence(
+        candidate_id,
+        parent_task_signature,
+    )
     context = _load_context(
         candidate_id,
         task,
@@ -328,6 +336,7 @@ async def _attempt_fastcontext_refinement(
             candidate_id=candidate_id,
             task=query,
             transport=transport,
+            task_signature_override=str(context["task_signature"]),
         )
     except Exception as exc:
         event["status"] = "failed"
@@ -347,10 +356,16 @@ async def _attempt_fastcontext_refinement(
     return evidence_paths, event
 
 
-def _existing_fastcontext_evidence(candidate_id: str) -> tuple[list[str], list[dict[str, Any]]]:
+def _existing_fastcontext_evidence(
+    candidate_id: str,
+    task_signature: str,
+) -> tuple[list[str], list[dict[str, Any]]]:
     evidence_paths: list[str] = []
     events: list[dict[str, Any]] = []
-    for refinement in catalog.list_evidence_refinements(candidate_id):
+    for refinement in catalog.list_evidence_refinements(
+        candidate_id,
+        task_signature=task_signature,
+    ):
         paths = [str(path) for path in refinement.get("evidence_paths", [])]
         evidence_paths.extend(paths)
         events.append(
@@ -547,7 +562,8 @@ def _assessment_messages(context: Mapping[str, Any]) -> list[dict[str, str]]:
                 '  "coupling_risks": [{"risk": "string", "severity": "low|medium|high", '
                 '"evidence_ids": ["E_<hash>"]}],\n'
                 '  "blockers": [{"type": "license|missing_functionality|unsupported_stack|'
-                'excessive_coupling|other", "text": "string", "evidence_ids": []}],\n'
+                'excessive_coupling|other", "severity": "low|medium|high", '
+                '"text": "string", "evidence_ids": []}],\n'
                 '  "missing_evidence": [{"question": "string", "preferred_retriever": '
                 '"deterministic|fastcontext", "priority": "low|medium|high"}],\n'
                 '  "needs_fastcontext": false\n'
@@ -715,6 +731,7 @@ def _normalize_requirements(
             RequirementAssessment(
                 requirement=requirement,
                 satisfied=status == "satisfied",
+                status=status,
                 evidence_paths=evidence_paths,
                 notes=[f"status: {status}"],
             )
@@ -795,16 +812,37 @@ def _normalize_blockers(
             errors.append(f"Invalid blocker type: {blocker_type}")
             blocker_type = "other"
         text = _string(item.get("text")).strip()
+        severity = _blocker_severity(blocker_type, item.get("severity"))
         evidence_paths = _evidence_paths(item.get("evidence_ids"), evidence_id_map, errors)
+        hard_blocker = _is_hard_blocker(blocker_type, severity, evidence_paths)
         blockers.append(
             CouplingRisk(
                 risk=f"Blocker ({blocker_type}): {text}",
-                severity="high",
+                severity=severity,
                 evidence_paths=evidence_paths,
-                hard_blocker=True,
+                hard_blocker=hard_blocker,
             )
         )
     return blockers
+
+
+def _blocker_severity(blocker_type: str, raw_severity: Any) -> str:
+    severity = _string(raw_severity)
+    if severity in ALLOWED_RISK_SEVERITIES:
+        return severity
+    if blocker_type in {"missing_functionality", "unsupported_stack", "excessive_coupling"}:
+        return "high"
+    return "medium"
+
+
+def _is_hard_blocker(blocker_type: str, severity: str, evidence_paths: Sequence[str]) -> bool:
+    if blocker_type == "license":
+        return False
+    if blocker_type in {"missing_functionality", "unsupported_stack", "excessive_coupling"}:
+        return severity == "high" and bool(evidence_paths)
+    if blocker_type == "other":
+        return severity == "high" and bool(evidence_paths)
+    return False
 
 
 def _normalize_missing_evidence(raw: Any, errors: list[str]) -> list[MissingEvidenceRequest]:
@@ -865,8 +903,8 @@ def _persist_assessment(
         fastcontext_policy=str(context["fastcontext_policy"]),
         fastcontext_status=str(context["fastcontext_status"]),
         license_status=str(context["license_status"]),
-        recommended_verdict=score.recommended_verdict,
-        final_verdict=score.recommended_verdict,
+        recommended_verdict=str(normalized["model_recommended_verdict"]),
+        final_verdict=score.final_verdict,
         reuse_score=round(score.reuse_score, 4),
         model_confidence=round(score.model_confidence, 4),
         confidence=round(score.confidence, 4),

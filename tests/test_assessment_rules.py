@@ -8,11 +8,13 @@ def _req(
     requirement: str,
     *,
     satisfied: bool = True,
+    status: str = "",
     evidence_paths: list[str] | None = None,
 ) -> RequirementAssessment:
     return RequirementAssessment(
         requirement=requirement,
         satisfied=satisfied,
+        status=status,
         evidence_paths=evidence_paths or [],
     )
 
@@ -40,15 +42,16 @@ def test_reuse_score_uses_exact_formula_without_confidence_multiplier() -> None:
     )
 
 
-def test_requirement_coverage_counts_satisfied_requirements_with_evidence() -> None:
+def test_requirement_coverage_counts_non_unknown_requirements_with_evidence() -> None:
     requirements = [
         _req("covered", evidence_paths=["src/a.ts:1-3"]),
         _req("claimed only"),
         _req("negative evidence", satisfied=False, evidence_paths=["src/b.ts:4-8"]),
+        _req("unknown evidence ignored", satisfied=False, status="unknown", evidence_paths=["src/c.ts:1-2"]),
     ]
 
-    assert assessment_rules.requirement_counts(requirements) == (3, 2, 1)
-    assert assessment_rules.calculate_evidence_coverage(requirements) == pytest.approx(1 / 3)
+    assert assessment_rules.requirement_counts(requirements) == (4, 2, 2)
+    assert assessment_rules.calculate_evidence_coverage(requirements) == pytest.approx(0.5)
 
 
 def test_confidence_is_capped_by_evidence_coverage() -> None:
@@ -121,4 +124,19 @@ def test_verdicts_fail_closed_for_insufficient_evidence_and_reject_blockers() ->
             coupling_risks=[CouplingRisk(risk="requires app-specific backend", hard_blocker=True)],
         )
         == assessment_rules.VERDICT_REJECT
+    )
+
+
+def test_severe_risk_without_evidence_is_not_a_hard_blocker() -> None:
+    assert not assessment_rules.has_hard_blocker(
+        [CouplingRisk(risk="unsupported stack", severity="critical")]
+    )
+    assert assessment_rules.has_hard_blocker(
+        [
+            CouplingRisk(
+                risk="unsupported stack",
+                severity="critical",
+                evidence_paths=["src/a.ts:1-3"],
+            )
+        ]
     )

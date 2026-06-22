@@ -171,6 +171,7 @@ async def refine_candidate(
     max_turns: int = DEFAULT_MAX_TURNS,
     transport: httpx.AsyncBaseTransport | None = None,
     validate_model: bool = True,
+    task_signature_override: str | None = None,
 ) -> dict[str, Any]:
     if not task.strip():
         raise FastContextError("task is required.")
@@ -184,7 +185,8 @@ async def refine_candidate(
     if not snapshot_root.exists() or not snapshot_root.is_dir():
         raise FastContextError(f"Snapshot path does not exist: {snapshot_root}")
 
-    task_sig = catalog.task_signature(task)
+    query_sig = catalog.task_signature(task)
+    task_sig = task_signature_override or query_sig
     query = _build_query(asset, task)
 
     try:
@@ -203,6 +205,7 @@ async def refine_candidate(
             asset=asset,
             candidate_id=candidate_id,
             task_signature=task_sig,
+            query_signature=query_sig,
             model_id=config.fastcontext_model,
             query=query,
             evidence_paths=loop_result.evidence_paths,
@@ -213,7 +216,12 @@ async def refine_candidate(
         catalog.record_analysis_run(
             "fastcontext-refine",
             "failed",
-            {"candidate_id": candidate_id, "task_signature": task_sig, "error": str(exc)},
+            {
+                "candidate_id": candidate_id,
+                "task_signature": task_sig,
+                "query_signature": query_sig,
+                "error": str(exc),
+            },
             repo_id=str(asset["repo_id"]),
             snapshot_id=str(asset["snapshot_id"]),
             model_id=config.fastcontext_model,
@@ -2090,6 +2098,7 @@ def _store_refinement(
     asset: dict[str, Any],
     candidate_id: str,
     task_signature: str,
+    query_signature: str,
     model_id: str,
     query: str,
     evidence_paths: list[str],
@@ -2100,7 +2109,8 @@ def _store_refinement(
         asset_id=candidate_id,
         repo_id=str(asset["repo_id"]),
         snapshot_id=str(asset["snapshot_id"]),
-        task_signature=task_signature,
+        task_signature=query_signature,
+        parent_task_signature=task_signature,
         capability=str(asset["capability"]),
         model_id=model_id,
         prompt_version=PROMPT_VERSION,
@@ -2116,6 +2126,7 @@ def _store_refinement(
         {
             "candidate_id": candidate_id,
             "task_signature": task_signature,
+            "query_signature": query_signature,
             "schema_version": SCHEMA_VERSION,
             "refinement_id": refinement_id,
             "evidence_count": len(evidence_paths),
@@ -2129,6 +2140,7 @@ def _store_refinement(
     return {
         "candidate_id": candidate_id,
         "task_signature": task_signature,
+        "query_signature": query_signature,
         "repo_id": asset["repo_id"],
         "snapshot_id": asset["snapshot_id"],
         "capability": asset["capability"],

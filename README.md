@@ -56,7 +56,12 @@ Responsibilities stay split:
 - FastContext only scouts for additional file/line evidence. It never scores or
   decides reusability.
 - Gemma interprets the validated evidence for the task, returns dimensions and
-  evidence-linked reasons, and never outputs the final score.
+  evidence-linked reasons, and a model `recommended_verdict`. It never outputs
+  the final score.
+
+`recommended_verdict` is Gemma's model recommendation. `final_verdict` and
+`reuse_score` are deterministic Source Scout outputs after evidence coverage,
+blocker, and license gates are applied.
 
 Policy modes:
 

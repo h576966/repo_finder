@@ -191,8 +191,10 @@ async def test_assess_candidate_normalizes_valid_response_and_records_analysis(
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
     assert result.final_verdict == assessment_rules.VERDICT_SELECT
+    assert result.recommended_verdict == assessment_rules.VERDICT_SELECT
     assert result.reuse_score > 0.9
     assert result.confidence == 0.95
+    assert result.requirements[0].status == "satisfied"
     assert result.requirements[0].evidence_paths == ["src/app/api/route.ts:1-4"]
     assert result.reasons[0].reason == "Route handler is compact."
     assert result.adaptation_steps[0].source_paths == ["src/app/api/route.ts"]
@@ -320,7 +322,32 @@ async def test_assess_candidate_score_and_verdict_are_not_controlled_by_gemma(
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
     assert result.validation_notes[-1] == "model_recommended_verdict: select"
+    assert result.recommended_verdict == assessment_rules.VERDICT_SELECT
     assert result.final_verdict == assessment_rules.VERDICT_REJECT
+
+
+@pytest.mark.asyncio
+async def test_model_verdict_is_stored_separately_from_final_verdict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = "Assess reusable route handler"
+    candidate_id = _candidate(tmp_path)
+    evidence_id = _first_evidence_id(candidate_id, task)
+
+    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return _valid_response(evidence_id, recommended_verdict="reject")
+
+    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+
+    result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
+
+    assert result.recommended_verdict == assessment_rules.VERDICT_REJECT
+    assert result.final_verdict == assessment_rules.VERDICT_SELECT
+    stored = catalog.get_reuse_assessment(result.assessment_id)
+    assert stored is not None
+    assert stored.recommended_verdict == assessment_rules.VERDICT_REJECT
+    assert stored.final_verdict == assessment_rules.VERDICT_SELECT
 
 
 @pytest.mark.asyncio
@@ -340,7 +367,134 @@ async def test_assess_candidate_license_gate_prevents_select(
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
     assert result.license_status == assessment_rules.LICENSE_MISSING
+    assert result.recommended_verdict == assessment_rules.VERDICT_SELECT
     assert result.final_verdict == assessment_rules.VERDICT_INSPECT
+
+
+@pytest.mark.asyncio
+async def test_requirement_status_is_preserved_and_counts_are_separate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = "Assess reusable route handler"
+    candidate_id = _candidate(tmp_path)
+    evidence_id = _first_evidence_id(candidate_id, task)
+
+    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return _valid_response(
+            evidence_id,
+            requirement_assessments=[
+                {
+                    "requirement": "Route handler exists",
+                    "status": "partial",
+                    "evidence_ids": [evidence_id],
+                },
+                {
+                    "requirement": "Unknown auth integration",
+                    "status": "unknown",
+                    "evidence_ids": [],
+                },
+            ],
+        )
+
+    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+
+    result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
+
+    assert [item.status for item in result.requirements] == ["partial", "unknown"]
+    assert result.satisfied_requirement_count == 0
+    assert result.evidence_requirement_count == 1
+    assert result.evidence_coverage == 0.5
+
+
+@pytest.mark.asyncio
+async def test_license_blocker_is_left_to_deterministic_license_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = "Assess reusable route handler"
+    candidate_id = _candidate(tmp_path)
+    evidence_id = _first_evidence_id(candidate_id, task)
+
+    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return _valid_response(
+            evidence_id,
+            blockers=[
+                {
+                    "type": "license",
+                    "severity": "high",
+                    "text": "Review license terms manually.",
+                    "evidence_ids": [evidence_id],
+                }
+            ],
+        )
+
+    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+
+    result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
+
+    assert result.final_verdict == assessment_rules.VERDICT_SELECT
+    assert result.coupling_risks[-1].hard_blocker is False
+
+
+@pytest.mark.asyncio
+async def test_high_evidence_backed_missing_functionality_is_hard_blocker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = "Assess reusable route handler"
+    candidate_id = _candidate(tmp_path)
+    evidence_id = _first_evidence_id(candidate_id, task)
+
+    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return _valid_response(
+            evidence_id,
+            blockers=[
+                {
+                    "type": "missing_functionality",
+                    "severity": "high",
+                    "text": "The handler lacks the requested validation flow.",
+                    "evidence_ids": [evidence_id],
+                }
+            ],
+        )
+
+    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+
+    result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
+
+    assert result.final_verdict == assessment_rules.VERDICT_REJECT
+    assert result.coupling_risks[-1].hard_blocker is True
+
+
+@pytest.mark.asyncio
+async def test_other_blocker_without_evidence_is_not_hard_blocker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = "Assess reusable route handler"
+    candidate_id = _candidate(tmp_path)
+    evidence_id = _first_evidence_id(candidate_id, task)
+
+    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return _valid_response(
+            evidence_id,
+            blockers=[
+                {
+                    "type": "other",
+                    "severity": "high",
+                    "text": "Looks unusual but no source evidence was cited.",
+                    "evidence_ids": [],
+                }
+            ],
+        )
+
+    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+
+    result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
+
+    assert result.final_verdict == assessment_rules.VERDICT_SELECT
+    assert result.coupling_risks[-1].hard_blocker is False
 
 
 @pytest.mark.asyncio
@@ -495,6 +649,7 @@ async def test_auto_merges_successful_fastcontext_evidence_and_reassesses(
         nonlocal refine_calls
         refine_calls += 1
         assert "Do not decide, score, prove, or reject reusability" in kwargs["task"]
+        assert kwargs["task_signature_override"] == catalog.task_signature(task)
         return {
             "refinement_id": "ref-1",
             "analysis_run_id": "run-1",
@@ -515,6 +670,64 @@ async def test_auto_merges_successful_fastcontext_evidence_and_reassesses(
         "FastContext refinement completed: refinement_id=ref-1" in note
         for note in result.validation_notes
     )
+
+
+@pytest.mark.asyncio
+async def test_auto_does_not_reuse_fastcontext_evidence_from_another_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = "Assess reusable route handler"
+    other_task = "Assess reusable auth middleware"
+    candidate_id = _candidate(tmp_path)
+    catalog.store_evidence_refinement(
+        asset_id=candidate_id,
+        repo_id="owner/repo",
+        snapshot_id=str(catalog.get_asset_detail(candidate_id)["snapshot_id"]),
+        task_signature=catalog.task_signature(other_task),
+        capability="route-handlers",
+        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        prompt_version="fastcontext-refine-v1",
+        schema_version="fastcontext-evidence-v1",
+        query="other task focused query",
+        evidence_paths=["src/lib/schema.ts:1-2"],
+        notes=[],
+        trajectory=[],
+    )
+    chat_calls = 0
+    refine_calls = 0
+
+    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal chat_calls
+        chat_calls += 1
+        ids = _allowed_ids(kwargs["messages"])
+        if chat_calls == 1:
+            return _valid_response(
+                ids[0],
+                missing_evidence=_missing_fastcontext("high"),
+                needs_fastcontext=True,
+            )
+        return _valid_response(ids[-1])
+
+    async def fake_refine(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal refine_calls
+        refine_calls += 1
+        assert kwargs["task_signature_override"] == catalog.task_signature(task)
+        return {
+            "refinement_id": "ref-new",
+            "analysis_run_id": "run-new",
+            "evidence_paths": ["src/lib/schema.ts:1-2"],
+            "notes": [],
+        }
+
+    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(fastcontext, "refine_candidate", fake_refine)
+
+    result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="auto")
+
+    assert chat_calls == 2
+    assert refine_calls == 1
+    assert result.fastcontext_status == "completed"
 
 
 @pytest.mark.asyncio

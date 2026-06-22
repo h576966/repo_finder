@@ -42,7 +42,7 @@ class AssessmentScore:
     requirement_count: int
     satisfied_requirement_count: int
     evidence_requirement_count: int
-    recommended_verdict: str
+    final_verdict: str
 
 
 def clamp_dimension_score(value: float) -> float:
@@ -65,9 +65,13 @@ def requirement_counts(
     requirements: Sequence[RequirementAssessment],
 ) -> tuple[int, int, int]:
     requirement_count = len(requirements)
-    satisfied_requirement_count = sum(1 for item in requirements if item.satisfied)
+    satisfied_requirement_count = sum(
+        1 for item in requirements if _requirement_status(item) == "satisfied"
+    )
     evidence_requirement_count = sum(
-        1 for item in requirements if item.satisfied and bool(item.evidence_paths)
+        1
+        for item in requirements
+        if _requirement_status(item) != "unknown" and bool(item.evidence_paths)
     )
     return requirement_count, satisfied_requirement_count, evidence_requirement_count
 
@@ -104,9 +108,20 @@ def calculate_reuse_score(
 
 def has_hard_blocker(coupling_risks: Sequence[CouplingRisk]) -> bool:
     return any(
-        risk.hard_blocker or risk.severity.lower() in {"blocker", "critical"}
+        risk.hard_blocker
+        or (
+            risk.severity.lower() in {"blocker", "critical"}
+            and bool(risk.evidence_paths)
+        )
         for risk in coupling_risks
     )
+
+
+def _requirement_status(requirement: RequirementAssessment) -> str:
+    status = requirement.status.strip().lower()
+    if status in {"satisfied", "partial", "unsatisfied", "unknown"}:
+        return status
+    return "satisfied" if requirement.satisfied else "unsatisfied"
 
 
 def recommend_verdict(
@@ -156,7 +171,7 @@ def score_assessment(
         requirement_count=requirement_count,
         satisfied_requirement_count=satisfied_requirement_count,
         evidence_requirement_count=evidence_requirement_count,
-        recommended_verdict=recommend_verdict(
+        final_verdict=recommend_verdict(
             dimensions,
             requirements,
             model_confidence,

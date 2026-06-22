@@ -208,8 +208,13 @@ class AssessmentDimensions:
 class RequirementAssessment:
     requirement: str
     satisfied: bool
+    status: str = ""
     evidence_paths: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.status:
+            self.status = "satisfied" if self.satisfied else "unsatisfied"
 
 
 @dataclass

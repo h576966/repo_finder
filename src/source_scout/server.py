@@ -28,7 +28,7 @@ from .models import (
 )
 from .urls import parse_owner_repo
 
-mcp = FastMCP("RepoFinder")
+mcp = FastMCP("SourceScout")
 
 
 def _parse_url(url_or_slug: str) -> tuple[str, str]:

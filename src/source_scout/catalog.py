@@ -1195,6 +1195,7 @@ def store_evidence_refinement(
     repo_id: str,
     snapshot_id: str,
     task_signature: str,
+    parent_task_signature: str | None = None,
     capability: str,
     model_id: str,
     prompt_version: str,
@@ -1204,9 +1205,10 @@ def store_evidence_refinement(
     notes: list[str],
     trajectory: list[dict[str, Any]],
 ) -> str:
+    stored_task_signature = parent_task_signature or task_signature
     refinement_id = _hash_id(
         asset_id,
-        task_signature,
+        stored_task_signature,
         model_id,
         prompt_version,
         _now_iso(),
@@ -1225,7 +1227,7 @@ def store_evidence_refinement(
             asset_id,
             repo_id,
             snapshot_id,
-            task_signature,
+            stored_task_signature,
             capability,
             model_id,
             prompt_version,
@@ -1322,6 +1324,12 @@ def _reuse_assessment_from_row(data: dict[str, Any]) -> ReuseAssessmentResult:
             RequirementAssessment(
                 requirement=str(item.get("requirement", "")),
                 satisfied=bool(item.get("satisfied", False)),
+                status=str(
+                    item.get(
+                        "status",
+                        "satisfied" if bool(item.get("satisfied", False)) else "unsatisfied",
+                    )
+                ),
                 evidence_paths=[str(path) for path in item.get("evidence_paths", [])],
                 notes=[str(note) for note in item.get("notes", [])],
             )

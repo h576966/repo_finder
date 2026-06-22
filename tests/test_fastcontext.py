@@ -1682,6 +1682,91 @@ async def test_refine_candidate_stores_fastcontext_evidence(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_refine_candidate_stores_parent_task_signature(tmp_path: Path) -> None:
+    candidate_id = _create_candidate(tmp_path)
+    parent_signature = "parent-task-123"
+    chat_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal chat_calls
+        if request.url.path == "/v1/models":
+            return httpx.Response(
+                200,
+                json={"data": [{"id": lmstudio.DEFAULT_FASTCONTEXT_MODEL}]},
+            )
+        assert request.url.path == "/v1/chat/completions"
+        chat_calls += 1
+        if chat_calls == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "tool_calls": [
+                                            {
+                                                "tool": "READ",
+                                                "args": {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 1,
+                                                    "limit": 20,
+                                                },
+                                            }
+                                        ]
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+        payload = json.loads(request.content)
+        assert "src/components/data-table.tsx" in _payload_message_text(payload)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "final_answer": {
+                                        "evidence": [
+                                            {
+                                                "path": "src/components/data-table.tsx",
+                                                "start_line": 1,
+                                                "end_line": 4,
+                                                "reason": "TanStack table implementation",
+                                            }
+                                        ],
+                                        "notes": [],
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await fastcontext.refine_candidate(
+        candidate_id,
+        "Focused FastContext query text",
+        transport=httpx.MockTransport(handler),
+        task_signature_override=parent_signature,
+    )
+
+    rows = catalog.get_connection().execute(
+        "SELECT task_signature FROM evidence_refinements"
+    ).fetchall()
+    assert result["task_signature"] == parent_signature
+    assert result["query_signature"] == catalog.task_signature("Focused FastContext query text")
+    assert rows == [(parent_signature,)]
+
+
+@pytest.mark.asyncio
 async def test_explore_local_project_returns_ephemeral_citations(tmp_path: Path) -> None:
     root = tmp_path / "local"
     root.mkdir()

@@ -38,11 +38,13 @@ def _assessment(
         RequirementAssessment(
             requirement="has reusable route handler",
             satisfied=True,
+            status="satisfied",
             evidence_paths=["src/app/api/users/route.ts:1-60"],
         ),
         RequirementAssessment(
             requirement="uses zod validation",
             satisfied=False,
+            status="unknown",
             evidence_paths=[],
             notes=["No schema evidence found."],
         ),
@@ -68,7 +70,7 @@ def _assessment(
         fastcontext_policy="required",
         fastcontext_status="completed",
         license_status=assessment_rules.LICENSE_REVIEW_REQUIRED,
-        recommended_verdict=score.recommended_verdict,
+        recommended_verdict=assessment_rules.VERDICT_SELECT,
         final_verdict=final_verdict,
         reuse_score=score.reuse_score,
         model_confidence=score.model_confidence,
@@ -163,6 +165,8 @@ def test_store_and_get_reuse_assessment_round_trip() -> None:
     assert stored.task_signature == assessment.task_signature
     assert stored.dimensions.functional_fit == assessment.dimensions.functional_fit
     assert stored.requirements[0].evidence_paths == ["src/app/api/users/route.ts:1-60"]
+    assert stored.requirements[1].status == "unknown"
+    assert stored.recommended_verdict == assessment_rules.VERDICT_SELECT
     assert stored.reasons[0].reason.startswith("Route handler")
     assert stored.adaptation_steps[0].target_hint == "app/api/users/route.ts"
     assert stored.coupling_risks[0].mitigation == "Replace with target app database helper."
