@@ -325,10 +325,16 @@
       "task": "Find tests that prove local exploration is read-only, validates citations, and supports CLI invocation.",
       "expected_citations": [
         {
-          "path": "tests/test_fastcontext.py",
-          "start_line": 250,
-          "end_line": 760,
-          "reason": "FastContext local exploration, fallback, status, refinement, and CLI tests live here."
+          "path": "tests/test_fastcontext_local_explore.py",
+          "start_line": 1,
+          "end_line": 280,
+          "reason": "FastContext local exploration read-only behavior, citation validation recovery, and trace writing tests live here."
+        },
+        {
+          "path": "tests/test_fastcontext_cli.py",
+          "start_line": 1,
+          "end_line": 260,
+          "reason": "FastContext status, refinement, and explore-local CLI tests live here."
         },
         {
           "path": "tests/test_local_explore_eval.py",
