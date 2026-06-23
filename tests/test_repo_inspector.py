@@ -1,3 +1,4 @@
+import pytest
 
 from source_scout.models import RepoStructure
 from source_scout.repo_inspector import (
@@ -6,6 +7,8 @@ from source_scout.repo_inspector import (
     _extract_key_files,
 )
 from source_scout.urls import parse_owner_repo
+
+pytestmark = pytest.mark.legacy
 
 
 def testparse_owner_repo_slug():

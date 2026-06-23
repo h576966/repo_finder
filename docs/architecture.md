@@ -150,8 +150,9 @@ server.py
 
 **Running tests:**
 ```bash
-pytest tests/ -v                     # unit tests only
-pytest tests/ -v -m "integration"    # integration tests (needs GITHUB_TOKEN)
+pytest -q                    # current Source Scout path; excludes integration and legacy
+pytest -q -m "integration"   # live GitHub tests (needs GITHUB_TOKEN)
+pytest -q -m "legacy"        # hidden/debug generic repository tools
 ```
 
 ## Concurrency

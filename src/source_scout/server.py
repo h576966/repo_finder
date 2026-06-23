@@ -1,13 +1,23 @@
 import json
 import os
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from . import bundles, cache, catalog, fastcontext, lmstudio, pattern_extractor, ranker, repo_inspector
+from . import (
+    assessor,
+    bundles,
+    cache,
+    catalog,
+    fastcontext,
+    lmstudio,
+    pattern_extractor,
+    ranker,
+    repo_inspector,
+)
 from .constants import _now_iso
 from .github_client import get_client
 from .models import (
@@ -359,6 +369,53 @@ async def explore_local_code(
         )
     except (fastcontext.FastContextError, lmstudio.LMStudioError, OSError) as exc:
         raise ToolError(str(exc))
+
+
+@mcp.tool(
+    annotations={"readOnlyHint": True},
+)
+async def assess_reusable_code(
+    candidate_id: Annotated[
+        str,
+        Field(description="Candidate id returned by find_reusable_code"),
+    ],
+    task: Annotated[
+        str,
+        Field(description="Natural language reuse task to assess the candidate against"),
+    ],
+    fastcontext_policy: Annotated[
+        Literal["auto", "always", "never"],
+        Field(description="One of: auto, always, never"),
+    ] = "auto",
+    max_evidence_rounds: Annotated[
+        int,
+        Field(description="Maximum focused FastContext evidence rounds", ge=0, le=2),
+    ] = 1,
+    force: Annotated[
+        bool,
+        Field(description="Bypass cached assessments and force a fresh assessment"),
+    ] = False,
+) -> dict[str, Any]:
+    if not candidate_id.strip():
+        raise ToolError("candidate_id is required.")
+    if not task.strip():
+        raise ToolError("Task description is required.")
+    if fastcontext_policy not in {"auto", "always", "never"}:
+        raise ToolError("fastcontext_policy must be one of: auto, always, never.")
+    if max_evidence_rounds < 0 or max_evidence_rounds > 2:
+        raise ToolError("max_evidence_rounds must be between 0 and 2.")
+
+    try:
+        result = await assessor.assess_candidate(
+            candidate_id=candidate_id,
+            task=task,
+            fastcontext_policy=fastcontext_policy,
+            max_evidence_rounds=max_evidence_rounds,
+            force=force,
+        )
+    except (assessor.AssessorError, lmstudio.LMStudioError, OSError, ValueError) as exc:
+        raise ToolError(str(exc))
+    return assessor.assessment_to_jsonable(result)
 
 
 @mcp.tool()

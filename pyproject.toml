@@ -38,8 +38,10 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = ["-m", "not integration and not legacy"]
 markers = [
     "integration: tests that require GITHUB_TOKEN and network access",
+    "legacy: tests for hidden/debug generic repository tools retained for occasional checks",
 ]
 filterwarnings = [
     "ignore:authlib.jose module is deprecated, please use joserfc instead.:authlib.deprecate.AuthlibDeprecationWarning:fastmcp.server.auth.providers.jwt",

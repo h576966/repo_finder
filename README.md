@@ -146,6 +146,7 @@ Default tools:
 | Tool | Purpose |
 |------|---------|
 | `find_reusable_code(task, project_path=None, max_repos=3)` | Return shortlisted reusable candidates, each with `task_signature`, evidence paths, and adaptation notes. |
+| `assess_reusable_code(candidate_id, task, fastcontext_policy="auto", max_evidence_rounds=1, force=False)` | Assess one candidate for a task using the same structured result as `source-scout assess`. |
 | `get_source_bundle(candidate_id, task_signature)` | Copy recommended files/config into a local bundle and write a manifest tied to the original task. |
 | `record_reuse_outcome(candidate_id, task_signature, outcome, notes=None)` | Track selected, integrated, or rejected candidates against the original task. |
 | `explore_local_code(task, project_path, max_turns=6)` | Use FastContext to find relevant files and line ranges in a local project without catalog writes. |
@@ -247,6 +248,15 @@ Optional LM Studio MCP config:
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m mypy src
 .\.venv\Scripts\python.exe -m pytest -q
+```
+
+`pytest -q` runs the current Source Scout product path and excludes live
+GitHub integration tests plus legacy generic-repo tests by default. Run those
+only when needed:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -m integration
+.\.venv\Scripts\python.exe -m pytest -q -m legacy
 ```
 
 Corpus quality check:

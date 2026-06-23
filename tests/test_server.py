@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -142,6 +143,93 @@ async def test_explore_local_code_tool_is_read_only_and_ephemeral(monkeypatch, t
     assert result.evidence_paths == ["src/source_scout/server.py:1-20"]
     assert catalog.get_connection().execute("SELECT COUNT(*) FROM reuse_outcomes").fetchone()[0] == 0
     assert catalog.get_connection().execute("SELECT COUNT(*) FROM analysis_runs").fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_assess_reusable_code_tool_is_registered_read_only_and_returns_cli_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class Result:
+        candidate_id = "asset-1"
+        final_verdict = "select"
+        reuse_score = 0.91
+
+    async def fake_assess_candidate(**kwargs: Any) -> Result:
+        calls.append(kwargs)
+        return Result()
+
+    monkeypatch.setattr(server.assessor, "assess_candidate", fake_assess_candidate)
+    monkeypatch.setattr(
+        server.assessor,
+        "assessment_to_jsonable",
+        lambda result: {
+            "candidate_id": result.candidate_id,
+            "final_verdict": result.final_verdict,
+            "reuse_score": result.reuse_score,
+        },
+    )
+
+    tools = await server.mcp.get_tools()
+    assert "assess_reusable_code" in tools
+    assert tools["assess_reusable_code"].annotations.readOnlyHint is True
+
+    result = await server.assess_reusable_code.fn(
+        "asset-1",
+        "Find a reusable route handler",
+        fastcontext_policy="never",
+        max_evidence_rounds=0,
+        force=True,
+    )
+
+    assert result == {
+        "candidate_id": "asset-1",
+        "final_verdict": "select",
+        "reuse_score": 0.91,
+    }
+    assert calls == [
+        {
+            "candidate_id": "asset-1",
+            "task": "Find a reusable route handler",
+            "fastcontext_policy": "never",
+            "max_evidence_rounds": 0,
+            "force": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_assess_reusable_code_validates_task_policy_and_round_limit() -> None:
+    with pytest.raises(ToolError, match="Task description is required"):
+        await server.assess_reusable_code.fn("asset-1", "")
+
+    with pytest.raises(ToolError, match="fastcontext_policy must be one of"):
+        await server.assess_reusable_code.fn(
+            "asset-1",
+            "Find reusable code",
+            fastcontext_policy="sometimes",
+        )
+
+    with pytest.raises(ToolError, match="max_evidence_rounds must be between 0 and 2"):
+        await server.assess_reusable_code.fn(
+            "asset-1",
+            "Find reusable code",
+            max_evidence_rounds=3,
+        )
+
+
+@pytest.mark.asyncio
+async def test_assess_reusable_code_converts_assessor_errors_to_tool_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_assess_candidate(**kwargs: Any) -> object:
+        raise server.assessor.AssessorError("Unknown candidate_id: missing")
+
+    monkeypatch.setattr(server.assessor, "assess_candidate", fake_assess_candidate)
+
+    with pytest.raises(ToolError, match="Unknown candidate_id"):
+        await server.assess_reusable_code.fn("missing", "Find reusable code")
 
 
 def _create_reusable_asset(tmp_path: Path) -> str:

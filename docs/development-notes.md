@@ -57,6 +57,20 @@ Invoke-RestMethod http://127.0.0.1:1234/v1/models
 source-scout lmstudio-status --smoke-test
 ```
 
+Default test runs focus on the current catalog, assessment, LM Studio, and
+FastContext paths:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+Legacy generic repository tools and live GitHub integration checks are opt-in:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -m legacy
+.\.venv\Scripts\python.exe -m pytest -q -m integration
+```
+
 Current local model defaults:
 
 ```text

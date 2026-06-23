@@ -1,9 +1,13 @@
 from unittest.mock import patch
 
+import pytest
+
 from source_scout import pattern_extractor
 from source_scout.framework_detector import collect_all_files, detect_framework, read_file
 from source_scout.language_patterns import identify_language_patterns
 from source_scout.models import DeepPatternReport
+
+pytestmark = pytest.mark.legacy
 
 
 def test_detect_framework_fastapi(tmp_path):

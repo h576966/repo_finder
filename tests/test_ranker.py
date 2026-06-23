@@ -1,3 +1,5 @@
+import pytest
+
 from source_scout.ranker import (
     build_repo_summaries,
     rank_repos,
@@ -8,6 +10,8 @@ from source_scout.ranker import (
     score_repo,
     score_structure,
 )
+
+pytestmark = pytest.mark.legacy
 
 
 def test_score_relevance_exact_match():

@@ -1,9 +1,13 @@
+import pytest
+
 from source_scout.pattern_extractor import (
     _SECTION_RE,
     _matches_focus,
     distill_patterns,
     parse_readme_sections,
 )
+
+pytestmark = pytest.mark.legacy
 
 
 def test_parse_readme_sections():
