@@ -525,13 +525,6 @@ def _metrics(task_reports: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "fastcontext_error_count": sum(
             1 for task in task_reports if str(task.get("fastcontext_status", "")).startswith("failed")
         ),
-        "license_gate_prevented_select_count": sum(
-            1
-            for task in task_reports
-            if task.get("recommended_verdict") == assessment_rules.VERDICT_SELECT
-            and task.get("final_verdict") != assessment_rules.VERDICT_SELECT
-            and task.get("license_status") != assessment_rules.LICENSE_PERMISSIVE_DETECTED
-        ),
         "final_select_count": final_counts[assessment_rules.VERDICT_SELECT],
         "final_inspect_count": final_counts[assessment_rules.VERDICT_INSPECT],
         "final_reject_count": final_counts[assessment_rules.VERDICT_REJECT],
@@ -587,11 +580,6 @@ def _threshold_notes(metrics: Mapping[str, Any]) -> list[str]:
     notes = [
         "This suite uses mocked Gemma/FastContext responses; use it for deterministic assessor calibration.",
     ]
-    if int(metrics["license_gate_prevented_select_count"]):
-        notes.append(
-            "License-gated inspect verdicts are expected when Gemma recommends select "
-            "on unknown/missing licenses."
-        )
     if int(metrics["fastcontext_error_count"]):
         notes.append(
             "FastContext error cases should still complete when deterministic evidence is available."

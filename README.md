@@ -53,7 +53,7 @@ source-scout assess --candidate-id <asset_id> --task "Find a reusable route hand
 Responsibilities stay split:
 
 - Deterministic code validates paths, line ranges, commit SHA, evidence hashes,
-  scoring, verdicts, persistence, and license gates.
+  scoring, verdicts, and persistence.
 - FastContext only scouts for additional file/line evidence. It never scores or
   decides reusability.
 - Gemma interprets the validated evidence for the task, returns dimensions and
@@ -61,8 +61,8 @@ Responsibilities stay split:
   the final score.
 
 `recommended_verdict` is Gemma's model recommendation. `final_verdict` and
-`reuse_score` are deterministic Source Scout outputs after evidence coverage,
-blocker, and license gates are applied.
+`reuse_score` are deterministic Source Scout outputs after evidence coverage
+and blocker gates are applied.
 
 Policy modes:
 
@@ -73,12 +73,9 @@ Policy modes:
   unless `--max-evidence-rounds 0` is set.
 
 Assessment evidence is commit-pinned and stored as a validated ledger with
-content hashes. Final verdicts are conservative: non-permissive, missing, or
-unknown licenses prevent `select` even when the implementation looks useful. In
-that case Gemma may return `recommended_verdict=select`, while Source Scout
-returns `final_verdict=inspect` and records a validation note explaining the
-license gate. GitHub `NOASSERTION`, `UNKNOWN`, and `LicenseRef-*` SPDX values are
-treated as unknown.
+content hashes. License metadata from GitHub is kept as passive context only.
+Source Scout finds and assesses useful source; license review is outside scoring
+and left to the user when needed.
 
 Assessment calibration uses a mocked golden suite so assessor behavior can be
 checked without live model variability:
@@ -88,8 +85,8 @@ source-scout eval-assess --suite assessment-smoke --label local-v1
 ```
 
 The report tracks verdict match rate, cache hits, repair counts, FastContext
-attempt/completion/error counts, average reuse score, evidence coverage, and
-license-gated `select` downgrades.
+attempt/completion/error counts, average reuse score, and evidence coverage.
+See `docs/assessment-report-review.md` for a short field-by-field review guide.
 
 ## Standalone Local Exploration
 

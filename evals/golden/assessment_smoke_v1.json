@@ -41,9 +41,9 @@
       "gemma_sequence": []
     },
     {
-      "id": "missing_license_not_select",
-      "task": "Find a reusable Next.js route handler but require a conservative license gate.",
-      "expected_final_verdicts": ["inspect"],
+      "id": "missing_license_passive_metadata",
+      "task": "Find a reusable Next.js route handler with passive license metadata.",
+      "expected_final_verdicts": ["select"],
       "candidate": {
         "repo_id": "eval/missing-license",
         "license_spdx": null,

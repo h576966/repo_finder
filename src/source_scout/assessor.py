@@ -594,7 +594,9 @@ def _assessment_messages(context: Mapping[str, Any]) -> list[dict[str, str]]:
             "content": (
                 "You assess whether a repository candidate contains reusable source for a task. "
                 "Return only valid JSON. You do not have tools. Use only the provided evidence "
-                "ledger IDs for source-specific claims. Do not output reuse_score or final score."
+                "ledger IDs for source-specific claims. License metadata is passive context only; "
+                "do not score, reject, or downgrade the candidate because of license status. "
+                "Do not output reuse_score or final score."
             ),
         },
         {
@@ -715,6 +717,7 @@ def _prompt_payload(
             "do_not_output_score": True,
             "source_claims_require_evidence_ids": True,
             "cite_only_allowed_evidence_ids": True,
+            "license_metadata_is_passive": True,
         },
     }
 
@@ -997,15 +1000,11 @@ def _deterministic_verdict_notes(
     final_verdict: str,
     license_status: str,
 ) -> list[str]:
+    _ = license_status
     if model_verdict != assessment_rules.VERDICT_SELECT:
         return []
     if final_verdict == assessment_rules.VERDICT_SELECT:
         return []
-    if license_status != assessment_rules.LICENSE_PERMISSIVE_DETECTED:
-        return [
-            "final_verdict downgraded from select because license_status="
-            f"{license_status} is not permissive_detected."
-        ]
     return [f"final_verdict changed from select to {final_verdict} by deterministic gates."]
 
 

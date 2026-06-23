@@ -142,11 +142,11 @@ def recommend_verdict(
         return VERDICT_INSUFFICIENT_EVIDENCE
     if normalized.functional_fit <= REJECT_MAX_FUNCTIONAL_FIT or reuse_score < REJECT_MAX_REUSE_SCORE:
         return VERDICT_REJECT
+    _ = license_status
     if (
         reuse_score >= SELECT_MIN_SCORE
         and confidence >= SELECT_MIN_CONFIDENCE
         and evidence_coverage >= SELECT_MIN_EVIDENCE_COVERAGE
-        and license_status == LICENSE_PERMISSIVE_DETECTED
     ):
         return VERDICT_SELECT
     return VERDICT_INSPECT

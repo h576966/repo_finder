@@ -59,7 +59,7 @@ def test_confidence_is_capped_by_evidence_coverage() -> None:
     assert assessment_rules.cap_confidence(0.4, 0.5) == pytest.approx(0.4)
 
 
-def test_select_requires_score_confidence_coverage_license_and_no_blockers() -> None:
+def test_select_requires_score_confidence_coverage_and_no_blockers() -> None:
     dimensions = AssessmentDimensions(
         functional_fit=0.95,
         extractability=0.9,
@@ -89,7 +89,7 @@ def test_select_requires_score_confidence_coverage_license_and_no_blockers() -> 
             model_confidence=0.95,
             license_status=assessment_rules.LICENSE_UNKNOWN,
         )
-        == assessment_rules.VERDICT_INSPECT
+        == assessment_rules.VERDICT_SELECT
     )
 
 

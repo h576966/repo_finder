@@ -397,7 +397,7 @@ async def test_model_verdict_is_stored_separately_from_final_verdict(
 
 
 @pytest.mark.asyncio
-async def test_assess_candidate_license_gate_prevents_select(
+async def test_assess_candidate_license_metadata_is_passive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -414,11 +414,8 @@ async def test_assess_candidate_license_gate_prevents_select(
 
     assert result.license_status == assessment_rules.LICENSE_MISSING
     assert result.recommended_verdict == assessment_rules.VERDICT_SELECT
-    assert result.final_verdict == assessment_rules.VERDICT_INSPECT
-    assert (
-        "final_verdict downgraded from select because license_status=missing "
-        "is not permissive_detected."
-    ) in result.validation_notes
+    assert result.final_verdict == assessment_rules.VERDICT_SELECT
+    assert not any("license_status" in note for note in result.validation_notes)
 
 
 @pytest.mark.asyncio
@@ -458,7 +455,7 @@ async def test_requirement_status_is_preserved_and_counts_are_separate(
 
 
 @pytest.mark.asyncio
-async def test_license_blocker_is_left_to_deterministic_license_gate(
+async def test_license_blocker_is_passive_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

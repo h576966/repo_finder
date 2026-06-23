@@ -56,7 +56,6 @@ async def test_run_assessment_eval_reports_expected_metrics(tmp_path: Path) -> N
     assert metrics["fastcontext_attempted_count"] == 2
     assert metrics["fastcontext_completed_count"] == 1
     assert metrics["fastcontext_error_count"] == 1
-    assert metrics["license_gate_prevented_select_count"] == 1
     assert metrics["stale_fastcontext_reuse_count"] == 0
     assert report["failure_examples"] == []
     saved = json.loads(output_path.read_text(encoding="utf-8"))
