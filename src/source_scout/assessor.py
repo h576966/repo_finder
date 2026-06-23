@@ -197,6 +197,8 @@ async def _assess_context(
             attempts=1,
         )
         normalized = _normalize_response(raw_response, context["evidence_id_map"])
+    except lmstudio.LMStudioError:
+        raise
     except Exception as exc:
         validation_errors = _validation_errors(exc)
         try:
@@ -219,6 +221,8 @@ async def _assess_context(
                     *validation_errors,
                 ],
             )
+        except lmstudio.LMStudioError:
+            raise
         except Exception as repair_exc:
             return _persist_safe_assessment(
                 context,

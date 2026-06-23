@@ -341,7 +341,17 @@ async def _lmstudio_status(start_server: bool, smoke_test: bool) -> dict[str, ob
                 "hint": "Run source-scout lmstudio-status --start-server",
                 **_status_with_inventory(_offline_status(config), config),
             }
-        lmstudio.start_server()
+        try:
+            lmstudio.start_server(config)
+        except lmstudio.LMStudioError as start_exc:
+            return {
+                "reachable": False,
+                "started_server": False,
+                "error": str(exc),
+                "start_error": str(start_exc),
+                "hint": "Start LM Studio Local Server from the LM Studio UI, then rerun this command.",
+                **_status_with_inventory(_offline_status(config), config),
+            }
         started = True
         await asyncio.sleep(1)
         status = await lmstudio.validate_models(config)
@@ -407,7 +417,17 @@ async def _fastcontext_status(
                 "hint": "Run source-scout fastcontext-status --start-server",
                 **_status_with_inventory(_offline_status(config), config),
             }
-        lmstudio.start_server()
+        try:
+            lmstudio.start_server(config)
+        except lmstudio.LMStudioError as start_exc:
+            return {
+                "reachable": False,
+                "started_server": False,
+                "error": str(exc),
+                "start_error": str(start_exc),
+                "hint": "Start LM Studio Local Server from the LM Studio UI, then rerun this command.",
+                **_status_with_inventory(_offline_status(config), config),
+            }
         started = True
         await asyncio.sleep(1)
         status = await lmstudio.validate_models(config)

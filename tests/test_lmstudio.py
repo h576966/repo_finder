@@ -43,6 +43,65 @@ def test_lmstudio_config_env_overrides(monkeypatch) -> None:
     assert config.timeout_seconds == 7.0
 
 
+def test_start_server_uses_non_blocking_lms_command(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    class FakeProcess:
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            raise AssertionError("reachable server should not terminate process")
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        calls.append(command)
+        assert kwargs["stdin"] is lmstudio.subprocess.DEVNULL
+        assert kwargs["stdout"] is lmstudio.subprocess.DEVNULL
+        assert kwargs["stderr"] is lmstudio.subprocess.DEVNULL
+        return FakeProcess()
+
+    monkeypatch.setattr(lmstudio.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(lmstudio, "_server_reachable", lambda config: True)
+
+    assert lmstudio.start_server(
+        lmstudio.LMStudioConfig(base_url="http://127.0.0.1:1234/v1")
+    )
+    assert calls == [
+        [
+            lmstudio.LMS_EXE,
+            "server",
+            "start",
+            "--port",
+            "1234",
+            "--bind",
+            "127.0.0.1",
+        ]
+    ]
+
+
+def test_start_server_cleans_up_when_api_never_becomes_reachable(monkeypatch) -> None:
+    terminated = False
+
+    class FakeProcess:
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            nonlocal terminated
+            terminated = True
+
+        def wait(self, timeout: float) -> None:
+            return None
+
+    monkeypatch.setattr(lmstudio.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(lmstudio, "_server_reachable", lambda config: False)
+
+    with pytest.raises(lmstudio.LMStudioError, match="within 0 seconds"):
+        lmstudio.start_server(startup_timeout_seconds=0)
+
+    assert terminated is True
+
+
 @pytest.mark.asyncio
 async def test_list_models_parses_openai_compatible_response() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -384,6 +443,35 @@ async def test_lmstudio_status_reports_api_downloaded_and_loaded(monkeypatch) ->
     assert configured["fastcontext"]["downloaded"] is True
     assert configured["fastcontext"]["loaded"] is True
     assert configured["fastcontext"]["api_listed"] is False
+
+
+@pytest.mark.asyncio
+async def test_lmstudio_status_reports_start_failure_as_json(monkeypatch) -> None:
+    import source_scout.__main__ as main_module
+
+    async def fake_validate_models(config: lmstudio.LMStudioConfig) -> dict[str, object]:
+        raise lmstudio.LMStudioError("api unreachable")
+
+    def fake_start_server(config: lmstudio.LMStudioConfig) -> bool:
+        raise lmstudio.LMStudioError("start failed")
+
+    def fake_inventory(config: lmstudio.LMStudioConfig) -> dict[str, object]:
+        return {
+            "downloaded_models": [],
+            "loaded_models": [],
+            "configured_models": {},
+        }
+
+    monkeypatch.setattr(lmstudio, "validate_models", fake_validate_models)
+    monkeypatch.setattr(lmstudio, "start_server", fake_start_server)
+    monkeypatch.setattr(lmstudio, "model_inventory", fake_inventory)
+
+    result = await main_module._lmstudio_status(start_server=True, smoke_test=False)
+
+    assert result["reachable"] is False
+    assert result["error"] == "api unreachable"
+    assert result["start_error"] == "start failed"
+    assert "LM Studio UI" in str(result["hint"])
 
 
 def test_profile_cli_invokes_profiler(monkeypatch, capsys) -> None:

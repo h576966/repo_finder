@@ -117,6 +117,36 @@ def test_catalog_schema_and_paths() -> None:
     assert {"repo_created_at", "is_fork", "is_template"}.issubset(columns)
 
 
+def test_legacy_snapshot_path_resolves_to_source_scout_home(tmp_path: Path) -> None:
+    current_snapshot = catalog.snapshot_path("owner", "repo", "abc123")
+    current_snapshot.mkdir(parents=True)
+    _write_nextjs_fixture(current_snapshot)
+    legacy_snapshot = tmp_path / ("." + "repo" + "_finder") / "repos" / "owner__repo" / "abc123"
+    repo_id = catalog.upsert_repository(_repo_metadata("owner", "repo"), "test")
+    snapshot_id = catalog.upsert_snapshot(repo_id, "abc123", "main", legacy_snapshot)
+    catalog.upsert_repository_card(snapshot_id, pipeline.build_repository_card(current_snapshot))
+    asset_id = catalog.upsert_asset(
+        snapshot_id,
+        repo_id,
+        "data-table",
+        {
+            "entry_paths": ["components/data-table/data-table.tsx"],
+            "dependency_paths": ["package.json"],
+            "external_dependencies": ["@tanstack/react-table"],
+            "evidence_paths": ["components/data-table/data-table.tsx:1-5"],
+            "synthesis": {},
+            "reuse_score": 1.0,
+        },
+    )
+
+    detail = catalog.get_asset_detail(asset_id)
+    snapshots = catalog.list_snapshots_for_evidence(limit=1)
+
+    assert detail is not None
+    assert Path(str(detail["snapshot_path"])) == current_snapshot.resolve()
+    assert Path(str(snapshots[0]["snapshot_path"])) == current_snapshot.resolve()
+
+
 def test_repository_card_and_ui_gates(tmp_path: Path) -> None:
     _write_nextjs_fixture(tmp_path)
     card = pipeline.build_repository_card(tmp_path)

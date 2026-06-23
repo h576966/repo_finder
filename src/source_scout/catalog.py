@@ -697,7 +697,19 @@ def list_snapshots_for_evidence(limit: int) -> list[dict[str, Any]]:
         [limit],
     ).fetchall()
     columns = [str(c[0]) for c in conn.description]
-    return [dict(zip(columns, row, strict=False)) for row in rows]
+    snapshots = []
+    for row in rows:
+        data = dict(zip(columns, row, strict=False))
+        data["snapshot_path"] = str(
+            _resolve_snapshot_path(
+                data.get("snapshot_path"),
+                owner=str(data["owner"]),
+                repo=str(data["name"]),
+                commit_sha=str(data["commit_sha"]),
+            )
+        )
+        snapshots.append(data)
+    return snapshots
 
 
 def upsert_asset(
@@ -780,7 +792,31 @@ def get_asset_detail(asset_id: str) -> dict[str, Any] | None:
         ("synthesis", {}),
     ):
         detail[key] = _json_load(detail.get(key), default)
+    detail["snapshot_path"] = str(
+        _resolve_snapshot_path(
+            detail.get("snapshot_path"),
+            owner=str(detail["owner"]),
+            repo=str(detail["name"]),
+            commit_sha=str(detail["commit_sha"]),
+        )
+    )
     return detail
+
+
+def _resolve_snapshot_path(
+    raw_path: Any,
+    *,
+    owner: str,
+    repo: str,
+    commit_sha: str,
+) -> Path:
+    path = Path(str(raw_path)).expanduser()
+    if path.exists():
+        return path.resolve()
+    current_path = snapshot_path(owner, repo, commit_sha)
+    if current_path.exists():
+        return current_path.resolve()
+    return path
 
 
 def _task_terms(task: str) -> set[str]:

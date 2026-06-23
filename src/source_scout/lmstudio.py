@@ -2,8 +2,10 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -454,15 +456,57 @@ def _parse_embedded_json(text: str) -> Any:
     raise LMStudioError("Could not parse JSON object from LM Studio response.")
 
 
-def start_server() -> bool:
+def start_server(
+    config: LMStudioConfig | None = None,
+    startup_timeout_seconds: float = 30.0,
+) -> bool:
+    active = config or get_config()
+    command = _server_start_command(active)
+    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
-        subprocess.run(
-            [LMS_EXE, "server", "start"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creation_flags,
         )
-        return True
-    except (OSError, subprocess.SubprocessError) as exc:
+    except OSError as exc:
         raise LMStudioError(f"Failed to start LM Studio server via {LMS_EXE}.") from exc
+
+    deadline = time.monotonic() + startup_timeout_seconds
+    while time.monotonic() < deadline:
+        if _server_reachable(active):
+            return True
+        time.sleep(0.5)
+
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+    raise LMStudioError(
+        f"Failed to start LM Studio server via {LMS_EXE} within "
+        f"{startup_timeout_seconds:.0f} seconds."
+    )
+
+
+def _server_start_command(config: LMStudioConfig) -> list[str]:
+    parsed = urlparse(config.base_url)
+    command = [LMS_EXE, "server", "start"]
+    if parsed.port is not None:
+        command.extend(["--port", str(parsed.port)])
+    if parsed.hostname:
+        command.extend(["--bind", parsed.hostname])
+    return command
+
+
+def _server_reachable(config: LMStudioConfig) -> bool:
+    try:
+        with httpx.Client(timeout=2.0) as client:
+            response = client.get(f"{config.base_url}/models")
+            response.raise_for_status()
+    except httpx.HTTPError:
+        return False
+    return True

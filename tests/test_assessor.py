@@ -296,6 +296,28 @@ async def test_assess_candidate_falls_back_after_unknown_evidence_ids(
 
 
 @pytest.mark.asyncio
+async def test_assess_candidate_does_not_persist_when_gemma_is_unreachable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate_id = _candidate(tmp_path)
+
+    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise lmstudio.LMStudioError("local server unavailable")
+
+    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+
+    with pytest.raises(lmstudio.LMStudioError, match="local server unavailable"):
+        await assessor.assess_candidate(
+            candidate_id,
+            "Assess reusable route handler",
+            fastcontext_policy="never",
+        )
+
+    assert catalog.get_connection().execute("SELECT COUNT(*) FROM reuse_assessments").fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
 async def test_assess_candidate_score_and_verdict_are_not_controlled_by_gemma(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
