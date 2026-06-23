@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 import pytest
 
-from source_scout import catalog, fastcontext, lmstudio
+from source_scout import catalog, cli_status, fastcontext, lmstudio
 
 
 @pytest.fixture(autouse=True)
@@ -2206,7 +2206,7 @@ async def test_fastcontext_status_loads_model_when_requested(monkeypatch) -> Non
     monkeypatch.setattr(lmstudio, "validate_models", fake_validate_models)
     monkeypatch.setattr(lmstudio, "model_inventory", fake_model_inventory)
     monkeypatch.setattr(lmstudio, "load_fastcontext_model", fake_load_fastcontext_model)
-    monkeypatch.setattr(main_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(cli_status.asyncio, "sleep", fake_sleep)
 
     result = await main_module._fastcontext_status(
         start_server=False,

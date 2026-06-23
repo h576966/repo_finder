@@ -6,6 +6,7 @@ import sys
 import pytest
 
 import source_scout.__main__ as main_module
+from source_scout import cli_checks
 
 
 def _completed(command: list[str], returncode: int = 0) -> subprocess.CompletedProcess[object]:
@@ -23,7 +24,7 @@ def test_check_cli_runs_default_commands(
         calls.append(command)
         return _completed(command)
 
-    monkeypatch.setattr(main_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_checks.subprocess, "run", fake_run)
     monkeypatch.setattr(sys, "argv", ["source-scout", "check"])
 
     main_module.main()
@@ -45,7 +46,7 @@ def test_check_cli_local_explore_flag_appends_eval(
         calls.append(command)
         return _completed(command)
 
-    monkeypatch.setattr(main_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_checks.subprocess, "run", fake_run)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -98,7 +99,7 @@ def test_check_cli_exits_on_first_failure(
         calls.append(command)
         return _completed(command, returncode=7 if len(calls) == 2 else 0)
 
-    monkeypatch.setattr(main_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_checks.subprocess, "run", fake_run)
     monkeypatch.setattr(sys, "argv", ["source-scout", "check"])
 
     with pytest.raises(SystemExit) as exc:
