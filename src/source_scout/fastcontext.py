@@ -473,7 +473,7 @@ async def _run_tool_loop(
                 )
             else:
                 active_messages.extend(
-                    _legacy_observation_messages(content, observations)
+                    _fallback_observation_messages(content, observations)
                 )
             finalization_reason = _finalization_reason(turn, max_turns, observation_support)
             turn_record["finalization_reason"] = finalization_reason
@@ -816,7 +816,7 @@ def _tool_observation_messages(
     return [assistant_message, *tool_messages]
 
 
-def _legacy_observation_messages(
+def _fallback_observation_messages(
     content: str,
     observations: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1983,16 +1983,6 @@ def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
         bonus += 100
     if normalized == "src/source_scout/profiler.py" and {"gemma", "profile", "profiler"} & term_set:
         bonus += 8
-    if normalized == "src/source_scout/ranker.py" and {
-        "ranker",
-        "ranking",
-        "scoring",
-        "score",
-        "factors",
-        "factor",
-        "legacy",
-    } & term_set:
-        bonus += 100
     if normalized == "src/source_scout/server.py" and {
         "mcp",
         "tool",

@@ -1,4 +1,3 @@
-import importlib
 import json
 from pathlib import Path
 
@@ -128,13 +127,13 @@ def test_catalog_schema_and_paths() -> None:
     assert {"repo_created_at", "is_fork", "is_template"}.issubset(columns)
 
 
-def test_legacy_snapshot_path_resolves_to_source_scout_home(tmp_path: Path) -> None:
+def test_historic_snapshot_path_resolves_to_source_scout_home(tmp_path: Path) -> None:
     current_snapshot = catalog.snapshot_path("owner", "repo", "abc123")
     current_snapshot.mkdir(parents=True)
     _write_nextjs_fixture(current_snapshot)
-    legacy_snapshot = tmp_path / ("." + "repo" + "_finder") / "repos" / "owner__repo" / "abc123"
+    historic_snapshot = tmp_path / ("." + "repo" + "_finder") / "repos" / "owner__repo" / "abc123"
     repo_id = catalog.upsert_repository(_repo_metadata("owner", "repo"), "test")
-    snapshot_id = catalog.upsert_snapshot(repo_id, "abc123", "main", legacy_snapshot)
+    snapshot_id = catalog.upsert_snapshot(repo_id, "abc123", "main", historic_snapshot)
     catalog.upsert_repository_card(snapshot_id, pipeline.build_repository_card(current_snapshot))
     asset_id = catalog.upsert_asset(
         snapshot_id,
@@ -688,25 +687,8 @@ async def _tool_names(module) -> set[str]:
 
 
 @pytest.mark.asyncio
-async def test_legacy_tools_hidden_by_default(monkeypatch) -> None:
-    monkeypatch.delenv("SOURCE_SCOUT_ENABLE_LEGACY_TOOLS", raising=False)
+async def test_default_mcp_tool_surface_is_exact() -> None:
     import source_scout.server as server
 
-    reloaded = importlib.reload(server)
-    names = await _tool_names(reloaded)
-    assert names == set(reloaded.DEFAULT_MCP_TOOL_NAMES)
-    assert not (set(reloaded.LEGACY_MCP_TOOL_NAMES) & names)
-
-
-@pytest.mark.asyncio
-async def test_legacy_tools_enabled_by_env(monkeypatch) -> None:
-    monkeypatch.setenv("SOURCE_SCOUT_ENABLE_LEGACY_TOOLS", "1")
-    import source_scout.server as server
-
-    reloaded = importlib.reload(server)
-    names = await _tool_names(reloaded)
-    assert set(reloaded.DEFAULT_MCP_TOOL_NAMES).issubset(names)
-    assert set(reloaded.LEGACY_MCP_TOOL_NAMES).issubset(names)
-
-    monkeypatch.delenv("SOURCE_SCOUT_ENABLE_LEGACY_TOOLS", raising=False)
-    importlib.reload(server)
+    names = await _tool_names(server)
+    assert names == set(server.DEFAULT_MCP_TOOL_NAMES)

@@ -64,13 +64,6 @@ FastContext paths:
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Legacy generic repository tools and live GitHub integration checks are opt-in:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q -m legacy
-.\.venv\Scripts\python.exe -m pytest -q -m integration
-```
-
 Current local model defaults:
 
 ```text

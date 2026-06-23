@@ -295,17 +295,17 @@
       "manual_search_terms": ["GitHubClient", "RateLimitError", "search_repos", "X-RateLimit"]
     },
     {
-      "id": "legacy_ranker",
-      "task": "Find the legacy generic repository ranking logic and scoring factors.",
+      "id": "catalog_candidate_scoring",
+      "task": "Find where reusable catalog candidates are scored with capability intent, Gemma profile, and path signals.",
       "expected_citations": [
         {
-          "path": "src/source_scout/ranker.py",
-          "start_line": 1,
-          "end_line": 270,
-          "reason": "Legacy generic repository relevance and quality ranking lives here."
+          "path": "src/source_scout/catalog.py",
+          "start_line": 850,
+          "end_line": 1125,
+          "reason": "Current reusable candidate scoring combines catalog assets, capability intent, Gemma profile, and path/dependency signals."
         }
       ],
-      "manual_search_terms": ["score_relevance", "score_repo", "RepoScore", "recommend_top"]
+      "manual_search_terms": ["search_assets", "capability_intent_score", "profile_score", "path_alignment_score"]
     },
     {
       "id": "gemma_repository_profiler",

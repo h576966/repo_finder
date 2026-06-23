@@ -52,9 +52,6 @@ Default MCP tools stay small:
 - `record_reuse_outcome`
 - `explore_local_code`
 
-Legacy generic GitHub tools remain hidden unless explicitly enabled for
-debugging.
-
 ## Model Role Boundaries
 
 - Deterministic code validates paths, line ranges, commit SHA, evidence hashes,

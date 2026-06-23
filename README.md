@@ -152,9 +152,6 @@ Default tools:
 | `record_reuse_outcome(candidate_id, task_signature, outcome, notes=None)` | Track selected, integrated, or rejected candidates against the original task. |
 | `explore_local_code(task, project_path, max_turns=6)` | Use FastContext to find relevant files and line ranges in a local project without catalog writes. |
 
-Legacy generic GitHub tools are hidden by default. Set
-`SOURCE_SCOUT_ENABLE_LEGACY_TOOLS=1` only for debugging older behavior.
-
 ## LM Studio
 
 This project is optimized for local LM Studio on Windows. Useful commands:
@@ -259,23 +256,6 @@ This runs the lightweight safe checks:
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-`pytest -q` runs the current Source Scout product path and excludes live
-GitHub integration tests plus legacy generic-repo tests by default. Run those
-only when needed:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q -m integration
-.\.venv\Scripts\python.exe -m pytest -q -m legacy
-```
-
-Corpus quality check:
-
-```powershell
-source-scout check --with-quality
-.\.venv\Scripts\python.exe scripts\run_quality_checks.py
-```
-
-`--with-quality` may call GitHub and requires `GITHUB_TOKEN`.
 `--with-local-explore-eval` runs the local FastContext eval and requires LM
 Studio/FastContext to be available:
 

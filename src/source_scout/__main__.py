@@ -27,14 +27,12 @@ def _run_mcp(transport: str, port: int) -> None:
         mcp.run()
 
 
-def _check_commands(with_quality: bool, with_local_explore_eval: bool) -> list[list[str]]:
+def _check_commands(with_local_explore_eval: bool) -> list[list[str]]:
     commands = [
         [sys.executable, "-m", "ruff", "check", "."],
         [sys.executable, "-m", "mypy", "src"],
         [sys.executable, "-m", "pytest", "-q"],
     ]
-    if with_quality:
-        commands.append([sys.executable, "scripts/run_quality_checks.py"])
     if with_local_explore_eval:
         commands.append(
             [
@@ -53,8 +51,8 @@ def _check_commands(with_quality: bool, with_local_explore_eval: bool) -> list[l
     return commands
 
 
-def _run_check_commands(with_quality: bool, with_local_explore_eval: bool) -> None:
-    for command in _check_commands(with_quality, with_local_explore_eval):
+def _run_check_commands(with_local_explore_eval: bool) -> None:
+    for command in _check_commands(with_local_explore_eval):
         print(f"\n==> {subprocess.list2cmdline(command)}", flush=True)
         completed = subprocess.run(command, check=False)
         if completed.returncode != 0:
@@ -83,7 +81,6 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command")
 
     check_parser = subparsers.add_parser("check", help="Run local development checks")
-    check_parser.add_argument("--with-quality", action="store_true")
     check_parser.add_argument("--with-local-explore-eval", action="store_true")
 
     scout_parser = subparsers.add_parser("scout", help="Discover raw Next.js UI candidate repositories")
@@ -202,7 +199,7 @@ def main() -> None:
         return
 
     if args.command == "check":
-        _run_check_commands(args.with_quality, args.with_local_explore_eval)
+        _run_check_commands(args.with_local_explore_eval)
         return
 
     if args.command == "scout":

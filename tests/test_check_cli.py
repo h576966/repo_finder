@@ -36,7 +36,7 @@ def test_check_cli_runs_default_commands(
     assert "All checks passed." in capsys.readouterr().out
 
 
-def test_check_cli_optional_flags_append_expanded_checks(
+def test_check_cli_local_explore_flag_appends_eval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[list[str]] = []
@@ -52,15 +52,28 @@ def test_check_cli_optional_flags_append_expanded_checks(
         [
             "source-scout",
             "check",
-            "--with-quality",
             "--with-local-explore-eval",
         ],
     )
 
     main_module.main()
 
-    assert calls[-2:] == [
-        [sys.executable, "scripts/run_quality_checks.py"],
+    assert calls[-1] == [
+        sys.executable,
+        "-m",
+        "source_scout",
+        "eval-local-explore",
+        "--suite",
+        "source-scout",
+        "--max-turns",
+        "6",
+        "--label",
+        "check-local-explore",
+    ]
+    assert calls == [
+        [sys.executable, "-m", "ruff", "check", "."],
+        [sys.executable, "-m", "mypy", "src"],
+        [sys.executable, "-m", "pytest", "-q"],
         [
             sys.executable,
             "-m",

@@ -354,7 +354,7 @@ def test_evidence_budget_detects_too_many_files() -> None:
 def test_local_seed_context_prioritizes_known_project_files(tmp_path: Path) -> None:
     root = tmp_path / "source_scout"
     (root / "src" / "source_scout").mkdir(parents=True)
-    for name in ["catalog.py", "constants.py", "models.py", "pipeline.py", "ranker.py", "server.py"]:
+    for name in ["catalog.py", "constants.py", "models.py", "pipeline.py", "server.py"]:
         (root / "src" / "source_scout" / name).write_text(
             "repository catalog ranking scoring freshness archived template mirror\n",
             encoding="utf-8",
@@ -371,8 +371,8 @@ def test_local_seed_context_prioritizes_known_project_files(tmp_path: Path) -> N
     )["likely_source_files"][0] == "src/source_scout/pipeline.py"
     assert fastcontext._local_seed_context(
         root,
-        "Find the legacy generic repository ranking logic and scoring factors.",
-    )["likely_source_files"][0] == "src/source_scout/ranker.py"
+        "Find where reusable catalog candidates are scored with capability intent and Gemma profile signals.",
+    )["likely_source_files"][0] == "src/source_scout/catalog.py"
     assert fastcontext._local_seed_context(
         root,
         "Find the project documentation that explains standalone local exploration usage.",
