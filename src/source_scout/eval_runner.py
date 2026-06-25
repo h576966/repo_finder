@@ -10,6 +10,7 @@ GOLDEN_DIR = REPO_ROOT / "evals" / "golden"
 SUITE_ALIASES = {
     "ui-reuse": "ui_reuse_v1.json",
     "nextjs-backend": "nextjs_backend_v1.json",
+    "personal-code": "personal_code_v1.json",
 }
 UI_REUSE_PASSING_TOP1 = 6
 UI_REUSE_PASSING_TOP3 = 8

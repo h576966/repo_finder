@@ -371,6 +371,16 @@ def test_evidence_scan_returns_python_ai_assets(tmp_path: Path) -> None:
     assert result["reuse_score"] > 0
 
 
+def test_ai_data_evidence_requires_specific_signal(tmp_path: Path) -> None:
+    _write_nextjs_fixture(tmp_path)
+
+    result = evidence.scan_snapshot(tmp_path, "data-pipeline")
+
+    assert result["entry_paths"] == []
+    assert result["evidence_paths"] == []
+    assert result["reuse_score"] == 0
+
+
 def test_run_evidence_domain_runs_every_mapped_capability(monkeypatch) -> None:
     called: list[str] = []
 

@@ -871,12 +871,13 @@ def _background_job_path_alignment_score(paths: list[Any]) -> float:
 
 
 def _capability_intent_scores(task: str) -> dict[str, float]:
-    lowered = task.lower().replace("_", " ")
+    lowered = task.lower().replace("-", " ").replace("_", " ")
     scores: dict[str, float] = {}
     for capability, hints in CAPABILITY_INTENT_HINTS.items():
         score = 0.0
         for hint in hints:
-            if hint in lowered:
+            normalized_hint = hint.lower().replace("-", " ").replace("_", " ")
+            if normalized_hint in lowered:
                 score += 0.35 if " " in hint else 0.18
         scores[capability] = min(1.0, score)
     return scores
@@ -1027,6 +1028,49 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
                 score += 0.14
             if not has_storage_path:
                 score -= 0.32
+        if capability == "model-server-integration":
+            has_model_server_path = _paths_contain_any(
+                entry_paths + evidence_paths,
+                {"chat", "completion", "lmstudio", "model", "models", "ollama", "openai"},
+            )
+            if has_model_server_path:
+                score += 0.12
+            else:
+                score -= 0.28
+        if capability == "local-ai-integration":
+            if "embedding" in task_terms:
+                has_embedding_path = _paths_contain_any(
+                    entry_paths + evidence_paths,
+                    {"embed", "embedding", "embeddings"},
+                )
+                if has_embedding_path:
+                    score += 0.18
+                else:
+                    score -= 0.35
+            if "ollama" in task_terms and not _paths_contain_any(
+                entry_paths + evidence_paths,
+                {"ollama"},
+            ):
+                score -= 0.24
+        if capability == "node-ai-sdk":
+            ai_sdk_dependencies = {
+                "@ai-sdk/anthropic",
+                "@ai-sdk/openai",
+                "@ai-sdk/react",
+                "ai",
+            } & set(external_dependencies)
+            asks_for_ai_sdk = bool({"sdk", "streaming", "stream"} & task_terms)
+            if ai_sdk_dependencies:
+                score += 0.18
+            elif asks_for_ai_sdk:
+                score -= 0.35
+        data_tool_terms = {"duckdb", "pandas", "polars"}
+        if task_terms & data_tool_terms:
+            data_tool_dependencies = data_tool_terms & set(external_dependencies)
+            if data_tool_dependencies:
+                score += 0.3
+            elif capability == "data-pipeline":
+                score -= 0.42
         if capability in BACKEND_CAPABILITIES and not _has_backend_path(entry_paths):
             score -= 0.28
         if capability in AI_DATA_CAPABILITIES and path_alignment_score < 0:

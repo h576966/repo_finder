@@ -25,6 +25,7 @@ CONFIG_NAMES = {
     "poetry.lock",
 }
 MAX_FILE_BYTES = 1_000_000
+GENERATED_VENDOR_DIRS = {"__generated__", "generated", "vendor", "vendors"}
 
 UI_PATH_PARTS = {"app", "pages", "components", "ui", "widgets", "features"}
 BACKEND_CAPABILITIES = {
@@ -81,7 +82,6 @@ AI_DATA_PATH_PARTS = {
     "retrieval",
     "scripts",
     "services",
-    "src",
     "tools",
 }
 NOISY_PATH_PARTS = {
@@ -154,7 +154,7 @@ CAPABILITY_PATH_HINTS: dict[str, set[str]] = {
     "local-ai-integration": {"llama", "llamacpp", "lmstudio", "ollama", "server", "vllm"},
     "rag-retrieval": {"chunk", "embed", "embedding", "index", "rag", "retrieval", "vector"},
     "eval-harness": {"benchmark", "eval", "evals", "golden", "judge", "metric", "metrics"},
-    "data-pipeline": {"data", "duckdb", "etl", "ingest", "pandas", "pipeline", "polars"},
+    "data-pipeline": {"duckdb", "etl", "ingest", "pandas", "pipeline", "polars"},
     "python-api": {"api", "fastapi", "router", "routes", "server", "service"},
     "python-cli": {"cli", "command", "main", "typer", "click"},
     "node-ai-sdk": {"ai", "api", "chat", "completion", "generate", "openai", "sdk"},
@@ -223,6 +223,40 @@ CAPABILITY_STRONG_CONTENT: dict[str, set[str]] = {
     "python-cli": {"typer.app", "typer", "click.command", "argparse"},
     "node-ai-sdk": {"streamtext", "generatetext", "@ai-sdk", "openai.chat"},
     "model-server-integration": {"openai-compatible", "base_url", "models", "chat/completions"},
+}
+
+CAPABILITY_DEPENDENCY_HINTS: dict[str, set[str]] = {
+    "llm-harness": {
+        "@ai-sdk/openai",
+        "@ai-sdk/react",
+        "ai",
+        "anthropic",
+        "instructor",
+        "litellm",
+        "openai",
+    },
+    "local-ai-integration": {"openai"},
+    "rag-retrieval": {
+        "@langchain/core",
+        "chromadb",
+        "langchain",
+        "llama-index",
+        "qdrant-client",
+        "sentence-transformers",
+    },
+    "eval-harness": {"pytest"},
+    "data-pipeline": {"duckdb", "pandas", "polars"},
+    "python-api": {"fastapi", "pydantic"},
+    "python-cli": {"click", "typer"},
+    "node-ai-sdk": {
+        "@ai-sdk/anthropic",
+        "@ai-sdk/openai",
+        "@ai-sdk/react",
+        "ai",
+        "anthropic",
+        "openai",
+    },
+    "model-server-integration": {"openai"},
 }
 
 CAPABILITY_TERMS: dict[str, list[str]] = {
@@ -375,7 +409,7 @@ def collect_scan_files(snapshot_root: Path) -> list[Path]:
     for path in snapshot_root.rglob("*"):
         if not path.is_file():
             continue
-        if any(part in SKIP_DIRS for part in path.parts):
+        if any(part in SKIP_DIRS or part in GENERATED_VENDOR_DIRS for part in path.parts):
             continue
         if path.name in CONFIG_NAMES or path.suffix in SOURCE_EXTENSIONS:
             try:
@@ -591,6 +625,9 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
     terms = terms_for_capability(normalized)
     dependencies, manifest_paths = _load_package_dependencies(snapshot_root)
     relevant_dependencies = sorted(name for name in dependencies if name in RELEVANT_DEPENDENCIES)
+    capability_dependencies = CAPABILITY_DEPENDENCY_HINTS.get(normalized, set()) & set(
+        relevant_dependencies
+    )
     dependency_paths = _dependency_paths(snapshot_root, manifest_paths)
 
     scored_files: list[tuple[float, str, list[str], float, float]] = []
@@ -604,12 +641,27 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
         ui_score = _ui_path_score(rel_path, normalized)
         noise_penalty = _noise_penalty(rel_path, normalized)
         strong_hits = _strong_content_hits(searchable, normalized)
+        capability_dependency_hits = sum(
+            1 for dependency in capability_dependencies if dependency.lower() in searchable
+        )
+        path_signal = _capability_path_signal(rel_path, normalized)
+        if normalized in {"python-api", "python-cli"} and path.suffix != ".py":
+            continue
+        if (
+            normalized in AI_AND_DATA_CAPABILITIES
+            and not path_signal
+            and strong_hits <= 0
+            and capability_dependency_hits <= 0
+        ):
+            continue
         if normalized == "server-actions" and not _server_action_file_signal(
             rel_path,
             searchable,
         ):
             continue
-        score = float(term_hits) + (ui_score * 4) + (strong_hits * 3)
+        score = float(term_hits) + (ui_score * 4) + (strong_hits * 3) + (
+            capability_dependency_hits * 2
+        )
         if path.name == "package.json":
             score += sum(1 for dep in relevant_dependencies if dep.lower() in searchable)
         elif ui_score <= 0.2:

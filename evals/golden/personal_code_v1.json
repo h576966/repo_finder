@@ -1,0 +1,304 @@
+{
+  "suite_id": "personal-code",
+  "description": "Golden tasks for Source Scout's personal-code domain across TS/JS, Python, AI, local-AI, data, Next.js, Node, and React reuse.",
+  "tasks": [
+    {
+      "id": "personal_local_ollama_embedding_provider",
+      "task": "Find a local AI or Ollama embedding provider service.",
+      "capability": "local-ai-integration",
+      "expected_repo_ids": ["Moiz-Ali-Moomin/crm-with-blockchain-ai-rag"],
+      "acceptable_repo_ids": ["Johnny-TW/OpenStock"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["ollama", "embedding", "provider"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3,
+      "notes": "Moiz has explicit Ollama embedding provider and backfill evidence in the refreshed local catalog."
+    },
+    {
+      "id": "personal_openai_model_client",
+      "task": "Find a reusable OpenAI-compatible model client or AI service wrapper.",
+      "capability": "model-server-integration",
+      "expected_repo_ids": [
+        "22cismaru1/nextjs16-react19-ai-saas-platform",
+        "Moiz-Ali-Moomin/crm-with-blockchain-ai-rag"
+      ],
+      "acceptable_repo_ids": [
+        "Johnny-TW/OpenStock",
+        "ChanMeng666/esol-learning-platform",
+        "mbeps/ai-client",
+        "sinhaankur/ideal-giggle"
+      ],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["chat", "model", "ai", "ollama", "openai"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "personal_structured_llm_output_tests",
+      "task": "Find reusable structured LLM output tests with mocked model responses.",
+      "capability": "llm-harness",
+      "expected_repo_ids": ["low-orbit-studio/visor"],
+      "acceptable_repo_ids": ["rakibulism/cano-ui", "22cismaru1/nextjs16-react19-ai-saas-platform"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["structured-prompt", "test", "ai-chat", "prompt"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3,
+      "notes": "The catalog has limited true structured-output test examples; this task intentionally pressures line/path quality."
+    },
+    {
+      "id": "personal_rag_retrieval_flow",
+      "task": "Find a Python or JavaScript RAG service with embeddings and vector retrieval.",
+      "capability": "rag-retrieval",
+      "expected_repo_ids": ["Moiz-Ali-Moomin/crm-with-blockchain-ai-rag"],
+      "acceptable_repo_ids": ["htmujahid/supasheet", "Johnny-TW/OpenStock"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["rag", "retrieval", "embedding", "vector"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "personal_python_fastapi_endpoint",
+      "task": "Find a Python FastAPI backend with Pydantic API route models.",
+      "capability": "python-api",
+      "expected_repo_ids": [
+        "x0ll/Ransomware-Attack-Detection-Using-Machine-Learning",
+        "sosm/temporary-road-closures"
+      ],
+      "acceptable_repo_ids": ["sattyamjjain/ferrumdeck"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["backend/app", "api", "router", "server"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "personal_pandas_pipeline",
+      "task": "Find a Python pandas data analysis pipeline for local analytics.",
+      "capability": "data-pipeline",
+      "expected_repo_ids": ["x0ll/Ransomware-Attack-Detection-Using-Machine-Learning"],
+      "acceptable_repo_ids": ["David-0804/Group-Circus-Swahilipot-hub-foundation"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["backend", "feature", "pipeline", "preprocessing", "api"],
+      "required_dependencies_any": ["pandas"],
+      "max_rank_for_hit": 3,
+      "notes": "The first broad catalog has sparse DuckDB/Polars evidence; this starts with the inspected pandas/ML candidate."
+    },
+    {
+      "id": "personal_nextjs_ai_route_handler",
+      "task": "Find a Next.js AI route handler using OpenAI or the Vercel AI SDK.",
+      "capability": "node-ai-sdk",
+      "expected_repo_ids": [
+        "ChanMeng666/esol-learning-platform",
+        "brandonwong91/dejado"
+      ],
+      "acceptable_repo_ids": [
+        "22cismaru1/nextjs16-react19-ai-saas-platform",
+        "Moiz-Ali-Moomin/crm-with-blockchain-ai-rag",
+        "mbeps/ai-client",
+        "sinhaankur/ideal-giggle"
+      ],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["api", "route", "chat", "openai"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "personal_react_admin_dashboard",
+      "task": "Find a React admin dashboard layout with sidebar navigation and data tables.",
+      "capability": "dashboard",
+      "expected_repo_ids": [
+        "Muhammad-Faizan-Alam/cattleCare",
+        "devTugu/nextjs-fsd-template",
+        "novare-talent/Frontend_Only"
+      ],
+      "acceptable_repo_ids": ["FabioTavernini/spendemon", "Johnny-TW/OpenStock"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["dashboard", "sidebar", "data-table", "table"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "personal_eval_harness_golden_tasks",
+      "task": "Find a Python eval harness with LLM judge scorers and golden cases.",
+      "capability": "eval-harness",
+      "expected_repo_ids": ["sattyamjjain/ferrumdeck"],
+      "acceptable_repo_ids": ["rauell1/safaricharge"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["eval", "evals", "judge", "golden", "harness"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "personal_python_cli_tool",
+      "task": "Find a Python CLI data tool using Typer, Click, or argparse.",
+      "capability": "python-cli",
+      "expected_repo_ids": ["sattyamjjain/ferrumdeck"],
+      "acceptable_repo_ids": ["sosm/temporary-road-closures"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["cli", "main.py", "command"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "personal_model_server_integration",
+      "task": "Find model server integration code for Ollama, LM Studio, or OpenAI-compatible APIs.",
+      "capability": "model-server-integration",
+      "expected_repo_ids": [
+        "Moiz-Ali-Moomin/crm-with-blockchain-ai-rag",
+        "22cismaru1/nextjs16-react19-ai-saas-platform"
+      ],
+      "acceptable_repo_ids": [
+        "Johnny-TW/OpenStock",
+        "mbeps/ai-client",
+        "sinhaankur/ideal-giggle"
+      ],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["ollama", "model", "chat", "openai"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "personal_node_ai_sdk_streaming",
+      "task": "Find a Node AI SDK streaming chat route using @ai-sdk/openai.",
+      "capability": "node-ai-sdk",
+      "expected_repo_ids": [
+        "brandonwong91/dejado",
+        "ChanMeng666/esol-learning-platform"
+      ],
+      "acceptable_repo_ids": [
+        "22cismaru1/nextjs16-react19-ai-saas-platform",
+        "Moiz-Ali-Moomin/crm-with-blockchain-ai-rag",
+        "mbeps/ai-client"
+      ],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["api", "chat", "route", "stream"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "personal_file_storage_upload",
+      "task": "Find reusable file upload or object storage helpers for documents or blobs.",
+      "capability": "file-storage",
+      "expected_repo_ids": [
+        "sebastianfuentesp-ship-it/dellcom-web",
+        "edvardassmulaitis/musiclt",
+        "traviscomber/v0-erpminia"
+      ],
+      "acceptable_repo_ids": [],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["upload", "storage", "blob", "document", "file"],
+      "required_dependencies_any": ["@aws-sdk/client-s3", "@supabase/supabase-js", "@vercel/blob"],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "personal_react_component_data_table",
+      "task": "Find a reusable React component library data table with TanStack table.",
+      "capability": "data-table",
+      "expected_repo_ids": [
+        "FabioTavernini/spendemon",
+        "DibbayajyotiRoy/RoyUI",
+        "Yayaw-SAS/Yayaw-Table"
+      ],
+      "acceptable_repo_ids": ["devTugu/nextjs-fsd-template", "Johnny-TW/OpenStock"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["data-table", "table", "columns"],
+      "required_dependencies_any": ["@tanstack/react-table"],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "personal_ollama_openai_compatible_chat_route",
+      "task": "Find a Next.js chat route that can call Ollama or another OpenAI-compatible local model server.",
+      "capability": "model-server-integration",
+      "expected_repo_ids": ["sinhaankur/ideal-giggle"],
+      "acceptable_repo_ids": ["mbeps/ai-client", "22cismaru1/nextjs16-react19-ai-saas-platform"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["ollama", "openai", "chat", "route", "model"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3,
+      "notes": "ideal-giggle has inspected AI SDK chat route and OpenAI-compatible Ollama helper evidence."
+    },
+    {
+      "id": "personal_ai_provider_resolution",
+      "task": "Find reusable AI provider and model resolution code for a chat application.",
+      "capability": "model-server-integration",
+      "expected_repo_ids": ["mbeps/ai-client"],
+      "acceptable_repo_ids": ["sinhaankur/ideal-giggle"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["provider", "model", "chat", "resolve"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3,
+      "notes": "ai-client has inspected provider/model resolution and streaming chat route evidence."
+    },
+    {
+      "id": "personal_desktop_rag_package",
+      "task": "Find a reusable local desktop RAG package with indexing, embeddings, and retrieval.",
+      "capability": "rag-retrieval",
+      "expected_repo_ids": ["off-grid-ai/desktop"],
+      "acceptable_repo_ids": ["Moiz-Ali-Moomin/crm-with-blockchain-ai-rag"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["packages/rag/src", "retrieval", "embedding", "rag", "vector"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3,
+      "notes": "off-grid-ai/desktop has inspected packages/rag/src service and retrieval evidence plus a local vector store."
+    },
+    {
+      "id": "personal_agent_eval_workflow",
+      "task": "Find an agent evaluation workflow with structured eval results and tests.",
+      "capability": "eval-harness",
+      "expected_repo_ids": ["BOBER3r/agent-bober"],
+      "acceptable_repo_ids": ["sattyamjjain/ferrumdeck"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["evaluator", "eval", "result", "test"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3,
+      "notes": "agent-bober has inspected evaluator-agent, eval-result schema, MCP eval tool, and evaluator tests."
+    },
+    {
+      "id": "personal_click_python_cli",
+      "task": "Find a Python Click CLI with commands, API client wiring, and CLI tests.",
+      "capability": "python-cli",
+      "expected_repo_ids": ["P4ciuf/secryn"],
+      "acceptable_repo_ids": ["sattyamjjain/ferrumdeck", "sosm/temporary-road-closures"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["cli.py", "client.py", "test_cli", "click"],
+      "required_dependencies_any": ["click"],
+      "max_rank_for_hit": 3,
+      "notes": "secryn has inspected Click command group, client/config wiring, and click.testing coverage."
+    },
+    {
+      "id": "personal_trpc_app_router",
+      "task": "Find a typed tRPC app router with protected procedures and feature routers.",
+      "capability": "trpc-router",
+      "expected_repo_ids": ["evangauer/openvpm", "irfankurniawansuthiono/resi-cam"],
+      "acceptable_repo_ids": ["mg-gouda/iTourTMS", "sanidhyy/meet-ai"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["trpc", "router", "procedure", "protectedProcedure", "appRouter"],
+      "required_dependencies_any": ["@trpc/server"],
+      "max_rank_for_hit": 3,
+      "notes": "openvpm has inspected initTRPC, appRouter, protectedProcedure, and feature router evidence."
+    },
+    {
+      "id": "personal_admin_export_reports",
+      "task": "Find admin reporting/export code that generates Excel, PDF, or CSV reports.",
+      "capability": "admin-export",
+      "expected_repo_ids": ["mg-gouda/iTourTMS"],
+      "acceptable_repo_ids": ["rauell1/safaricharge", "traviscomber/v0-erpminia"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["export", "report", "excel", "xlsx", "pdf", "csv"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3,
+      "notes": "iTourTMS has inspected finance-report Excel helpers and report components; safaricharge has PDF/Excel/CSV report service evidence."
+    },
+    {
+      "id": "personal_command_palette_search",
+      "task": "Find a reusable React command palette or global search palette component.",
+      "capability": "command-palette",
+      "expected_repo_ids": ["sindev08/react-principles", "adm01-debug/promo-gifts-v4"],
+      "acceptable_repo_ids": ["NtFelix/RMS", "htmujahid/supasheet"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["command", "palette", "search", "cmdk"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3,
+      "notes": "Inspected candidates include a standalone Command component, a GlobalSearchPalette, and a larger command-menu integration."
+    }
+  ]
+}

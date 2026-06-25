@@ -147,9 +147,11 @@ def test_load_suite_validates_required_fields(tmp_path: Path) -> None:
 def test_tracked_golden_suites_load_by_alias() -> None:
     ui_suite = eval_runner.load_suite("ui-reuse")
     backend_suite = eval_runner.load_suite("nextjs-backend")
+    personal_suite = eval_runner.load_suite("personal-code")
 
     assert len(ui_suite["tasks"]) == 10
     assert len(backend_suite["tasks"]) == 10
+    assert len(personal_suite["tasks"]) >= 10
 
 
 def test_load_suite_rejects_missing_labels() -> None:
