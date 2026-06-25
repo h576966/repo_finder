@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from source_scout import catalog, local_explore_eval
+from source_scout import catalog, fastcontext, local_explore_eval
 from source_scout.models import LocalExploreResult
 
 
@@ -47,6 +47,8 @@ def _suite(project_root: Path) -> dict[str, Any]:
             "tasks": [
                 {
                     "id": "find_target",
+                    "task_type": "source_navigation",
+                    "target_family": "src",
                     "task": "Find target function",
                     "expected_citations": [
                         {
@@ -74,6 +76,15 @@ def test_tracked_local_explore_suite_loads_by_alias() -> None:
 
     assert suite["suite_id"] == "local-explore-source-scout"
     assert 15 <= len(suite["tasks"]) <= 25
+    assert suite["tasks"][0]["expected_citations"]
+
+
+def test_tracked_ernaering_suite_loads_by_alias() -> None:
+    suite = local_explore_eval.load_suite("ernaering")
+
+    assert suite["suite_id"] == "local-explore-ernaering"
+    assert 10 <= len(suite["tasks"]) <= 15
+    assert suite["default_project_path"].endswith(r"\Ernaering")
     assert suite["tasks"][0]["expected_citations"]
 
 
@@ -139,7 +150,7 @@ async def test_evaluate_suite_scores_hits_bad_citations_and_manual_search(
     async def fake_explore_local_project(
         task: str,
         project_path: str | Path = ".",
-        max_turns: int = 6,
+        max_turns: int = fastcontext.DEFAULT_MAX_TURNS,
     ) -> LocalExploreResult:
         assert task == "Find target function"
         assert Path(project_path) == tmp_path.resolve()
@@ -204,6 +215,79 @@ async def test_evaluate_suite_scores_hits_bad_citations_and_manual_search(
         "fallback_observations": False,
     }
     assert report["metrics"]["failure_bucket_counts"]["wrong_file"] == 0
+    assert report["metrics"]["by_task_type"]["source_navigation"]["task_count"] == 1
+    assert report["metrics"]["by_target_family"]["src"]["path_hit_rate"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_evaluate_suite_times_out_single_task(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_local_project(tmp_path)
+    suite = _suite(tmp_path)
+
+    async def slow_explore_local_project(*args: Any, **kwargs: Any) -> LocalExploreResult:
+        import asyncio
+
+        await asyncio.sleep(1)
+        raise AssertionError("timeout should happen first")
+
+    monkeypatch.setattr(
+        local_explore_eval.fastcontext,
+        "explore_local_project",
+        slow_explore_local_project,
+    )
+
+    report = await local_explore_eval.evaluate_suite(
+        suite,
+        max_turns=2,
+        task_timeout_seconds=0.01,
+    )
+
+    task = report["tasks"][0]
+    assert task["status"] == "failed"
+    assert "Timed out after" in task["error"]
+    assert report["metrics"]["failed_tasks"] == 1
+
+
+@pytest.mark.asyncio
+async def test_evaluate_suite_preserves_failed_loop_tool_trace(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_local_project(tmp_path)
+    suite = _suite(tmp_path)
+
+    async def failed_explore_local_project(*args: Any, **kwargs: Any) -> LocalExploreResult:
+        raise fastcontext.FastContextLoopError(
+            "no final answer",
+            [
+                {
+                    "turn": 1,
+                    "tools_enabled": True,
+                    "tool_calls": [{"tool": "Read", "args": {"path": "src/foo.py"}}],
+                    "tool_observations": [{"ok": True}],
+                    "final_citations": [],
+                    "validation_notes": [],
+                }
+            ],
+        )
+
+    monkeypatch.setattr(
+        local_explore_eval.fastcontext,
+        "explore_local_project",
+        failed_explore_local_project,
+    )
+
+    report = await local_explore_eval.evaluate_suite(suite, max_turns=2)
+
+    task = report["tasks"][0]
+    assert task["status"] == "failed"
+    assert task["error"] == "no final answer"
+    assert task["tool_call_count"] == 1
+    assert task["turn_count"] == 1
+    assert task["failure_buckets"]["no_tool_calls"] is False
 
 
 @pytest.mark.asyncio
@@ -217,7 +301,7 @@ async def test_evaluate_suite_does_not_pass_fallback_observations(
     async def fake_explore_local_project(
         task: str,
         project_path: str | Path = ".",
-        max_turns: int = 6,
+        max_turns: int = fastcontext.DEFAULT_MAX_TURNS,
     ) -> LocalExploreResult:
         return LocalExploreResult(
             task=task,
@@ -315,16 +399,20 @@ def test_eval_local_explore_cli_invokes_runner(monkeypatch, capsys, tmp_path: Pa
 
     async def fake_run_local_explore_eval(
         suite: str,
-        max_turns: int = 6,
+        max_turns: int = fastcontext.DEFAULT_MAX_TURNS,
         label: str | None = None,
         output_path: Path | None = None,
         limit_tasks: int | None = None,
+        task_timeout_seconds: float | None = None,
+        progress: bool = False,
     ) -> dict[str, object]:
         assert suite == "source-scout"
         assert max_turns == 2
         assert label == "unit"
         assert output_path == tmp_path / "report.json"
         assert limit_tasks == 3
+        assert task_timeout_seconds == 60.0
+        assert progress is True
         return {
             "suite_id": "local-explore-source-scout",
             "label": label,
@@ -350,6 +438,9 @@ def test_eval_local_explore_cli_invokes_runner(monkeypatch, capsys, tmp_path: Pa
             str(output_path),
             "--limit-tasks",
             "3",
+            "--task-timeout-seconds",
+            "60",
+            "--progress",
         ],
     )
 

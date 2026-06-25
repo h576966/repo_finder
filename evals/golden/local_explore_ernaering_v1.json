@@ -1,0 +1,381 @@
+{
+  "suite_id": "local-explore-ernaering",
+  "description": "Personal Next.js golden tasks for FastContext standalone local exploration on the Ernaering app.",
+  "default_project_path": "C:\\Users\\Nikla\\.codex\\worktrees\\6bb1\\Ernaering",
+  "pass_threshold": {
+    "path_hit_rate": 0.75,
+    "line_overlap_rate": 0.5,
+    "max_bad_citations_per_task": 3
+  },
+  "tasks": [
+    {
+      "id": "ernaering_bmi_calculator_flow",
+      "task_type": "source_navigation",
+      "target_family": "src",
+      "task": "Find the BMI calculator submit flow that computes BMI, Mifflin BMR, TDEE, method comparison, protein needs, and optional nutrition risk.",
+      "expected_citations": [
+        {
+          "path": "components/bmi/bmi-form.tsx",
+          "start_line": 78,
+          "end_line": 190,
+          "reason": "BmiForm owns input state and handleSubmit computes BMI, energy estimates, protein requirements, and optional nutrition risk."
+        },
+        {
+          "path": "lib/bmi-math.ts",
+          "start_line": 17,
+          "end_line": 102,
+          "reason": "Pure BMI, Mifflin, Henry/Oxford, and NASEM/DRI energy formulas live here."
+        }
+      ],
+      "manual_search_terms": ["BmiForm", "handleSubmit", "bmrMifflin", "eerNasemDri2023"]
+    },
+    {
+      "id": "ernaering_protein_requirements",
+      "task_type": "source_navigation",
+      "target_family": "src",
+      "task": "Find where protein requirement profiles and grams or energy-percent calculations are implemented.",
+      "expected_citations": [
+        {
+          "path": "lib/protein-requirements.ts",
+          "start_line": 1,
+          "end_line": 76,
+          "reason": "Protein requirement profiles and calculateProteinRequirements live here."
+        },
+        {
+          "path": "components/bmi/bmi-form.tsx",
+          "start_line": 147,
+          "end_line": 163,
+          "reason": "The calculator attaches proteinRequirements to the displayed result here."
+        }
+      ],
+      "manual_search_terms": ["calculateProteinRequirements", "PROTEIN_REQUIREMENT_PROFILES", "proteinRequirements"]
+    },
+    {
+      "id": "ernaering_nutrition_risk_screening",
+      "task_type": "source_navigation",
+      "target_family": "src",
+      "task": "Find the optional nutrition-risk screening logic based on previous weight, date, BMI, and age.",
+      "expected_citations": [
+        {
+          "path": "lib/nutrition-risk.ts",
+          "start_line": 16,
+          "end_line": 89,
+          "reason": "classifyNutritionRisk implements weight-loss, BMI, and age criteria."
+        },
+        {
+          "path": "components/bmi/bmi-form.tsx",
+          "start_line": 165,
+          "end_line": 184,
+          "reason": "The calculator invokes nutrition-risk classification when optional previous-weight fields are set."
+        }
+      ],
+      "manual_search_terms": ["classifyNutritionRisk", "showWeightChange", "prevWeightStr", "nutritionRisk"]
+    },
+    {
+      "id": "ernaering_intake_form_shell",
+      "task_type": "source_navigation",
+      "target_family": "src",
+      "task": "Find the main intake registration UI that wires day state, meal tabs, summaries, and the active meal section.",
+      "expected_citations": [
+        {
+          "path": "app/inntak/page.tsx",
+          "start_line": 1,
+          "end_line": 9,
+          "reason": "The /inntak route renders the intake form."
+        },
+        {
+          "path": "components/inntak/inntak-form.tsx",
+          "start_line": 75,
+          "end_line": 180,
+          "reason": "InntakForm wires intake state, totals, summary scope, and layout-level state."
+        },
+        {
+          "path": "components/inntak/inntak-form.tsx",
+          "start_line": 250,
+          "end_line": 386,
+          "reason": "The same form renders meal tabs, active MealSection, export panel, and daily summary."
+        },
+        {
+          "path": "components/inntak/intake-form-state/use-intake-form-state.ts",
+          "start_line": 29,
+          "end_line": 115,
+          "reason": "The state hook wires active day, active meal, copy selectors, and current meal state used by the shell."
+        }
+      ],
+      "manual_search_terms": ["InntakForm", "MealSection", "DailySummary", "activeMeal"]
+    },
+    {
+      "id": "ernaering_intake_state_lifecycle",
+      "task_type": "source_navigation",
+      "target_family": "src",
+      "task": "Find where intake state handles active day and meal selection, item updates, copy day or meal, and localStorage lifecycle.",
+      "expected_citations": [
+        {
+          "path": "components/inntak/intake-form-state/use-intake-form-state.ts",
+          "start_line": 29,
+          "end_line": 115,
+          "reason": "The hook owns days, active day, active meal, copy selectors, and transient UI state."
+        },
+        {
+          "path": "components/inntak/intake-form-state/use-intake-form-state.ts",
+          "start_line": 124,
+          "end_line": 350,
+          "reason": "The hook implements add/update/remove/move items plus copy and clear operations."
+        },
+        {
+          "path": "components/inntak/intake-form-state/storage-lifecycle.ts",
+          "start_line": 23,
+          "end_line": 79,
+          "reason": "Storage lifecycle reads, migrates, writes, and clears local intake state."
+        }
+      ],
+      "manual_search_terms": ["useIntakeFormState", "copyActiveDay", "copyActiveMeal", "useIntakeStorageLifecycle"]
+    },
+    {
+      "id": "ernaering_parse_food_route",
+      "task_type": "source_navigation",
+      "target_family": "src",
+      "task": "Find the parse-food API route that validates request size/body, calls OpenAI parsing, caps parsed items, matches foods, and returns trace data.",
+      "expected_citations": [
+        {
+          "path": "app/api/parse-food/route.ts",
+          "start_line": 20,
+          "end_line": 110,
+          "reason": "The POST route validates input, invokes parseFoodText, matches parsed mentions, and builds response trace."
+        },
+        {
+          "path": "lib/intake/parse/openai-parser.ts",
+          "start_line": 163,
+          "end_line": 226,
+          "reason": "parseFoodText sends the structured OpenAI request and reads output text."
+        }
+      ],
+      "manual_search_terms": ["POST", "parseFoodText", "matchParsedMentions", "MAX_PARSED_ITEMS"]
+    },
+    {
+      "id": "ernaering_parse_food_schema_normalization",
+      "task_type": "source_navigation",
+      "target_family": "src",
+      "task": "Find where the OpenAI food parser prompt/schema and runtime normalization reject malformed parsed food items.",
+      "expected_citations": [
+        {
+          "path": "lib/intake/parse/openai-parser.ts",
+          "start_line": 32,
+          "end_line": 146,
+          "reason": "Parser instructions and JSON schema constrain the model output shape."
+        },
+        {
+          "path": "lib/intake/parse/openai-parser.ts",
+          "start_line": 227,
+          "end_line": 316,
+          "reason": "normalizeParsedMentions validates, trims, rejects malformed items, and normalizes query fields."
+        }
+      ],
+      "manual_search_terms": ["PARSE_INSTRUCTIONS", "PARSE_SCHEMA", "normalizeParsedMentions", "rejectedReasons"]
+    },
+    {
+      "id": "ernaering_food_matching_decision",
+      "task_type": "source_navigation",
+      "target_family": "src",
+      "task": "Find the deterministic food matching pipeline that combines lexical, alias, semantic, modifier, portion, and decision signals.",
+      "expected_citations": [
+        {
+          "path": "lib/intake/matching/matcher.ts",
+          "start_line": 95,
+          "end_line": 235,
+          "reason": "The matcher orchestrates lexical/alias/semantic candidates, quantity, alternatives, decision, and trace fields."
+        },
+        {
+          "path": "lib/intake/matching/decision.ts",
+          "start_line": 21,
+          "end_line": 50,
+          "reason": "Decision thresholds choose auto_select, needs_review, or manual_required."
+        },
+        {
+          "path": "lib/intake/matching/matcher.ts",
+          "start_line": 365,
+          "end_line": 484,
+          "reason": "Hybrid candidate finalization, decision invocation, risk reason fallback, quantity, and match-signal helpers live here."
+        }
+      ],
+      "manual_search_terms": ["matchParsedMentions", "decideMatch", "auto_select", "needs_review"]
+    },
+    {
+      "id": "ernaering_semantic_food_search",
+      "task_type": "source_navigation",
+      "target_family": "src",
+      "task": "Find the optional semantic food search support that embeds normalized food queries and reads Supabase pgVector matches.",
+      "expected_citations": [
+        {
+          "path": "lib/intake/matching/semantic-search.ts",
+          "start_line": 50,
+          "end_line": 160,
+          "reason": "Semantic matching embeds the query, calls the Supabase RPC, parses rows, and maps them back to food candidates."
+        },
+        {
+          "path": "lib/intake/matching/matcher.ts",
+          "start_line": 336,
+          "end_line": 430,
+          "reason": "The matcher decides when semantic support is used and merges semantic candidate scores."
+        }
+      ],
+      "manual_search_terms": ["searchSemanticFoodCandidates", "match_food_documents", "shouldUseSemanticSupport", "semanticScore"]
+    },
+    {
+      "id": "ernaering_manual_food_search",
+      "task_type": "source_navigation",
+      "target_family": "src",
+      "task": "Find the manual Matvaretabellen search path used by the intake UI for direct food lookup.",
+      "expected_citations": [
+        {
+          "path": "app/api/food-search/route.ts",
+          "start_line": 1,
+          "end_line": 28,
+          "reason": "The GET /api/food-search route validates query length and calls searchFoodsForUi."
+        },
+        {
+          "path": "components/inntak/food-search-client.ts",
+          "start_line": 12,
+          "end_line": 52,
+          "reason": "The browser helper calls /api/food-search and validates the response."
+        },
+        {
+          "path": "components/inntak/meal-section.tsx",
+          "start_line": 226,
+          "end_line": 260,
+          "reason": "MealSection performs manual search and creates manual food items from selected results."
+        }
+      ],
+      "manual_search_terms": ["food-search", "searchFoodResults", "addManualResult", "searchFoodsForUi"]
+    },
+    {
+      "id": "ernaering_daily_summary",
+      "task_type": "source_navigation",
+      "target_family": "src",
+      "task": "Find where daily and average nutrition summaries render macro cards, micro nutrient rows, safety warnings, and summary calculations.",
+      "expected_citations": [
+        {
+          "path": "components/inntak/daily-summary/daily-summary-view.tsx",
+          "start_line": 9,
+          "end_line": 118,
+          "reason": "DailySummary renders day/average scope, micro groups, safety warnings, and DailyTotals."
+        },
+        {
+          "path": "components/inntak/daily-summary/daily-totals.tsx",
+          "start_line": 67,
+          "end_line": 157,
+          "reason": "DailyTotals renders macro cards and breakdown tooltips."
+        },
+        {
+          "path": "lib/intake-math.ts",
+          "start_line": 165,
+          "end_line": 201,
+          "reason": "Meal, daily, all-days, and average nutrition totals are calculated here."
+        }
+      ],
+      "manual_search_terms": ["DailySummary", "DailyTotals", "averageDailyTotals", "dailyMicroTotals"]
+    },
+    {
+      "id": "ernaering_export_print_flow",
+      "task_type": "source_navigation",
+      "target_family": "src",
+      "task": "Find the intake export and print flow that creates report sessions, opens the print route, and renders summary or comparison views.",
+      "expected_citations": [
+        {
+          "path": "components/inntak/intake-export-panel.tsx",
+          "start_line": 21,
+          "end_line": 64,
+          "reason": "The export panel copies food lists and opens the print view after creating a report session."
+        },
+        {
+          "path": "lib/intake-export/session.ts",
+          "start_line": 18,
+          "end_line": 104,
+          "reason": "Report sessions are serialized, parsed, clamped, and normalized here."
+        },
+        {
+          "path": "components/inntak/intake-print-view.tsx",
+          "start_line": 58,
+          "end_line": 145,
+          "reason": "The print view reads the report session, controls summary/comparison mode, and handles copy actions."
+        },
+        {
+          "path": "lib/intake-export/report-html.ts",
+          "start_line": 17,
+          "end_line": 80,
+          "reason": "The static report HTML builder creates summary, food-list, average summary, and comparison report sections."
+        }
+      ],
+      "manual_search_terms": ["IntakeExportPanel", "createIntakeReportSession", "IntakePrintView", "comparison"]
+    },
+    {
+      "id": "ernaering_intake_ui_regression_tests",
+      "task_type": "test_navigation",
+      "target_family": "tests",
+      "task": "Find Playwright tests that cover seeded intake storage, manual food search/editing, match-state styling, portion chips, and helper data builders.",
+      "expected_citations": [
+        {
+          "path": "tests/inntak-ui.spec.ts",
+          "start_line": 64,
+          "end_line": 160,
+          "reason": "Seeded localStorage and copy-day/copy-meal intake flows are tested here."
+        },
+        {
+          "path": "tests/inntak-ui.spec.ts",
+          "start_line": 168,
+          "end_line": 325,
+          "reason": "Manual search, edit panels, match-state styling, portion chips, and scroll behavior are tested here."
+        },
+        {
+          "path": "tests/inntak-ui.spec.ts",
+          "start_line": 329,
+          "end_line": 471,
+          "reason": "Shared Playwright helpers and seeded food builders live here."
+        }
+      ],
+      "manual_search_terms": ["api/food-search", "Seedet melk", "foodItemCard", "seedStoredIntake"]
+    },
+    {
+      "id": "ernaering_calculator_ui_regression_tests",
+      "task_type": "test_navigation",
+      "target_family": "tests",
+      "task": "Find Playwright tests that verify the calculator desktop layout, mobile stacking, method comparison, protein needs, and clinical source info panel.",
+      "expected_citations": [
+        {
+          "path": "tests/kalkulator-ui.spec.ts",
+          "start_line": 1,
+          "end_line": 146,
+          "reason": "Calculator UI tests cover desktop layout, mobile stacking, method comparison, protein rows, and source links."
+        }
+      ],
+      "manual_search_terms": ["calculator renders", "calculator stacks", "calculator info", "Proteinbehov"]
+    },
+    {
+      "id": "ernaering_app_routing_navigation",
+      "task_type": "source_navigation",
+      "target_family": "src",
+      "task": "Find the app shell, route redirects, and navigation links between intake and calculator pages.",
+      "expected_citations": [
+        {
+          "path": "app/layout.tsx",
+          "start_line": 20,
+          "end_line": 44,
+          "reason": "Root layout sets metadata, navigation, page container, Analytics, and Speed Insights."
+        },
+        {
+          "path": "components/ui/app-nav.tsx",
+          "start_line": 6,
+          "end_line": 50,
+          "reason": "AppNav defines intake/calculator links and active navigation state."
+        },
+        {
+          "path": "app/page.tsx",
+          "start_line": 1,
+          "end_line": 5,
+          "reason": "The home route redirects to /inntak."
+        }
+      ],
+      "manual_search_terms": ["AppNav", "redirect", "RootLayout", "Kostregistrering"]
+    }
+  ]
+}

@@ -68,6 +68,47 @@ def test_glob_and_grep_prefer_rg_backend(tmp_path: Path, monkeypatch) -> None:
     assert grep_result["matches"][0]["citation"] == "src/components/data-table.tsx:1-1"
     assert any("--glob" in command for command in commands)
     assert not any("--ignore-case" in command for command in commands)
+    assert all("--no-config" in command for command in commands)
+    grep_command = next(command for command in commands if "--files" not in command)
+    assert grep_command[-3:] == ["--", "useReactTable", "."]
+
+
+def test_rg_grep_uses_delimiter_before_model_controlled_pattern(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write_snapshot(root)
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(fastcontext.shutil, "which", lambda name: "rg")
+
+    def fake_run(command: list[str], **kwargs: Any) -> object:
+        commands.append(command)
+        return type("Completed", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(fastcontext.subprocess, "run", fake_run)
+
+    fastcontext.grep_paths(root, "-dangerous-pattern", file_glob="**/*.tsx")
+
+    assert commands == [
+        [
+            "rg",
+            "--no-config",
+            "--color",
+            "never",
+            "--no-heading",
+            "--with-filename",
+            "--line-number",
+            "--glob",
+            "**/*.tsx",
+            *fastcontext._rg_skip_globs(),
+            "--",
+            "-dangerous-pattern",
+            ".",
+        ]
+    ]
 
 
 def test_grep_is_case_sensitive_unless_ignore_case_requested(
@@ -148,6 +189,31 @@ def test_workspace_prefix_paths_are_normalized_safely(
     assert suffix_absolute["path"] == "src/components/data-table.tsx"
     assert glob_result["matches"] == ["src/components/data-table.tsx"]
     assert grep_result["matches"][0]["path"] == "src/components/data-table.tsx"
+
+    renamed_root = tmp_path / "workspace_root"
+    renamed_root.mkdir()
+    _write_snapshot(renamed_root)
+    renamed_read = fastcontext.read_file(
+        renamed_root,
+        "/source_scout/src/components/data-table.tsx",
+        start=1,
+        end=1,
+    )
+    renamed_glob = fastcontext.glob_paths(
+        renamed_root,
+        "/source_scout/src/**/*.tsx",
+        directory="/source_scout/src",
+    )
+    renamed_grep = fastcontext.grep_paths(
+        renamed_root,
+        "useReactTable",
+        file_glob="/source_scout/src/**/*.tsx",
+        search_path="/source_scout/src",
+    )
+
+    assert renamed_read["path"] == "src/components/data-table.tsx"
+    assert renamed_glob["matches"] == ["src/components/data-table.tsx"]
+    assert renamed_grep["matches"][0]["path"] == "src/components/data-table.tsx"
 
 
 def test_unrelated_absolute_paths_still_fail_closed(tmp_path: Path) -> None:
@@ -258,11 +324,41 @@ def test_evidence_budget_detects_too_many_files() -> None:
 def test_local_seed_context_prioritizes_known_project_files(tmp_path: Path) -> None:
     root = tmp_path / "source_scout"
     (root / "src" / "source_scout").mkdir(parents=True)
-    for name in ["catalog.py", "constants.py", "models.py", "pipeline.py", "server.py"]:
+    (root / "tests").mkdir()
+    (root / "evals" / "golden").mkdir(parents=True)
+    for name in [
+        "bundles.py",
+        "catalog.py",
+        "capabilities.py",
+        "cli_status.py",
+        "constants.py",
+        "evidence.py",
+        "fastcontext.py",
+        "github_client.py",
+        "lmstudio.py",
+        "local_explore_eval.py",
+        "models.py",
+        "pipeline.py",
+        "profiler.py",
+        "server.py",
+        "__main__.py",
+    ]:
         (root / "src" / "source_scout" / name).write_text(
             "repository catalog ranking scoring freshness archived template mirror\n",
             encoding="utf-8",
         )
+    (root / "src" / "source_scout" / "assessment_eval.py").write_text(
+        "assessment eval suite loading metrics\n",
+        encoding="utf-8",
+    )
+    (root / "tests" / "test_assessor.py").write_text(
+        "def test_unknown_evidence_id_repair(): assert True\n",
+        encoding="utf-8",
+    )
+    (root / "evals" / "golden" / "assessment_smoke_v1.json").write_text(
+        '{"suite_id":"assessment-smoke"}\n',
+        encoding="utf-8",
+    )
     (root / "README.md").write_text(
         "Standalone local exploration usage documentation\n",
         encoding="utf-8",
@@ -279,8 +375,89 @@ def test_local_seed_context_prioritizes_known_project_files(tmp_path: Path) -> N
     )["likely_source_files"][0] == "src/source_scout/catalog.py"
     assert fastcontext._local_seed_context(
         root,
+        "Find where LM Studio status and FastContext status commands are registered and implemented.",
+    )["likely_source_files"][:2] == [
+        "src/source_scout/__main__.py",
+        "src/source_scout/cli_status.py",
+    ]
+    assert fastcontext._local_seed_context(
+        root,
+        "Find where the local exploration eval suite is loaded, scored, and exposed as a CLI command.",
+    )["likely_source_files"][:2] == [
+        "src/source_scout/__main__.py",
+        "src/source_scout/local_explore_eval.py",
+    ]
+    assert fastcontext._local_seed_context(
+        root,
+        "Find where catalog assets are searched and scored with Gemma profile weighting.",
+    )["likely_source_files"][:2] == [
+        "src/source_scout/catalog.py",
+        "src/source_scout/capabilities.py",
+    ]
+    assert fastcontext._local_seed_context(
+        root,
         "Find the project documentation that explains standalone local exploration usage.",
     )["likely_source_files"][:2] == ["README.md", "AGENTS.md"]
+    assert fastcontext._local_seed_context(
+        root,
+        "Find tests that verify assessor repair behavior for unknown evidence IDs.",
+    )["likely_source_files"][0] == "tests/test_assessor.py"
+    assert fastcontext._local_seed_context(
+        root,
+        "Find the golden assessment eval fixture suite.",
+    )["likely_source_files"][0] == "evals/golden/assessment_smoke_v1.json"
+    assert fastcontext._local_seed_context(
+        root,
+        "Find where source bundles are created and opened_bundle reuse outcomes are recorded.",
+    )["likely_source_files"][:2] == [
+        "src/source_scout/bundles.py",
+        "src/source_scout/server.py",
+    ]
+    assert fastcontext._local_seed_context(
+        root,
+        "Find where Gemma profiles repository cards into strict JSON and stores gemma_profile.",
+    )["likely_source_files"][0] == "src/source_scout/profiler.py"
+    assert fastcontext._local_seed_context(
+        root,
+        "Find where deterministic evidence scanner records dependency and capability signals.",
+    )["likely_source_files"][0] == "src/source_scout/evidence.py"
+    assert fastcontext._local_seed_context(
+        root,
+        "Find where GitHub API requests, rate-limit handling, and repository search calls are implemented.",
+    )["likely_source_files"][0] == "src/source_scout/github_client.py"
+    assert fastcontext._local_seed_context(
+        root,
+        "Find where FastContext local exploration runs the tool loop and returns LocalExploreResult.",
+    )["likely_source_files"][:2] == [
+        "src/source_scout/fastcontext.py",
+        "src/source_scout/models.py",
+    ]
+    assert fastcontext._local_seed_context(
+        root,
+        "Find where FastContext sends LM Studio structured output schema and falls back to robust parsing.",
+    )["likely_source_files"][:2] == [
+        "src/source_scout/lmstudio.py",
+        "src/source_scout/fastcontext.py",
+    ]
+    assert fastcontext._local_seed_context(
+        root,
+        "Find the dataclasses that define reusable candidates, bundles, outcomes, "
+        "and local exploration results.",
+    )["likely_source_files"][0] == "src/source_scout/models.py"
+    seed = fastcontext._local_seed_context(
+        root,
+        "Find where repository qualification rejects archived template mirror repos.",
+    )
+    priority_paths = fastcontext._seed_priority_paths(seed)
+    assert priority_paths[0] == "src/source_scout/pipeline.py"
+    assert "src/source_scout/constants.py" in priority_paths
+    catalog_seed = fastcontext._local_seed_context(
+        root,
+        "Find where reusable catalog candidates are scored with capability intent and Gemma profile signals.",
+    )
+    assert catalog_seed["priority_file_matches"]
+    assert catalog_seed["priority_file_matches"][0]["path"] == "src/source_scout/catalog.py"
+    assert "citation" in catalog_seed["priority_file_matches"][0]
 
 
 def test_final_answer_choices_prioritize_primary_source_paths() -> None:
@@ -301,6 +478,78 @@ def test_final_answer_choices_prioritize_primary_source_paths() -> None:
         "src/source_scout/server.py:20-30",
     ]
     assert "C1: src/source_scout/models.py:5-8" in fastcontext._observed_citation_choices_text(support)
+
+
+def test_final_answer_choices_and_budget_honor_task_priority_paths() -> None:
+    support = fastcontext.ObservationSupport(
+        files=set(),
+        ranges={
+            "src/source_scout/assessor.py": [(20, 30)],
+            "src/source_scout/evidence.py": [(270, 300)],
+            "src/source_scout/catalog.py": [(140, 150)],
+        },
+    )
+
+    choices = fastcontext._observed_citation_choices(
+        support,
+        priority_paths=["src/source_scout/evidence.py"],
+    )
+    budget = fastcontext._apply_evidence_budget(
+        [
+            "src/source_scout/assessor.py:20-30",
+            "src/source_scout/catalog.py:140-150",
+            "src/source_scout/evidence.py:270-300",
+            "src/source_scout/evidence.py:400-420",
+        ],
+        priority_paths=["src/source_scout/evidence.py"],
+    )
+
+    assert choices[0] == "src/source_scout/evidence.py:270-300"
+    assert budget.evidence_paths[:2] == [
+        "src/source_scout/evidence.py:270-300",
+        "src/source_scout/evidence.py:400-420",
+    ]
+
+
+def test_finalization_waits_for_priority_observation() -> None:
+    support = fastcontext.ObservationSupport(
+        files=set(),
+        ranges={
+            "src/source_scout/assessor.py": [(20, 30)],
+            "src/source_scout/catalog.py": [(140, 150)],
+            "src/source_scout/evidence.py": [(270, 300)],
+        },
+    )
+
+    assert fastcontext._finalization_reason(
+        1,
+        6,
+        support,
+        priority_paths=["src/source_scout/pipeline.py"],
+    ) is None
+    assert fastcontext._finalization_reason(
+        5,
+        6,
+        support,
+        priority_paths=["src/source_scout/pipeline.py"],
+    ) is not None
+    assert fastcontext._finalization_reason(
+        1,
+        6,
+        support,
+        priority_paths=["src/source_scout/evidence.py"],
+    ) == "enough_primary_source_ranges"
+
+
+def test_fastcontext_seed_defaults_and_env_override(monkeypatch) -> None:
+    monkeypatch.delenv("SOURCE_SCOUT_FASTCONTEXT_SEED", raising=False)
+    assert fastcontext._fastcontext_seed() == fastcontext.DEFAULT_FASTCONTEXT_SEED
+
+    monkeypatch.setenv("SOURCE_SCOUT_FASTCONTEXT_SEED", "123")
+    assert fastcontext._fastcontext_seed() == 123
+
+    monkeypatch.setenv("SOURCE_SCOUT_FASTCONTEXT_SEED", "none")
+    assert fastcontext._fastcontext_seed() is None
 
 
 def test_local_seed_context_includes_likely_source_files(tmp_path: Path, monkeypatch) -> None:

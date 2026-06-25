@@ -1,6 +1,6 @@
 # Development Notes
 
-Useful implementation notes preserved from the old agent-specific setup.
+Useful implementation notes for the current Source Scout product path.
 
 ## FastMCP
 
@@ -43,7 +43,7 @@ Useful implementation notes preserved from the old agent-specific setup.
   `GREP`-style tools, not general code generation.
 - Standalone FastContext exploration is evaluated through
   `evals/golden/local_explore_source_scout_v1.json` and
-  `source-scout eval-local-explore --suite source-scout --max-turns 6`.
+  `source-scout eval-local-explore --suite source-scout --max-turns 7`.
 - Final FastContext evidence is budgeted to at most three citations across at
   most three files, with one or two tight ranges preferred.
 

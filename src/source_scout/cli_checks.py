@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 import sys
 
+from . import fastcontext
+
 
 def _check_commands(with_local_explore_eval: bool) -> list[list[str]]:
     commands = [
@@ -20,7 +22,7 @@ def _check_commands(with_local_explore_eval: bool) -> list[list[str]]:
                 "--suite",
                 "source-scout",
                 "--max-turns",
-                "6",
+                str(fastcontext.DEFAULT_MAX_TURNS),
                 "--label",
                 "check-local-explore",
             ]

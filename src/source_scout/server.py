@@ -45,7 +45,7 @@ async def explore_local_code(
     max_turns: Annotated[
         int,
         Field(description="Maximum FastContext exploration turns", ge=1, le=12),
-    ] = 6,
+    ] = fastcontext.DEFAULT_MAX_TURNS,
 ) -> LocalExploreResult:
     if not task.strip():
         raise ToolError("Task description is required.")
@@ -61,9 +61,7 @@ async def explore_local_code(
         raise ToolError(str(exc))
 
 
-@mcp.tool(
-    annotations={"readOnlyHint": True},
-)
+@mcp.tool()
 async def assess_reusable_code(
     candidate_id: Annotated[
         str,

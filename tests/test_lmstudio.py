@@ -157,13 +157,19 @@ def test_load_fastcontext_model_uses_expected_lms_flags(monkeypatch) -> None:
     def fake_run(command: list[str], **kwargs: Any) -> object:
         calls.append(command)
         assert kwargs["check"] is True
-        return type("Completed", (), {"stdout": "loaded", "stderr": ""})()
+        if command[1:] == ["ls", "--json"]:
+            stdout = json.dumps([{"modelKey": lmstudio.DEFAULT_FASTCONTEXT_MODEL}])
+        elif command[1:] == ["ps", "--json"]:
+            stdout = "[]"
+        else:
+            stdout = "loaded"
+        return type("Completed", (), {"stdout": stdout, "stderr": ""})()
 
     monkeypatch.setattr(lmstudio.subprocess, "run", fake_run)
 
     result = lmstudio.load_fastcontext_model()
 
-    command = calls[0]
+    command = calls[-1]
     assert command[1:] == [
         "load",
         lmstudio.DEFAULT_FASTCONTEXT_MODEL,
@@ -177,6 +183,50 @@ def test_load_fastcontext_model_uses_expected_lms_flags(monkeypatch) -> None:
     assert result["model_id"] == lmstudio.DEFAULT_FASTCONTEXT_MODEL
     assert result["context_length"] == 65536
     assert result["gpu"] == "max"
+
+
+def test_load_fastcontext_model_reloads_existing_model(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> object:
+        calls.append(command)
+        assert kwargs["check"] is True
+        if command[1:] == ["ls", "--json"]:
+            stdout = json.dumps([{"modelKey": lmstudio.DEFAULT_FASTCONTEXT_MODEL}])
+        elif command[1:] == ["ps", "--json"]:
+            stdout = json.dumps(
+                [
+                    {
+                        "modelKey": lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+                        "identifier": lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+                        "contextLength": 262144,
+                    }
+                ]
+            )
+        else:
+            stdout = "ok"
+        return type("Completed", (), {"stdout": stdout, "stderr": ""})()
+
+    monkeypatch.setattr(lmstudio.subprocess, "run", fake_run)
+
+    lmstudio.load_fastcontext_model()
+
+    assert calls == [
+        [lmstudio.LMS_EXE, "ls", "--json"],
+        [lmstudio.LMS_EXE, "ps", "--json"],
+        [lmstudio.LMS_EXE, "unload", lmstudio.DEFAULT_FASTCONTEXT_MODEL],
+        [
+            lmstudio.LMS_EXE,
+            "load",
+            lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+            "--context-length",
+            "65536",
+            "--gpu",
+            "max",
+            "--identifier",
+            lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        ],
+    ]
 
 
 def test_load_gemma_model_uses_expected_context_and_reloads_existing_model(monkeypatch) -> None:
@@ -267,6 +317,24 @@ async def test_chat_json_passes_response_format() -> None:
         response_format=response_format,
     )
     assert result == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_passes_seed_when_configured() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["seed"] == 123
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    transport = httpx.MockTransport(handler)
+    result = await lmstudio.chat_completion(
+        "gemma",
+        [{"role": "user", "content": "hello"}],
+        transport=transport,
+        seed=123,
+    )
+
+    assert result.content == "ok"
 
 
 @pytest.mark.asyncio

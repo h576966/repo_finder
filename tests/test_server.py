@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from fastmcp.exceptions import ToolError
 
-from source_scout import catalog, server
+from source_scout import catalog, fastcontext, server
 from source_scout.models import LocalExploreResult
 
 
@@ -22,7 +22,7 @@ async def test_explore_local_code_tool_is_read_only_and_ephemeral(monkeypatch, t
     async def fake_explore_local_project(
         task: str,
         project_path: str,
-        max_turns: int = 6,
+        max_turns: int = fastcontext.DEFAULT_MAX_TURNS,
     ) -> LocalExploreResult:
         assert task == "Find MCP tools"
         assert project_path == str(tmp_path)
@@ -58,7 +58,7 @@ async def test_explore_local_code_tool_is_read_only_and_ephemeral(monkeypatch, t
 
 
 @pytest.mark.asyncio
-async def test_assess_reusable_code_tool_is_registered_read_only_and_returns_cli_shape(
+async def test_assess_reusable_code_tool_is_registered_and_returns_cli_shape(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, Any]] = []
@@ -85,7 +85,7 @@ async def test_assess_reusable_code_tool_is_registered_read_only_and_returns_cli
 
     tools = await server.mcp.get_tools()
     assert "assess_reusable_code" in tools
-    assert tools["assess_reusable_code"].annotations.readOnlyHint is True
+    assert not bool(getattr(tools["assess_reusable_code"].annotations, "readOnlyHint", False))
 
     result = await server.assess_reusable_code.fn(
         "asset-1",

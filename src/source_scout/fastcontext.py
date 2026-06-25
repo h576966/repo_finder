@@ -18,7 +18,7 @@ PROMPT_VERSION = "fastcontext-refine-v1"
 SCHEMA_VERSION = "fastcontext-evidence-v1"
 ANALYZER_VERSION = "fastcontext-harness-v1"
 
-DEFAULT_MAX_TURNS = 6
+DEFAULT_MAX_TURNS = 7
 MAX_TOOL_CALLS_PER_TURN = 5
 MAX_GLOB_RESULTS = 80
 MAX_GREP_RESULTS = 80
@@ -32,13 +32,30 @@ MAX_FALLBACK_CITATIONS = 3
 MAX_FINAL_FILES = 3
 TARGET_FINAL_CITATIONS = 2
 FOCUSED_FINAL_CITATION_LINES = 80
+PRIORITY_OBSERVATION_PATH_LIMIT = 4
 RG_TIMEOUT_SECONDS = 10
-LOCAL_CONTEXT_FILE_LIMIT = 80
-LOCAL_CONTEXT_GREP_LIMIT = 30
-LOCAL_EXTRA_SKIP_DIRS = {".next", ".source_scout", "build", "coverage", "dist"}
+LOCAL_CONTEXT_FILE_LIMIT = 40
+LOCAL_CONTEXT_GREP_LIMIT = 20
+LOCAL_EXTRA_SKIP_DIRS = {".agents", ".next", ".source_scout", "build", "coverage", "dist"}
+LOCAL_SKIP_FILE_NAMES = {
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "tsconfig.tsbuildinfo",
+    "yarn.lock",
+}
 FASTCONTEXT_STRUCTURED_OUTPUT_ENV = "SOURCE_SCOUT_FASTCONTEXT_STRUCTURED_OUTPUT"
-PRIMARY_SOURCE_PREFIXES = ("src/source_scout/", "src/")
-NOISY_EVIDENCE_PREFIXES = ("tests/", "docs/", "evals/")
+FASTCONTEXT_SEED_ENV = "SOURCE_SCOUT_FASTCONTEXT_SEED"
+DEFAULT_FASTCONTEXT_SEED = 20260624
+PRIMARY_SOURCE_PREFIXES = ("src/source_scout/", "src/", "app/", "components/", "lib/")
+NOISY_EVIDENCE_PREFIXES = (
+    ".agents/",
+    "docs/",
+    "eval/",
+    "evals/",
+    "scripts/",
+    "supabase/migrations/",
+    "tests/",
+)
 NOISY_EVIDENCE_FILES = {"README.md", "AGENTS.md", "pyproject.toml"}
 LOCAL_TASK_STOPWORDS = {
     "actual",
@@ -250,15 +267,18 @@ async def explore_local_project(
     if validate_model:
         await ensure_fastcontext_available(config, transport=transport)
 
+    seed_context = _local_seed_context(root, task)
+    priority_paths = _seed_priority_paths(seed_context)
     try:
         loop_result = await _run_tool_loop(
             root=root,
-            messages=_local_messages(root, task),
+            messages=_local_messages(root, task, seed_context=seed_context),
             model_id=config.fastcontext_model,
             config=config,
             max_turns=max_turns,
             transport=transport,
             allow_observation_fallback=True,
+            priority_paths=priority_paths,
         )
     except FastContextLoopError as exc:
         if trace_path is not None:
@@ -394,13 +414,16 @@ async def _run_tool_loop(
     max_turns: int,
     transport: httpx.AsyncBaseTransport | None,
     allow_observation_fallback: bool = False,
+    priority_paths: list[str] | None = None,
 ) -> FastContextLoopResult:
     active_messages = list(messages)
+    active_priority_paths = priority_paths or []
     trajectory: list[dict[str, Any]] = []
     observation_support = ObservationSupport(files=set(), ranges={})
     final_answer_only_next = False
     final_answer_retry_used = False
     budget_retry_used = False
+    priority_retry_used = False
     for turn in range(1, max(1, max_turns) + 1):
         allow_tools = not final_answer_only_next
         completion = await _chat_fastcontext_completion(
@@ -432,23 +455,65 @@ async def _run_tool_loop(
                 root,
                 parsed,
                 observation_support,
+                priority_paths=active_priority_paths,
             )
             if validation_notes:
                 turn_record["validation_notes"] = validation_notes
             if evidence_paths:
-                budget_result = _apply_evidence_budget(evidence_paths)
+                budget_result = _apply_evidence_budget(
+                    evidence_paths,
+                    priority_paths=active_priority_paths,
+                )
                 _record_budget_result(turn_record, budget_result)
-                if budget_result.over_budget and not budget_retry_used:
+                if budget_result.over_budget and not budget_retry_used and turn < max_turns:
                     active_messages.extend(
                         _budget_feedback_messages(
                             content,
                             observation_support=observation_support,
                             budget_notes=budget_result.notes,
+                            priority_paths=active_priority_paths,
                         )
                     )
                     budget_retry_used = True
                     final_answer_only_next = True
                     continue
+                priority_notes = _priority_omission_notes(
+                    budget_result.evidence_paths,
+                    observation_support,
+                    active_priority_paths,
+                )
+                if priority_notes:
+                    turn_record.setdefault("validation_notes", []).extend(priority_notes)
+                    if not priority_retry_used:
+                        active_messages.extend(
+                            _priority_feedback_messages(
+                                content,
+                                observation_support=observation_support,
+                                priority_notes=priority_notes,
+                                priority_paths=active_priority_paths,
+                            )
+                        )
+                        priority_retry_used = True
+                        final_answer_only_next = True
+                        continue
+                    if allow_observation_fallback:
+                        priority_result = _completed_priority_observation_result(
+                            observation_support,
+                            trajectory,
+                            note=(
+                                "Accepted observed task-priority citations after final-answer "
+                                "retry omitted the observed priority path."
+                            ),
+                            priority_paths=active_priority_paths,
+                            turn_record=turn_record,
+                            prefix_notes=[
+                                *parsed.notes,
+                                *validation_notes,
+                                *priority_notes,
+                            ],
+                        )
+                        if priority_result is not None:
+                            return priority_result
                 turn_record["final_citations"] = budget_result.evidence_paths
                 return FastContextLoopResult(
                     status="completed",
@@ -475,19 +540,31 @@ async def _run_tool_loop(
                 active_messages.extend(
                     _fallback_observation_messages(content, observations)
                 )
-            finalization_reason = _finalization_reason(turn, max_turns, observation_support)
+            finalization_reason = _finalization_reason(
+                turn,
+                max_turns,
+                observation_support,
+                priority_paths=active_priority_paths,
+            )
             turn_record["finalization_reason"] = finalization_reason
             if finalization_reason:
                 active_messages.append(
                     _final_answer_request_message(
                         observation_support,
                         finalization_reason=finalization_reason,
+                        priority_paths=active_priority_paths,
                     )
                 )
             elif tool_mode_response:
-                active_messages.append(_continue_exploration_message(observation_support))
+                active_messages.append(
+                    _continue_exploration_message(
+                        observation_support,
+                        priority_paths=active_priority_paths,
+                    )
+                )
             final_answer_retry_used = False
             budget_retry_used = False
+            priority_retry_used = False
             final_answer_only_next = finalization_reason is not None
             continue
 
@@ -503,11 +580,23 @@ async def _run_tool_loop(
                         turn_record,
                         observation_support=observation_support,
                         final_answer_only=True,
+                        priority_paths=active_priority_paths,
                     )
                 )
                 final_answer_retry_used = True
                 final_answer_only_next = True
             elif not allow_tools and observation_support.ranges and allow_observation_fallback:
+                priority_result = _completed_priority_observation_result(
+                    observation_support,
+                    trajectory,
+                    note=(
+                        "Accepted observed task-priority citations after final-answer "
+                        "retry did not validate."
+                    ),
+                    priority_paths=active_priority_paths,
+                )
+                if priority_result is not None:
+                    return priority_result
                 return _fallback_observation_result(
                     observation_support,
                     trajectory,
@@ -515,6 +604,7 @@ async def _run_tool_loop(
                         "FastContext final-answer retry did not validate; "
                         "showing supported tool observations only."
                     ),
+                    priority_paths=active_priority_paths,
                 )
             else:
                 active_messages.extend(
@@ -522,6 +612,7 @@ async def _run_tool_loop(
                         content,
                         turn_record,
                         observation_support=observation_support,
+                        priority_paths=active_priority_paths,
                     )
                 )
                 final_answer_only_next = False
@@ -538,11 +629,23 @@ async def _run_tool_loop(
                     content,
                     observation_support=observation_support,
                     final_answer_only=True,
+                    priority_paths=active_priority_paths,
                 )
             )
             final_answer_retry_used = True
             final_answer_only_next = True
         elif not allow_tools and observation_support.ranges and allow_observation_fallback:
+            priority_result = _completed_priority_observation_result(
+                observation_support,
+                trajectory,
+                note=(
+                    "Accepted observed task-priority citations after final-answer "
+                    "retry did not produce citations."
+                ),
+                priority_paths=active_priority_paths,
+            )
+            if priority_result is not None:
+                return priority_result
             return _fallback_observation_result(
                 observation_support,
                 trajectory,
@@ -550,6 +653,7 @@ async def _run_tool_loop(
                     "FastContext final-answer retry did not produce citations; "
                     "showing supported tool observations only."
                 ),
+                priority_paths=active_priority_paths,
             )
         else:
             active_messages.extend(
@@ -557,18 +661,23 @@ async def _run_tool_loop(
                     content,
                     observation_support=observation_support,
                     final_answer_only=False,
+                    priority_paths=active_priority_paths,
                 )
             )
             final_answer_only_next = False
 
-    fallback_evidence = _evidence_from_trajectory(trajectory) or _evidence_from_observation_support(
-        observation_support
+    fallback_evidence = _evidence_from_observation_support(
+        observation_support,
+        priority_paths=active_priority_paths,
+    ) or _evidence_from_trajectory(
+        trajectory,
     )
     if fallback_evidence:
         fallback_budget = _apply_evidence_budget(
             fallback_evidence,
             max_citations=MAX_FALLBACK_CITATIONS,
             max_files=MAX_FALLBACK_CITATIONS,
+            priority_paths=active_priority_paths,
         )
         trajectory.append(
             {
@@ -588,6 +697,17 @@ async def _run_tool_loop(
             }
         )
         if allow_observation_fallback:
+            priority_result = _completed_priority_observation_result(
+                observation_support,
+                trajectory,
+                note=(
+                    "Accepted observed task-priority citations after max_turns "
+                    "without a valid final answer."
+                ),
+                priority_paths=active_priority_paths,
+            )
+            if priority_result is not None:
+                return priority_result
             return FastContextLoopResult(
                 status="fallback_observations",
                 evidence_paths=fallback_budget.evidence_paths,
@@ -622,6 +742,7 @@ async def _chat_fastcontext_completion(
             transport=transport,
             max_tokens=max_tokens,
             temperature=temperature,
+            seed=_fastcontext_seed(),
         )
     try:
         return await lmstudio.chat_completion(
@@ -634,6 +755,7 @@ async def _chat_fastcontext_completion(
             tools=_fastcontext_tools(),
             tool_choice="auto",
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            seed=_fastcontext_seed(),
         )
     except lmstudio.LMStudioError:
         content = await _chat_fastcontext(
@@ -672,6 +794,7 @@ async def _chat_fastcontext(
             max_tokens=max_tokens,
             temperature=temperature,
             response_format=response_format,
+            seed=_fastcontext_seed(),
         )
     except lmstudio.LMStudioError:
         if response_format is None:
@@ -683,6 +806,7 @@ async def _chat_fastcontext(
             transport=transport,
             max_tokens=max_tokens,
             temperature=temperature,
+            seed=_fastcontext_seed(),
         )
 
 
@@ -833,7 +957,11 @@ def _fallback_observation_messages(
     ]
 
 
-def _continue_exploration_message(observation_support: ObservationSupport) -> dict[str, str]:
+def _continue_exploration_message(
+    observation_support: ObservationSupport,
+    *,
+    priority_paths: list[str] | None = None,
+) -> dict[str, str]:
     return {
         "role": "user",
         "content": (
@@ -841,7 +969,8 @@ def _continue_exploration_message(observation_support: ObservationSupport) -> di
             "Continue using Read, Glob, or Grep to gather focused file/line evidence. If you are "
             "already certain, you may return final_answer JSON with 1-3 citation_ids, ideally "
             f"{TARGET_FINAL_CITATIONS}, from the observed choices below.\n\n"
-            f"{_observed_citation_choices_text(observation_support)}"
+            f"{_priority_paths_text(priority_paths)}"
+            f"{_observed_citation_choices_text(observation_support, priority_paths=priority_paths)}"
         ),
     }
 
@@ -851,8 +980,12 @@ def _final_answer_request_message(
     *,
     feedback: str | None = None,
     finalization_reason: str | None = None,
+    priority_paths: list[str] | None = None,
 ) -> dict[str, str]:
-    choices_text = _observed_citation_choices_text(observation_support)
+    choices_text = _observed_citation_choices_text(
+        observation_support,
+        priority_paths=priority_paths,
+    )
     feedback_text = f"\n\nValidation feedback:\n{feedback}" if feedback else ""
     reason_text = f"\n\nFinalization reason: {finalization_reason}" if finalization_reason else ""
     return {
@@ -869,6 +1002,7 @@ def _final_answer_request_message(
             "wildcards, globs, or shortened paths such as /source_scout/src, source_scout/src, "
             "evals/*.py, or src/**. Prefer src/source_scout choices over tests, docs, and evals "
             "unless the task explicitly asks for tests or documentation.\n\n"
+            f"{_priority_paths_text(priority_paths)}"
             f"{choices_text}"
             f"{reason_text}"
             f"{feedback_text}"
@@ -882,6 +1016,7 @@ def _validation_feedback_messages(
     *,
     observation_support: ObservationSupport,
     final_answer_only: bool = False,
+    priority_paths: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     feedback = (
         "Those citations did not validate against the project root or successful tool "
@@ -897,6 +1032,7 @@ def _validation_feedback_messages(
                     f"{feedback}\n\nRetry once without tools. Choose only exact observed "
                     "path:start-end choices from the list."
                 ),
+                priority_paths=priority_paths,
             ),
         ]
     return [
@@ -917,6 +1053,7 @@ def _final_response_feedback_messages(
     *,
     observation_support: ObservationSupport,
     final_answer_only: bool,
+    priority_paths: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     feedback = (
         "That final response did not contain usable exact citations. "
@@ -930,6 +1067,7 @@ def _final_response_feedback_messages(
                 feedback=(
                     f"{feedback} Retry once using only exact observed path:start-end choices."
                 ),
+                priority_paths=priority_paths,
             ),
         ]
     return [
@@ -949,6 +1087,7 @@ def _budget_feedback_messages(
     *,
     observation_support: ObservationSupport,
     budget_notes: list[str],
+    priority_paths: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     feedback = (
         "The final answer selected too many citations:\n"
@@ -964,16 +1103,49 @@ def _budget_feedback_messages(
             observation_support,
             feedback=feedback,
             finalization_reason="citation_budget_retry",
+            priority_paths=priority_paths,
         ),
     ]
 
 
-def _observed_citation_choices_text(support: ObservationSupport) -> str:
-    choice_items = _observed_citation_choice_items(support)
+def _priority_feedback_messages(
+    content: str,
+    *,
+    observation_support: ObservationSupport,
+    priority_notes: list[str],
+    priority_paths: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    feedback = (
+        "The final answer skipped an observed task-priority path:\n"
+        f"{json.dumps(priority_notes, sort_keys=True)}\n\n"
+        "Retry once without tools. Choose citation IDs from the observed priority path "
+        "when that path answers the task. Do not choose lower-priority supporting ranges "
+        "instead of the priority source."
+    )
+    return [
+        {"role": "assistant", "content": content},
+        _final_answer_request_message(
+            observation_support,
+            feedback=feedback,
+            finalization_reason="priority_path_retry",
+            priority_paths=priority_paths,
+        ),
+    ]
+
+
+def _observed_citation_choices_text(
+    support: ObservationSupport,
+    *,
+    priority_paths: list[str] | None = None,
+) -> str:
+    choice_items = _observed_citation_choice_items(support, priority_paths=priority_paths)
     if not choice_items:
         files = "\n".join(
             f"- {path}"
-            for path in sorted(support.files, key=_evidence_path_sort_key)[:MAX_FINAL_CITATION_CHOICES]
+            for path in sorted(
+                support.files,
+                key=lambda path: _prioritized_path_sort_key(path, priority_paths),
+            )[:MAX_FINAL_CITATION_CHOICES]
         )
         if files:
             return (
@@ -992,20 +1164,29 @@ def _observed_citation_choices_text(support: ObservationSupport) -> str:
 def _observed_citation_choices(
     support: ObservationSupport,
     limit: int = MAX_FINAL_CITATION_CHOICES,
+    priority_paths: list[str] | None = None,
 ) -> list[str]:
     return [
         citation.evidence_path()
-        for _choice_id, citation in _observed_citation_choice_items(support, limit=limit)
+        for _choice_id, citation in _observed_citation_choice_items(
+            support,
+            limit=limit,
+            priority_paths=priority_paths,
+        )
     ]
 
 
 def _observed_citation_choice_items(
     support: ObservationSupport,
     limit: int = MAX_FINAL_CITATION_CHOICES,
+    priority_paths: list[str] | None = None,
 ) -> list[tuple[str, FastContextCitation]]:
     choices: list[tuple[str, FastContextCitation]] = []
-    for path in sorted(support.ranges, key=_evidence_path_sort_key):
-        for start, end in _merge_ranges(support.ranges[path]):
+    for path in sorted(
+        support.ranges,
+        key=lambda path: _prioritized_path_sort_key(path, priority_paths),
+    ):
+        for start, end in sorted(_merge_ranges(support.ranges[path]), key=_range_sort_key):
             choice_id = f"C{len(choices) + 1}"
             choices.append((choice_id, FastContextCitation(path=path, start_line=start, end_line=end)))
             if len(choices) >= limit:
@@ -1013,11 +1194,82 @@ def _observed_citation_choice_items(
     return choices
 
 
-def _observed_citation_choice_map(support: ObservationSupport) -> dict[str, FastContextCitation]:
+def _observed_citation_choice_map(
+    support: ObservationSupport,
+    *,
+    priority_paths: list[str] | None = None,
+) -> dict[str, FastContextCitation]:
     return {
         choice_id: citation
-        for choice_id, citation in _observed_citation_choice_items(support)
+        for choice_id, citation in _observed_citation_choice_items(
+            support,
+            priority_paths=priority_paths,
+        )
     }
+
+
+def _priority_paths_text(priority_paths: list[str] | None = None) -> str:
+    paths = [path for path in priority_paths or [] if path][:PRIORITY_OBSERVATION_PATH_LIMIT]
+    if not paths:
+        return ""
+    formatted = "\n".join(f"- {path}" for path in paths)
+    return (
+        "Task-priority paths from deterministic seed context:\n"
+        f"{formatted}\n"
+        "Prefer observed citations from these paths when they answer the task.\n\n"
+    )
+
+
+def _observed_priority_paths(
+    support: ObservationSupport,
+    priority_paths: list[str] | None = None,
+) -> list[str]:
+    observed = {path.replace("\\", "/") for path in support.ranges}
+    paths: list[str] = []
+    for priority_path in (priority_paths or [])[:PRIORITY_OBSERVATION_PATH_LIMIT]:
+        normalized = priority_path.replace("\\", "/")
+        if normalized in observed:
+            paths.append(normalized)
+    return paths
+
+
+def _required_observed_priority_path(
+    support: ObservationSupport,
+    priority_paths: list[str] | None = None,
+) -> str:
+    observed = _observed_priority_paths(support, priority_paths)
+    return observed[0] if observed else ""
+
+
+def _priority_omission_notes(
+    evidence_paths: list[str],
+    support: ObservationSupport,
+    priority_paths: list[str] | None = None,
+) -> list[str]:
+    required_path = _required_observed_priority_path(support, priority_paths)
+    if not required_path:
+        return []
+    selected_paths = _citation_files(evidence_paths)
+    if required_path in selected_paths:
+        return []
+    return [f"Final answer omitted observed task-priority path: {required_path}"]
+
+
+def _priority_observation_evidence_paths(
+    support: ObservationSupport,
+    priority_paths: list[str] | None = None,
+) -> list[str]:
+    required_path = _required_observed_priority_path(support, priority_paths)
+    if not required_path:
+        return []
+    return [
+        evidence_path
+        for evidence_path in _observed_citation_choices(
+            support,
+            priority_paths=priority_paths,
+        )
+        if _citation_path(evidence_path) == required_path
+    ][:MAX_FINAL_CITATIONS]
 
 
 def _apply_evidence_budget(
@@ -1025,8 +1277,12 @@ def _apply_evidence_budget(
     *,
     max_citations: int = MAX_FINAL_CITATIONS,
     max_files: int = MAX_FINAL_FILES,
+    priority_paths: list[str] | None = None,
 ) -> EvidenceBudgetResult:
-    unique_paths = sorted(set(evidence_paths), key=_evidence_citation_sort_key)
+    unique_paths = sorted(
+        set(evidence_paths),
+        key=lambda path: _evidence_citation_sort_key(path, priority_paths),
+    )
     original_count = len(unique_paths)
     original_file_count = len(_citation_files(unique_paths))
     over_budget = original_count > max_citations or original_file_count > max_files
@@ -1088,22 +1344,54 @@ def _citation_path(evidence_path: str) -> str:
     return evidence_path
 
 
-def _evidence_citation_sort_key(evidence_path: str) -> tuple[int, str, int, str]:
+def _evidence_citation_sort_key(
+    evidence_path: str,
+    priority_paths: list[str] | None = None,
+) -> tuple[int, int, str, int, int, str]:
     path = _citation_path(evidence_path)
     start_line = 0
+    end_line = 0
     match = re.match(r".+?:(?P<start>\d+)(?:-\d+)?$", evidence_path)
     if match:
         start_line = int(match.group("start"))
+        end_match = re.match(r".+?:\d+-(?P<end>\d+)$", evidence_path)
+        end_line = int(end_match.group("end")) if end_match else start_line
     priority, normalized = _evidence_path_sort_key(path)
-    return priority, normalized, start_line, evidence_path
+    priority_index = _priority_path_index(path, priority_paths)
+    broad_penalty, _range_start, _range_end = _range_sort_key((start_line, end_line or start_line))
+    return priority_index, priority, normalized, broad_penalty, start_line, evidence_path
+
+
+def _prioritized_path_sort_key(
+    path: str,
+    priority_paths: list[str] | None = None,
+) -> tuple[int, int, str]:
+    priority, normalized = _evidence_path_sort_key(path)
+    return _priority_path_index(path, priority_paths), priority, normalized
+
+
+def _priority_path_index(path: str, priority_paths: list[str] | None = None) -> int:
+    normalized = path.replace("\\", "/")
+    for index, priority_path in enumerate(priority_paths or []):
+        if normalized == priority_path.replace("\\", "/"):
+            return index
+    return 10_000
 
 
 def _finalization_reason(
     turn: int,
     max_turns: int,
     support: ObservationSupport,
+    *,
+    priority_paths: list[str] | None = None,
 ) -> str | None:
     choices = _observed_citation_choice_items(support)
+    if (
+        priority_paths
+        and not _has_priority_observation(support, priority_paths)
+        and turn < max(1, max_turns - 1)
+    ):
+        return None
     primary_choices = [
         citation
         for _choice_id, citation in choices
@@ -1125,16 +1413,25 @@ def _finalization_reason(
     return None
 
 
+def _has_priority_observation(
+    support: ObservationSupport,
+    priority_paths: list[str] | None = None,
+) -> bool:
+    return bool(_observed_priority_paths(support, priority_paths))
+
+
 def _fallback_observation_result(
     support: ObservationSupport,
     trajectory: list[dict[str, Any]],
     *,
     note: str,
+    priority_paths: list[str] | None = None,
 ) -> FastContextLoopResult:
     budget_result = _apply_evidence_budget(
-        _evidence_from_observation_support(support),
+        _evidence_from_observation_support(support, priority_paths=priority_paths),
         max_citations=MAX_FALLBACK_CITATIONS,
         max_files=MAX_FALLBACK_CITATIONS,
+        priority_paths=priority_paths,
     )
     evidence = budget_result.evidence_paths
     trajectory.append(
@@ -1156,6 +1453,56 @@ def _fallback_observation_result(
         status="fallback_observations",
         evidence_paths=evidence,
         notes=[note, *budget_result.notes],
+        trajectory=trajectory,
+    )
+
+
+def _completed_priority_observation_result(
+    support: ObservationSupport,
+    trajectory: list[dict[str, Any]],
+    *,
+    note: str,
+    priority_paths: list[str] | None = None,
+    turn_record: dict[str, Any] | None = None,
+    prefix_notes: list[str] | None = None,
+) -> FastContextLoopResult | None:
+    priority_evidence = _priority_observation_evidence_paths(
+        support,
+        priority_paths,
+    )
+    if not priority_evidence:
+        return None
+    budget_result = _apply_evidence_budget(
+        priority_evidence,
+        priority_paths=priority_paths,
+    )
+    evidence = budget_result.evidence_paths
+    if not evidence:
+        return None
+    if turn_record is not None:
+        _record_budget_result(turn_record, budget_result)
+        turn_record["final_citations"] = evidence
+        turn_record.setdefault("validation_notes", []).append(note)
+    else:
+        trajectory.append(
+            {
+                "turn": int(trajectory[-1].get("turn", 0)) + 1 if trajectory else 1,
+                "model_response": "",
+                "finish_reason": "priority_observation_completion",
+                "tools_enabled": False,
+                "tool_calls": [],
+                "tool_observations": [],
+                "final_citations": evidence,
+                "selected_citation_ids": [],
+                "finalization_reason": "supported_priority_observation",
+                "citation_budget": _budget_trace(budget_result),
+                "validation_notes": [note, *budget_result.notes],
+            }
+        )
+    return FastContextLoopResult(
+        status="completed",
+        evidence_paths=evidence,
+        notes=[*(prefix_notes or []), note, *budget_result.notes],
         trajectory=trajectory,
     )
 
@@ -1220,6 +1567,19 @@ def _tool_observation_content(observation: dict[str, Any]) -> str:
 def _structured_output_enabled() -> bool:
     raw = os.environ.get(FASTCONTEXT_STRUCTURED_OUTPUT_ENV, "1").strip().lower()
     return raw not in {"0", "false", "no", "off"}
+
+
+def _fastcontext_seed() -> int | None:
+    raw = os.environ.get(FASTCONTEXT_SEED_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_FASTCONTEXT_SEED
+    normalized = raw.strip().lower()
+    if normalized in {"none", "off", "false", "random"}:
+        return None
+    try:
+        return int(normalized)
+    except ValueError:
+        return DEFAULT_FASTCONTEXT_SEED
 
 
 def _fastcontext_response_format() -> dict[str, Any]:
@@ -1791,13 +2151,19 @@ def _messages(asset: dict[str, Any], query: str) -> list[dict[str, str]]:
     ]
 
 
-def _local_messages(root: Path, task: str) -> list[dict[str, str]]:
+def _local_messages(
+    root: Path,
+    task: str,
+    *,
+    seed_context: dict[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    active_seed_context = seed_context or _local_seed_context(root, task)
     context = {
         "mode": "local-project-exploration",
         "project_path": str(root),
         "absolute_workspace_root": str(root),
         "task": task.strip(),
-        "seed_context": _local_seed_context(root, task),
+        "seed_context": active_seed_context,
         "rules": [
             "Read-only exploration only.",
             "Do not execute project code.",
@@ -1806,7 +2172,10 @@ def _local_messages(root: Path, task: str) -> list[dict[str, str]]:
             "Use relative tool paths like src/source_scout/server.py, not shortened pseudo-absolute paths.",
             "Treat seed_context.likely_source_files as ordered; inspect the first relevant "
             "entries before broad search.",
-            "Prefer primary source tree files over docs, generated, build, vendor, sample, and fixture code.",
+            "Use seed_context.priority_file_matches as starting line anchors for Read offsets "
+            "when they are present.",
+            "Prefer primary source tree files over docs, generated, build, vendor, sample, and fixture code "
+            "unless seed_context.task_type says the task is about tests, evals, fixtures, docs, CLI, or MCP.",
             "If the task names a file path, inspect that exact file first.",
             "Only cite files and line ranges that appeared in successful tool observations.",
             "After enough evidence is observed, stop calling tools and return final_answer.",
@@ -1821,9 +2190,12 @@ def _local_messages(root: Path, task: str) -> list[dict[str, str]]:
                 "Use the provided Read, Glob, and Grep tools. The user context includes the absolute "
                 "workspace root; do not shorten or invent paths. Treat seed_context.likely_source_files "
                 "as ordered and inspect the first relevant entries before broad search. Start broad only "
-                "when the ordered hints are insufficient, then narrow down. Prefer primary "
+                "when the ordered hints are insufficient, then narrow down. Use "
+                "seed_context.priority_file_matches as line anchors for Read offsets before "
+                "reading module headers. Prefer primary "
                 "source tree files over docs, generated output, build output, "
-                "vendored code, samples, and fixtures unless the task asks for those. If the task names "
+                "vendored code, samples, and fixtures unless seed_context.task_type says the task asks "
+                "for tests, evals, fixtures, docs, CLI, or MCP. If the task names "
                 "a file, inspect that exact file first. On Windows, use relative paths like "
                 "src/source_scout/server.py or exact paths under the workspace root; never use shortened "
                 "pseudo-absolute paths like /source_scout/src/source_scout/server.py. Cite only files and "
@@ -1859,8 +2231,15 @@ def _local_seed_context(root: Path, task: str) -> dict[str, Any]:
     if pattern:
         matches = grep_paths(root, pattern, limit=LOCAL_CONTEXT_GREP_LIMIT)["matches"]
     terms = _task_terms(task)
+    routing = _task_family_routing(terms)
+    likely_source_files = _likely_source_files(root, terms, matches, routing=routing)
     return {
-        "likely_source_files": _likely_source_files(root, terms, matches),
+        "task_type": routing["task_type"],
+        "target_family": routing["target_family"],
+        "priority_paths": routing["priority_paths"],
+        "priority_prefixes": routing["priority_prefixes"],
+        "likely_source_files": likely_source_files,
+        "priority_file_matches": _priority_file_matches(root, terms, likely_source_files),
         "known_files_sample": files["matches"],
         "known_files_truncated": files["truncated"],
         "initial_grep_pattern": pattern,
@@ -1870,6 +2249,108 @@ def _local_seed_context(root: Path, task: str) -> dict[str, Any]:
 
 def _task_grep_pattern(task: str) -> str:
     return "|".join(re.escape(term) for term in _task_terms(task)[:14])
+
+
+def _seed_priority_paths(seed_context: dict[str, Any]) -> list[str]:
+    ordered: list[str] = []
+    for key in ("priority_paths", "likely_source_files"):
+        value = seed_context.get(key, [])
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            path = str(item).replace("\\", "/")
+            if path and path not in ordered:
+                ordered.append(path)
+    return ordered
+
+
+def _priority_file_matches(
+    root: Path,
+    terms: list[str],
+    likely_source_files: list[str],
+    *,
+    file_limit: int = 6,
+    per_file_limit: int = 4,
+) -> list[dict[str, Any]]:
+    useful_terms = [
+        term
+        for term in terms
+        if len(term) >= 4 and term not in {"source", "local", "project", "implementation"}
+    ][:18]
+    if not useful_terms:
+        return []
+    matches: list[dict[str, Any]] = []
+    for rel_path in likely_source_files[:file_limit]:
+        try:
+            path, safe_rel = _resolve_under_root(root, rel_path)
+        except FastContextError:
+            continue
+        if not path.is_file():
+            continue
+        file_matches = _file_term_matches(
+            path,
+            safe_rel,
+            useful_terms,
+            limit=per_file_limit,
+        )
+        matches.extend(file_matches)
+    return matches
+
+
+def _file_term_matches(
+    path: Path,
+    safe_rel: str,
+    terms: list[str],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    scored_results: list[tuple[int, int, dict[str, Any]]] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    for line_number, text in enumerate(lines, start=1):
+        searchable = text.lower().replace("-", "_")
+        matched_terms = [
+            term
+            for term in terms
+            if term in searchable
+        ]
+        if not matched_terms:
+            continue
+        score = _file_term_match_score(text, matched_terms)
+        scored_results.append(
+            (
+                -score,
+                line_number,
+                {
+                    "path": safe_rel,
+                    "line": line_number,
+                    "citation": f"{safe_rel}:{line_number}-{line_number}",
+                    "matched_terms": matched_terms[:5],
+                    "score": score,
+                    "text": text.strip()[:240],
+                },
+            )
+        )
+    return [item for _score, _line, item in sorted(scored_results)[:limit]]
+
+
+def _file_term_match_score(text: str, matched_terms: list[str]) -> int:
+    stripped = text.strip()
+    lowered = stripped.lower()
+    score = len(set(matched_terms)) * 4
+    if lowered.startswith(("def ", "async def ", "class ")):
+        score += 20
+    if lowered.startswith(("return ", "if ", "for ", "while ", "with ")):
+        score += 4
+    if lowered.startswith(("from ", "import ")):
+        score -= 12
+    if re.match(r"^[A-Z0-9_]+\s*=", stripped):
+        score -= 6
+    if any(term in {"path", "source", "repository"} for term in matched_terms):
+        score -= 2
+    return score
 
 
 def _task_terms(task: str) -> list[str]:
@@ -1895,19 +2376,250 @@ def _task_terms(task: str) -> list[str]:
     return terms
 
 
+def _task_family_routing(terms: list[str]) -> dict[str, Any]:
+    term_set = set(terms)
+    if term_set & {"documentation", "docs", "readme", "agents", "usage"}:
+        return {
+            "task_type": "documentation_navigation",
+            "target_family": "docs",
+            "priority_paths": ["README.md", "AGENTS.md"],
+            "priority_prefixes": ["docs/"],
+        }
+    if term_set & {"test", "tests", "pytest", "assert", "asserts", "verifies", "verify", "prove"}:
+        priority_paths: list[str] = []
+        if {"fastcontext", "explore_local", "exploration", "eval_local_explore"} & term_set:
+            priority_paths = [
+                "tests/test_fastcontext_local_explore.py",
+                "tests/test_fastcontext_cli.py",
+                "tests/test_local_explore_eval.py",
+            ]
+        return {
+            "task_type": "test_navigation",
+            "target_family": "tests",
+            "priority_paths": priority_paths,
+            "priority_prefixes": ["tests/"],
+        }
+    if term_set & {"mcp", "fastmcp"}:
+        return {
+            "task_type": "mcp_navigation",
+            "target_family": "mcp",
+            "priority_paths": [
+                "src/source_scout/server.py",
+                "src/source_scout/models.py",
+                "tests/test_server.py",
+            ],
+            "priority_prefixes": ["tests/"],
+        }
+    if {"status", "server", "loaded", "load", "smoke"} & term_set and (
+        {"lmstudio", "studio", "fastcontext"} & term_set
+    ):
+        return {
+            "task_type": "cli_navigation",
+            "target_family": "cli",
+            "priority_paths": [
+                "src/source_scout/__main__.py",
+                "src/source_scout/cli_status.py",
+                "src/source_scout/lmstudio.py",
+            ],
+            "priority_prefixes": ["src/source_scout/cli_"],
+        }
+    if (
+        {"dataclass", "dataclasses", "model", "models", "result", "results", "shape", "shapes"}
+        & term_set
+        and {"candidate", "candidates", "bundle", "bundles", "outcome", "outcomes", "explore_local"}
+        & term_set
+    ):
+        return {
+            "task_type": "source_navigation",
+            "target_family": "src",
+            "priority_paths": ["src/source_scout/models.py"],
+            "priority_prefixes": ["src/source_scout/"],
+        }
+    if {"github", "api", "rate_limit", "repository", "search", "calls", "requests"} & term_set and (
+        {"github", "api", "rate_limit"} & term_set
+    ):
+        return {
+            "task_type": "source_navigation",
+            "target_family": "src",
+            "priority_paths": ["src/source_scout/github_client.py"],
+            "priority_prefixes": ["src/source_scout/"],
+        }
+    if term_set & {"cli", "command", "commands", "parser", "argparse"}:
+        priority_paths = ["src/source_scout/__main__.py"]
+        if {"eval", "evals", "evaluation", "suite"} & term_set:
+            priority_paths.append("src/source_scout/local_explore_eval.py")
+        if {"status", "lmstudio", "fastcontext_status"} & term_set:
+            priority_paths.append("src/source_scout/cli_status.py")
+        return {
+            "task_type": "cli_navigation",
+            "target_family": "cli",
+            "priority_paths": priority_paths,
+            "priority_prefixes": ["src/source_scout/cli_"],
+        }
+    if {"fastcontext", "explore_local", "exploration", "tool_loop", "tool"} & term_set and (
+        {"fastcontext", "explore_local", "exploration"} & term_set
+    ):
+        priority_paths = ["src/source_scout/fastcontext.py"]
+        if {"localexploreresult", "result", "returns", "dataclass", "dataclasses"} & term_set:
+            priority_paths.append("src/source_scout/models.py")
+        if {"structured", "output", "schema", "response_format", "json"} & term_set:
+            priority_paths = [
+                "src/source_scout/lmstudio.py",
+                *priority_paths,
+            ]
+        return {
+            "task_type": "source_navigation",
+            "target_family": "src",
+            "priority_paths": priority_paths,
+            "priority_prefixes": ["src/source_scout/"],
+        }
+    if {"bundle", "bundles", "opened_bundle", "outcome", "outcomes"} & term_set:
+        return {
+            "task_type": "source_navigation",
+            "target_family": "src",
+            "priority_paths": [
+                "src/source_scout/bundles.py",
+                "src/source_scout/server.py",
+                "src/source_scout/catalog.py",
+                "src/source_scout/models.py",
+            ],
+            "priority_prefixes": ["src/source_scout/"],
+        }
+    if {"gemma", "profile", "profiles", "profiler", "gemma_profile"} & term_set and (
+        {"strict", "json", "card", "cards", "repository"} & term_set
+    ):
+        return {
+            "task_type": "source_navigation",
+            "target_family": "src",
+            "priority_paths": [
+                "src/source_scout/profiler.py",
+                "src/source_scout/catalog.py",
+                "src/source_scout/lmstudio.py",
+            ],
+            "priority_prefixes": ["src/source_scout/"],
+        }
+    if {"evidence", "scanner", "scan", "dependency", "dependencies", "signal", "signals"} & term_set and (
+        {"evidence", "scanner", "scan"} & term_set
+    ):
+        return {
+            "task_type": "source_navigation",
+            "target_family": "src",
+            "priority_paths": [
+                "src/source_scout/evidence.py",
+                "src/source_scout/catalog.py",
+            ],
+            "priority_prefixes": ["src/source_scout/"],
+        }
+    if {"eval", "evals", "evaluation", "suite"} & term_set and {
+        "loaded",
+        "scored",
+        "score",
+        "summarized",
+        "summary",
+        "runner",
+        "exposed",
+    } & term_set:
+        if {"catalog", "top_1", "avoid"} & term_set:
+            priority_paths = [
+                "src/source_scout/eval_runner.py",
+                "tests/test_eval_runner.py",
+                "src/source_scout/local_explore_eval.py",
+                "tests/test_local_explore_eval.py",
+                "src/source_scout/assessment_eval.py",
+                "tests/test_assessment_eval.py",
+            ]
+        elif {"assessment", "assessor", "smoke"} & term_set:
+            priority_paths = [
+                "src/source_scout/assessment_eval.py",
+                "tests/test_assessment_eval.py",
+                "src/source_scout/eval_runner.py",
+                "tests/test_eval_runner.py",
+                "src/source_scout/local_explore_eval.py",
+                "tests/test_local_explore_eval.py",
+            ]
+        else:
+            priority_paths = [
+                "src/source_scout/local_explore_eval.py",
+                "tests/test_local_explore_eval.py",
+                "src/source_scout/eval_runner.py",
+                "tests/test_eval_runner.py",
+                "src/source_scout/assessment_eval.py",
+                "tests/test_assessment_eval.py",
+            ]
+        return {
+            "task_type": "eval_runner_navigation",
+            "target_family": "eval_runner",
+            "priority_paths": priority_paths,
+            "priority_prefixes": ["src/source_scout/", "tests/"],
+        }
+    if {"catalog", "candidate", "candidates", "search_assets"} & term_set and (
+        {
+            "score",
+            "scored",
+            "scoring",
+            "search",
+            "searched",
+            "capability",
+            "intent",
+            "gemma",
+            "profile",
+            "signals",
+        }
+        & term_set
+    ):
+        return {
+            "task_type": "source_navigation",
+            "target_family": "src",
+            "priority_paths": [
+                "src/source_scout/catalog.py",
+                "src/source_scout/capabilities.py",
+                "src/source_scout/evidence.py",
+            ],
+            "priority_prefixes": ["src/source_scout/"],
+        }
+    if term_set & {"golden", "fixture", "fixtures", "suite", "eval", "evals", "evaluation"}:
+        return {
+            "task_type": "fixture_navigation",
+            "target_family": "evals",
+            "priority_paths": [],
+            "priority_prefixes": ["evals/"],
+        }
+    if term_set & {"assessment", "assessor", "verdict", "reuse"}:
+        return {
+            "task_type": "assessment_navigation",
+            "target_family": "assessment",
+            "priority_paths": [
+                "src/source_scout/assessor.py",
+                "src/source_scout/assessment_eval.py",
+                "tests/test_assessor.py",
+                "tests/test_assessment_eval.py",
+            ],
+            "priority_prefixes": ["tests/"],
+        }
+    return {
+        "task_type": "source_navigation",
+        "target_family": "src",
+        "priority_paths": [],
+        "priority_prefixes": ["src/"],
+    }
+
+
 def _likely_source_files(
     root: Path,
     terms: list[str],
     grep_matches: list[dict[str, Any]],
     limit: int = 18,
+    routing: dict[str, Any] | None = None,
 ) -> list[str]:
     scores: dict[str, int] = {}
     term_set = set(terms)
+    active_routing = routing or _task_family_routing(terms)
     for match in grep_matches:
         path = match.get("path")
         if isinstance(path, str):
             priority, _ = _evidence_path_sort_key(path)
             scores[path] = scores.get(path, 0) + (3 if priority == 0 else 1)
+            scores[path] += _task_family_path_bonus(path, active_routing)
 
     for path in _iter_files(root):
         rel_path = _relative_path(root, path)
@@ -1915,6 +2627,7 @@ def _likely_source_files(
         stem = path.stem.lower().replace("-", "_")
         score = sum(5 for term in term_set if term in searchable or term in stem)
         score += _task_file_bonus(rel_path, term_set)
+        score += _task_family_path_bonus(rel_path, active_routing)
         if {"cli", "command", "commands"} & term_set and path.name in {"__main__.py", "cli.py"}:
             score += 6
         if {"mcp", "tool", "tools", "server"} & term_set and path.name in {"server.py"}:
@@ -1932,7 +2645,7 @@ def _likely_source_files(
     ranked = sorted(
         scores,
         key=lambda path: (
-            _seed_path_priority(path, term_set),
+            _seed_path_priority(path, term_set, active_routing),
             -scores[path],
             _evidence_path_sort_key(path)[1],
         ),
@@ -1940,9 +2653,51 @@ def _likely_source_files(
     return ranked[:limit]
 
 
-def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
+def _task_family_path_bonus(rel_path: str, routing: dict[str, Any]) -> int:
     normalized = rel_path.replace("\\", "/")
     bonus = 0
+    if normalized in set(routing.get("priority_paths", [])):
+        bonus += 40
+    for prefix in routing.get("priority_prefixes", []):
+        if normalized.startswith(str(prefix)):
+            bonus += 18
+            break
+    target_family = str(routing.get("target_family", ""))
+    if (
+        target_family == "tests"
+        and normalized.startswith("tests/")
+        and Path(normalized).name.startswith("test_")
+    ):
+        bonus += 12
+    if target_family == "evals" and normalized.startswith("evals/"):
+        bonus += 14
+    if target_family == "eval_runner" and normalized in {
+        "src/source_scout/local_explore_eval.py",
+        "src/source_scout/eval_runner.py",
+        "src/source_scout/assessment_eval.py",
+        "tests/test_local_explore_eval.py",
+        "tests/test_eval_runner.py",
+        "tests/test_assessment_eval.py",
+    }:
+        bonus += 24
+    if target_family == "cli":
+        if normalized == "src/source_scout/__main__.py":
+            bonus += 18
+        if normalized.startswith("tests/") and "cli" in normalized:
+            bonus += 10
+    if target_family == "mcp":
+        if normalized in {"src/source_scout/server.py", "tests/test_server.py"}:
+            bonus += 18
+    if target_family == "assessment" and (
+        "assessor" in normalized or "assessment" in normalized
+    ):
+        bonus += 16
+    return bonus
+
+
+def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
+    normalized = rel_path.replace("\\", "/")
+    bonus = _generic_local_task_file_bonus(normalized, term_set)
     if normalized == "src/source_scout/pipeline.py":
         if {"scout", "freshness", "created", "pushed", "query", "queries"} & term_set:
             bonus += 14
@@ -1981,8 +2736,53 @@ def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
         "intent",
     } & term_set:
         bonus += 100
-    if normalized == "src/source_scout/profiler.py" and {"gemma", "profile", "profiler"} & term_set:
-        bonus += 8
+    if normalized == "src/source_scout/evidence.py" and {
+        "evidence",
+        "scanner",
+        "scan",
+        "dependency",
+        "dependencies",
+        "signal",
+        "signals",
+    } & term_set:
+        bonus += 100
+    if normalized == "src/source_scout/profiler.py" and {
+        "gemma",
+        "profile",
+        "profiles",
+        "profiler",
+        "strict",
+        "json",
+    } & term_set:
+        bonus += 100
+    if normalized == "src/source_scout/local_explore_eval.py" and {
+        "local_explore",
+        "explore_local",
+        "exploration",
+        "eval",
+        "suite",
+        "scored",
+        "loaded",
+    } & term_set:
+        bonus += 80
+    if normalized == "src/source_scout/eval_runner.py" and {
+        "catalog",
+        "golden",
+        "eval",
+        "suite",
+        "scored",
+        "loaded",
+        "summarized",
+    } & term_set:
+        bonus += 90
+    if normalized == "src/source_scout/assessment_eval.py" and {
+        "assessment",
+        "assessor",
+        "eval",
+        "suite",
+        "smoke",
+    } & term_set:
+        bonus += 50
     if normalized == "src/source_scout/server.py" and {
         "mcp",
         "tool",
@@ -2021,31 +2821,281 @@ def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
         "fastcontext",
         "explore_local",
         "exploration",
+        "tool_loop",
+        "loop",
+        "sandbox",
+        "sandboxed",
         "structured",
         "output",
         "schema",
         "read_only",
     } & term_set:
-        bonus += 12
+        bonus += 100
     if normalized == "src/source_scout/lmstudio.py" and {
         "lm",
+        "studio",
         "lmstudio",
         "structured",
         "output",
         "schema",
         "json",
+        "response_format",
     } & term_set:
-        bonus += 10
+        bonus += 80
     if normalized == "README.md" and {"documentation", "docs", "readme", "usage"} & term_set:
         bonus += 18
     if normalized == "AGENTS.md" and {"documentation", "docs", "agents", "usage"} & term_set:
         bonus += 12
+    if normalized == "tests/test_fastcontext_local_explore.py" and {
+        "exploration",
+        "explore_local",
+        "read_only",
+        "citation",
+        "citations",
+        "validates",
+    } & term_set:
+        bonus += 70
+    if normalized == "tests/test_local_explore_eval.py" and {
+        "local_explore",
+        "eval",
+        "eval_local_explore",
+        "exploration",
+    } & term_set:
+        bonus += 60
+    if normalized == "tests/test_fastcontext_cli.py" and {
+        "cli",
+        "command",
+        "commands",
+        "explore_local",
+        "fastcontext_status",
+    } & term_set:
+        bonus += 60
+    if normalized == "tests/test_eval_runner.py" and {
+        "catalog",
+        "golden",
+        "eval",
+        "suite",
+    } & term_set:
+        bonus += 60
     return bonus
 
 
-def _seed_path_priority(path: str, term_set: set[str]) -> int:
+def _generic_local_task_file_bonus(normalized: str, term_set: set[str]) -> int:
+    bonus = 0
+    stem = Path(normalized).stem.lower().replace("-", "_")
+    parts = set(normalized.lower().replace("-", "_").replace("/", "_").split("_"))
+    if stem in term_set or parts & term_set:
+        bonus += 6
+    if normalized.startswith(("app/", "components/", "lib/")):
+        bonus += 8
+    if normalized.startswith("lib/"):
+        bonus += 6
+    if normalized.endswith("protein-requirements.ts") and {
+        "protein",
+        "requirement",
+        "requirements",
+        "grams",
+        "energy_percent",
+    } & term_set:
+        bonus += 120
+    if normalized.endswith(("nutrition-risk.ts", "nutrition-risk-banner.tsx")) and {
+        "nutrition",
+        "risk",
+        "screening",
+        "previous",
+        "weight",
+        "bmi",
+    } & term_set:
+        bonus += 120
+    if normalized.endswith("bmi-form.tsx") and {
+        "bmi",
+        "calculator",
+        "submit",
+        "form",
+        "tdee",
+        "mifflin",
+        "risk",
+    } & term_set:
+        bonus += 90
+    if normalized.endswith("bmi-math.ts") and {
+        "bmi",
+        "mifflin",
+        "tdee",
+        "henry",
+        "nasem",
+        "energy",
+    } & term_set:
+        bonus += 120
+    if normalized.endswith("inntak-form.tsx") and {
+        "intake",
+        "inntak",
+        "registration",
+        "meal",
+        "meals",
+        "summary",
+        "active",
+    } & term_set:
+        bonus += 120
+    if normalized.endswith("use-intake-form-state.ts") and {
+        "state",
+        "active",
+        "day",
+        "meal",
+        "copy",
+        "update",
+        "item",
+        "localstorage",
+        "lifecycle",
+    } & term_set:
+        bonus += 120
+    if normalized.endswith("storage-lifecycle.ts") and {
+        "storage",
+        "localstorage",
+        "lifecycle",
+        "stored",
+        "write",
+        "read",
+    } & term_set:
+        bonus += 100
+    if normalized.endswith("app/api/parse-food/route.ts") and {
+        "parse",
+        "food",
+        "api",
+        "route",
+        "openai",
+        "trace",
+    } & term_set:
+        bonus += 120
+    if normalized.endswith("openai-parser.ts") and {
+        "openai",
+        "parser",
+        "parse",
+        "schema",
+        "prompt",
+        "normalization",
+        "normalize",
+        "reject",
+        "malformed",
+    } & term_set:
+        bonus += 120
+    if normalized.endswith("matcher.ts") and {
+        "matching",
+        "matcher",
+        "lexical",
+        "alias",
+        "semantic",
+        "modifier",
+        "portion",
+        "decision",
+    } & term_set:
+        bonus += 120
+    if normalized.endswith("decision.ts") and {
+        "decision",
+        "auto_select",
+        "needs_review",
+        "manual_required",
+        "threshold",
+    } & term_set:
+        bonus += 110
+    if normalized.endswith("semantic-search.ts") and {
+        "semantic",
+        "supabase",
+        "pgvector",
+        "embedding",
+        "embeds",
+        "rpc",
+    } & term_set:
+        bonus += 130
+    if normalized.endswith(("app/api/food-search/route.ts", "food-search-client.ts")) and {
+        "food_search",
+        "manual",
+        "matvaretabellen",
+        "lookup",
+        "direct",
+        "api",
+    } & term_set:
+        bonus += 120
+    if normalized.endswith("meal-section.tsx") and {
+        "meal",
+        "manual",
+        "search",
+        "lookup",
+        "food",
+    } & term_set:
+        bonus += 90
+    if normalized.endswith(("daily-summary-view.tsx", "daily-totals.tsx", "intake-math.ts")) and {
+        "daily",
+        "average",
+        "summary",
+        "macro",
+        "micro",
+        "nutrient",
+        "totals",
+        "safety",
+    } & term_set:
+        bonus += 110
+    if normalized.endswith(
+        (
+            "intake-export-panel.tsx",
+            "session.ts",
+            "intake-print-view.tsx",
+            "report-html.ts",
+        )
+    ) and {
+        "export",
+        "print",
+        "report",
+        "session",
+        "comparison",
+        "summary",
+    } & term_set:
+        bonus += 110
+    if normalized.endswith("tests/inntak-ui.spec.ts") and {
+        "seeded",
+        "intake",
+        "inntak",
+        "manual",
+        "styling",
+        "portion",
+        "helpers",
+    } & term_set:
+        bonus += 140
+    if normalized.endswith("tests/kalkulator-ui.spec.ts") and {
+        "calculator",
+        "kalkulator",
+        "desktop",
+        "mobile",
+        "protein",
+        "clinical",
+        "source",
+    } & term_set:
+        bonus += 140
+    if normalized.endswith(("app/layout.tsx", "components/ui/app-nav.tsx", "app/page.tsx")) and {
+        "routing",
+        "navigation",
+        "redirect",
+        "layout",
+        "links",
+        "shell",
+    } & term_set:
+        bonus += 100
+    return bonus
+
+
+def _seed_path_priority(
+    path: str,
+    term_set: set[str],
+    routing: dict[str, Any] | None = None,
+) -> int:
+    active_routing = routing or {}
+    normalized = path.replace("\\", "/")
+    priority_paths = [str(item) for item in active_routing.get("priority_paths", [])]
+    if normalized in priority_paths:
+        return -20 + priority_paths.index(normalized)
+    for prefix in active_routing.get("priority_prefixes", []):
+        if normalized.startswith(str(prefix)):
+            return -1
     if {"documentation", "docs", "readme", "usage"} & term_set:
-        normalized = path.replace("\\", "/")
         if normalized in {"README.md", "AGENTS.md"} or normalized.startswith("docs/"):
             return -1
     return _evidence_path_sort_key(path)[0]
@@ -2187,6 +3237,8 @@ def _validated_response_evidence_paths(
     root: Path,
     parsed: ParsedFastContextResponse,
     observation_support: ObservationSupport,
+    *,
+    priority_paths: list[str] | None = None,
 ) -> tuple[list[str], list[str]]:
     notes: list[str] = []
     if parsed.citation_ids:
@@ -2194,6 +3246,7 @@ def _validated_response_evidence_paths(
             root,
             parsed.citation_ids,
             observation_support,
+            priority_paths=priority_paths,
         )
         notes.extend(id_notes)
         if id_paths:
@@ -2213,8 +3266,13 @@ def _validated_citation_id_paths(
     root: Path,
     citation_ids: list[str],
     observation_support: ObservationSupport,
+    *,
+    priority_paths: list[str] | None = None,
 ) -> tuple[list[str], list[str]]:
-    id_map = _observed_citation_choice_map(observation_support)
+    id_map = _observed_citation_choice_map(
+        observation_support,
+        priority_paths=priority_paths,
+    )
     citations: list[FastContextCitation] = []
     notes: list[str] = []
     for citation_id in citation_ids:
@@ -2344,17 +3402,24 @@ def _merge_observation_support(
 def _evidence_from_observation_support(
     support: ObservationSupport,
     limit: int = 5,
+    priority_paths: list[str] | None = None,
 ) -> list[str]:
     evidence: list[str] = []
-    for path, path_ranges in sorted(support.ranges.items()):
-        merged = _merge_ranges(path_ranges)
+    for path, path_ranges in sorted(
+        support.ranges.items(),
+        key=lambda item: _prioritized_path_sort_key(item[0], priority_paths),
+    ):
+        merged = sorted(_merge_ranges(path_ranges), key=_range_sort_key)
         for start, end in merged:
             evidence.append(f"{path}:{start}-{end}")
             if len(evidence) >= limit:
                 return evidence
     if evidence:
         return evidence
-    return sorted(support.files)[:limit]
+    return sorted(
+        support.files,
+        key=lambda path: _prioritized_path_sort_key(path, priority_paths),
+    )[:limit]
 
 
 def _evidence_from_trajectory(
@@ -2424,6 +3489,13 @@ def _merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
                 min(max(previous_end, capped_end), previous_start + MAX_CITATION_LINES - 1),
             )
     return merged
+
+
+def _range_sort_key(path_range: tuple[int, int]) -> tuple[int, int, int]:
+    start, end = path_range
+    line_count = max(0, end - start + 1)
+    broad_penalty = 1 if line_count > FOCUSED_FINAL_CITATION_LINES else 0
+    return broad_penalty, start, end
 
 
 def _extract_tool_calls(parsed: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2694,6 +3766,7 @@ def _rg_glob(
     safe_directory = _relative_path(root, directory_path) if directory_path != root.resolve() else "."
     command = [
         rg,
+        "--no-config",
         "--files",
         safe_directory,
         "--glob",
@@ -2740,7 +3813,7 @@ def _rg_grep(
         return None
     safe_glob = _safe_glob_pattern(root, file_glob) if file_glob else None
     search_arg = safe_search_path or "."
-    command = [rg, "--color", "never", "--no-heading", "--with-filename"]
+    command = [rg, "--no-config", "--color", "never", "--no-heading", "--with-filename"]
     if line_numbers:
         command.append("--line-number")
     if ignore_case:
@@ -2762,7 +3835,7 @@ def _rg_grep(
         command.extend(["--glob", safe_glob])
     if file_type:
         command.extend(["--type", file_type])
-    command.extend([*_rg_skip_globs(), pattern, search_arg])
+    command.extend([*_rg_skip_globs(), "--", pattern, search_arg])
     completed = _run_rg(root, command)
     if completed is None:
         return None
@@ -2805,6 +3878,8 @@ def _rg_skip_globs() -> list[str]:
     args: list[str] = []
     for dirname in sorted(SKIP_DIRS | LOCAL_EXTRA_SKIP_DIRS):
         args.extend(["--glob", f"!{dirname}/**"])
+    for filename in sorted(LOCAL_SKIP_FILE_NAMES):
+        args.extend(["--glob", f"!{filename}"])
     return args
 
 
@@ -2888,10 +3963,11 @@ def _is_safe_relative_result(root: Path, rel_path: str) -> bool:
 
 
 def _resolve_under_root(root: Path, rel_path: str) -> tuple[Path, str]:
+    cleaned = _normalize_workspace_reference(root.resolve(), rel_path)
     try:
         return path_safety.resolve_under_root(
             root,
-            rel_path,
+            cleaned,
             extra_skip_dirs=LOCAL_EXTRA_SKIP_DIRS,
         )
     except path_safety.PathSafetyError as exc:
@@ -2909,12 +3985,42 @@ def _normalize_workspace_reference(
     strip_line: bool = True,
     allow_glob: bool = False,
 ) -> str:
-    return path_safety.normalize_workspace_reference(
+    normalized = path_safety.normalize_workspace_reference(
         root,
         value,
         strip_line=strip_line,
         allow_glob=allow_glob,
     )
+    alias_reference = _workspace_alias_reference(
+        root,
+        normalized,
+        allow_glob=allow_glob,
+    )
+    return alias_reference or normalized
+
+
+def _workspace_alias_reference(
+    root: Path,
+    cleaned: str,
+    *,
+    allow_glob: bool,
+) -> str | None:
+    aliases = {root.resolve().name.lower(), "source_scout"}
+    parts = [
+        part
+        for part in PurePosixPath(cleaned).parts
+        if part not in {"", ".", "/"}
+    ]
+    for index, part in enumerate(parts):
+        if part.lower() not in aliases:
+            continue
+        suffix_parts = parts[index + 1 :]
+        if not suffix_parts:
+            return "."
+        suffix = PurePosixPath(*suffix_parts).as_posix()
+        if _workspace_suffix_target_exists(root, suffix, allow_glob=allow_glob):
+            return suffix
+    return None
 
 
 def _workspace_suffix_reference(
@@ -2941,7 +4047,17 @@ def _has_glob_meta(value: str) -> bool:
 
 def _safe_glob_pattern(root: Path, pattern: str) -> str:
     try:
-        return path_safety.safe_glob_pattern(root, pattern)
+        cleaned = _normalize_workspace_reference(
+            root.resolve(),
+            pattern,
+            strip_line=False,
+            allow_glob=True,
+        ) or "**/*"
+        if Path(cleaned).is_absolute() or cleaned.startswith("/"):
+            raise path_safety.PathSafetyError(f"Glob pattern must be relative: {pattern}")
+        if ".." in PurePosixPath(cleaned).parts:
+            raise path_safety.PathSafetyError(f"Glob pattern escapes snapshot root: {pattern}")
+        return cleaned
     except path_safety.PathSafetyError as exc:
         raise FastContextError(str(exc)) from exc
 
@@ -2971,6 +4087,8 @@ def _path_is_under(path: Path, root: Path) -> bool:
 
 
 def _should_skip_path(root: Path, path: Path) -> bool:
+    if path.name in LOCAL_SKIP_FILE_NAMES:
+        return True
     return path_safety.should_skip_path(
         root,
         path,

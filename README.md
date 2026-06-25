@@ -96,37 +96,58 @@ is separate from the catalog pipeline and does not write catalog rows:
 
 ```powershell
 source-scout fastcontext-status --smoke-test
-source-scout explore-local --project-path . --task "Find where MCP tools are registered" --max-turns 6
+source-scout explore-local --project-path . --task "Find where MCP tools are registered" --max-turns 7
 source-scout explore-local --project-path . --task "Find where MCP tools are registered" --trace-path .source_scout\fastcontext_traces\mcp-tools.json
-source-scout eval-local-explore --suite source-scout --max-turns 6 --label local-fastcontext-check
+source-scout eval-local-explore --suite source-scout --max-turns 7 --label local-fastcontext-check
 ```
 
 Use this when relevant files are unknown and Codex would otherwise spend time on
-broad `grep`/read loops. FastContext uses LM Studio's OpenAI-compatible tool
-calling with read-only `Read`, `Glob`, and `Grep` tools, then returns file and
-line citations. Codex still reads the cited files, edits, and runs tests. If LM
-Studio or FastContext is unavailable, fall back to `rg`.
+broad `grep`/read loops, when a task needs multi-file tracing, or when direct
+`rg` does not find enough context. Prefer direct `rg` for exact files, exact
+symbols, commands, test names, config keys, and tiny questions. FastContext uses
+LM Studio's OpenAI-compatible tool calling with read-only `Read`, `Glob`, and
+`Grep` tools, then returns file and line citations. Codex still reads the cited
+files, edits, and runs tests. If LM Studio or FastContext is unavailable, fall
+back to `rg`.
+
+The default local exploration budget is currently seven turns. Use `--max-turns 8`
+when a first result is incomplete or when calibrating deeper local exploration.
+`--max-turns 12` is reserved for deep trace tasks, not normal development.
 
 FastContext output is intentionally compact. Final answers are limited to at
 most three citations across at most three files, with a target of one or two
-tight ranges. The harness prefers citation IDs from observed tool results,
-retries once when the model over-selects, and caps fallback observations so
-broad supporting ranges do not look like real success.
+tight ranges. After FastContext returns, read only the top one or two ranges
+first with 30-80 line windows, batch independent narrow reads, and do not repeat
+broad repository-wide searches for the same question. The harness prefers
+citation IDs from observed tool results, retries once when the model
+over-selects, and caps fallback observations so broad supporting ranges do not
+look like real success.
+
+FastContext requests use a fixed LM Studio seed by default to reduce local eval
+variance. Set `SOURCE_SCOUT_FASTCONTEXT_SEED` to an integer to override it, or to
+`none` to disable seeded requests.
 
 The local exploration eval suite lives at
 `evals/golden/local_explore_source_scout_v1.json`. It measures expected file/line
 hits, file/line precision and recall, unexpected or invalid citations, runtime,
-tool calls, citation budget violations, and a simple manual-search proxy. The
-current cleanup baseline is:
+tool calls, citation budget violations, and a simple manual-search proxy. Run
+the current cleanup verification with:
 
 ```powershell
-source-scout eval-local-explore --suite source-scout --max-turns 6 --label cleanup-docs-v1
+source-scout eval-local-explore --suite source-scout --max-turns 7 --label cleanup-verify
+source-scout eval-local-explore --suite source-scout --max-turns 7 --task-timeout-seconds 60 --progress
 ```
 
-That run passed with `21/21` completed tasks, `path_hit_rate=0.7619`,
-`line_overlap_rate=0.6190`, `average_citation_count=2.6667`, and zero invalid,
-unsupported, or over-budget citations. Add personal repos by giving tasks an
-absolute `project_path` or an env var-expanded path such as `%MY_NEXTJS_REPO%`.
+Reports are written under `.source_scout/local_explore_eval_runs/`; treat the
+latest report as the source of current metrics. Add personal repos by giving
+tasks an absolute `project_path` or an env var-expanded path such as
+`%MY_NEXTJS_REPO%`.
+
+The local personal Next.js suite for Ernaering can be run with:
+
+```powershell
+source-scout eval-local-explore --suite ernaering --max-turns 7 --label ernaering-local-check
+```
 
 Generated catalog data is stored under `.source_scout/` by default:
 
@@ -150,7 +171,7 @@ Default tools:
 | `assess_reusable_code(candidate_id, task, fastcontext_policy="auto", max_evidence_rounds=1, force=False)` | Assess one candidate for a task using the same structured result as `source-scout assess`. |
 | `get_source_bundle(candidate_id, task_signature)` | Copy recommended files/config into a local bundle and write a manifest tied to the original task. |
 | `record_reuse_outcome(candidate_id, task_signature, outcome, notes=None)` | Track selected, integrated, or rejected candidates against the original task. |
-| `explore_local_code(task, project_path, max_turns=6)` | Use FastContext to find relevant files and line ranges in a local project without catalog writes. |
+| `explore_local_code(task, project_path, max_turns=7)` | Use FastContext to find relevant files and line ranges in a local project without catalog writes. |
 
 ## LM Studio
 
@@ -229,16 +250,18 @@ Optional LM Studio MCP config:
 {
   "mcpServers": {
     "source-scout": {
-      "command": "C:\\AI\\Dev\\source_scout\\.venv\\Scripts\\python.exe",
+      "command": "<repo-root>\\.venv\\Scripts\\python.exe",
       "args": ["-m", "source_scout", "serve-mcp"],
       "env": {
-        "PYTHONPATH": "C:\\AI\\Dev\\source_scout\\src",
-        "SOURCE_SCOUT_HOME": "C:\\AI\\Dev\\source_scout\\.source_scout"
+        "PYTHONPATH": "<repo-root>\\src",
+        "SOURCE_SCOUT_HOME": "<repo-root>\\.source_scout"
       }
     }
   }
 }
 ```
+
+Replace `<repo-root>` with your local Source Scout checkout path.
 
 ## Local Checks
 
@@ -268,7 +291,7 @@ Golden catalog evals:
 ```powershell
 source-scout eval --suite ui-reuse --top-k 5 --label local-ui-check
 source-scout eval --suite nextjs-backend --top-k 5 --label local-backend-check
-source-scout eval-local-explore --suite source-scout --max-turns 6 --label local-fastcontext-check
+source-scout eval-local-explore --suite source-scout --max-turns 7 --label local-fastcontext-check
 source-scout eval-assess --suite assessment-smoke --label local-assessment-check
 ```
 

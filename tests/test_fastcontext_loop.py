@@ -732,6 +732,131 @@ async def test_fastcontext_tool_loop_retries_over_budget_citation_ids(
 
 
 @pytest.mark.asyncio
+async def test_fastcontext_tool_loop_accepts_truncated_budget_on_final_turn(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write_budget_snapshot(root)
+    chat_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal chat_calls
+        payload = json.loads(request.content)
+        chat_calls += 1
+        if chat_calls == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-read-1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 1,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-read-2",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 3,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-read-3",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 5,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-read-4",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/form.tsx",
+                                                    "offset": 1,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                ],
+                            },
+                        }
+                    ]
+                },
+            )
+        assert "tools" not in payload
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "final_answer": {
+                                        "citation_ids": ["C1", "C2", "C3", "C4"],
+                                        "notes": ["Too many on final turn."],
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await fastcontext._run_tool_loop(
+        root=root,
+        messages=[{"role": "user", "content": "Find the data table"}],
+        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        config=lmstudio.get_config(),
+        max_turns=2,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert result.status == "completed"
+    assert result.evidence_paths == [
+        "src/components/data-table.tsx:1-1",
+        "src/components/data-table.tsx:3-3",
+        "src/components/data-table.tsx:5-5",
+    ]
+    assert result.trajectory[1]["citation_budget"]["over_budget"] is True
+    assert chat_calls == 2
+
+
+@pytest.mark.asyncio
 async def test_fastcontext_tool_loop_truncates_over_budget_retry_source_first(
     tmp_path: Path,
 ) -> None:
@@ -1068,6 +1193,287 @@ async def test_fastcontext_tool_loop_accepts_repaired_final_answer_path(
 
     assert result.status == "completed"
     assert result.evidence_paths == ["src/components/data-table.tsx:1-4"]
+
+
+@pytest.mark.asyncio
+async def test_fastcontext_tool_loop_retries_priority_path_omission(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write_snapshot(root)
+    helper = root / "src" / "components" / "helper.tsx"
+    helper.write_text("export function Helper() { return null }\n", encoding="utf-8")
+    chat_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal chat_calls
+        chat_calls += 1
+        payload = json.loads(request.content)
+        if chat_calls == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-priority",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 1,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-helper",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/helper.tsx",
+                                                    "offset": 1,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                ],
+                            },
+                        }
+                    ]
+                },
+            )
+        if chat_calls == 2:
+            assert "tools" not in payload
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "final_answer": {
+                                            "citation_ids": ["C2"],
+                                            "notes": [],
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+
+        assert "tools" not in payload
+        assert "observed task-priority path" in payload["messages"][-1]["content"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "final_answer": {
+                                        "citation_ids": ["C1"],
+                                        "notes": ["Used priority path."],
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await fastcontext._run_tool_loop(
+        root=root,
+        messages=[{"role": "user", "content": "Find the data table"}],
+        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        config=lmstudio.get_config(),
+        max_turns=3,
+        transport=httpx.MockTransport(handler),
+        priority_paths=["src/components/data-table.tsx"],
+    )
+
+    assert result.status == "completed"
+    assert result.evidence_paths == ["src/components/data-table.tsx:1-1"]
+    assert any(
+        "Final answer omitted observed task-priority path" in note
+        for note in result.trajectory[1]["validation_notes"]
+    )
+    assert chat_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_fastcontext_tool_loop_uses_priority_observation_after_retry_omission(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write_snapshot(root)
+    helper = root / "src" / "components" / "helper.tsx"
+    helper.write_text("export function Helper() { return null }\n", encoding="utf-8")
+    chat_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal chat_calls
+        chat_calls += 1
+        if chat_calls == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-priority",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 1,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                    {
+                                        "id": "call-helper",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/helper.tsx",
+                                                    "offset": 1,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    },
+                                ],
+                            },
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "final_answer": {
+                                        "citation_ids": ["C2"],
+                                        "notes": [],
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await fastcontext._run_tool_loop(
+        root=root,
+        messages=[{"role": "user", "content": "Find the data table"}],
+        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        config=lmstudio.get_config(),
+        max_turns=3,
+        transport=httpx.MockTransport(handler),
+        allow_observation_fallback=True,
+        priority_paths=["src/components/data-table.tsx"],
+    )
+
+    assert result.status == "completed"
+    assert result.evidence_paths == ["src/components/data-table.tsx:1-1"]
+    assert any("Accepted observed task-priority citations" in note for note in result.notes)
+    assert chat_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_fastcontext_tool_loop_completes_with_priority_observation_after_empty_retry(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write_snapshot(root)
+    chat_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal chat_calls
+        chat_calls += 1
+        if chat_calls == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-priority",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 1,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    }
+                                ],
+                            },
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "I found the relevant file."}}]},
+        )
+
+    result = await fastcontext._run_tool_loop(
+        root=root,
+        messages=[{"role": "user", "content": "Find the data table"}],
+        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        config=lmstudio.get_config(),
+        max_turns=3,
+        transport=httpx.MockTransport(handler),
+        allow_observation_fallback=True,
+        priority_paths=["src/components/data-table.tsx"],
+    )
+
+    assert result.status == "completed"
+    assert result.evidence_paths == ["src/components/data-table.tsx:1-1"]
+    assert any("Accepted observed task-priority citations" in note for note in result.notes)
+    assert chat_calls == 3
 
 
 @pytest.mark.asyncio

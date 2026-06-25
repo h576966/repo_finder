@@ -1,6 +1,8 @@
+import asyncio
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -12,6 +14,8 @@ from . import catalog, fastcontext, lmstudio
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_DIR = REPO_ROOT / "evals" / "golden"
 SUITE_ALIASES = {
+    "ernaering": "local_explore_ernaering_v1.json",
+    "local-explore-ernaering": "local_explore_ernaering_v1.json",
     "source-scout": "local_explore_source_scout_v1.json",
     "local-explore-source-scout": "local_explore_source_scout_v1.json",
 }
@@ -73,6 +77,8 @@ async def run_local_explore_eval(
     label: str | None = None,
     output_path: Path | None = None,
     limit_tasks: int | None = None,
+    task_timeout_seconds: float | None = None,
+    progress: bool = False,
 ) -> dict[str, Any]:
     loaded = load_suite(suite)
     report = await evaluate_suite(
@@ -80,6 +86,8 @@ async def run_local_explore_eval(
         max_turns=max_turns,
         label=label,
         limit_tasks=limit_tasks,
+        task_timeout_seconds=task_timeout_seconds,
+        progress=progress,
     )
     path = output_path or default_report_path(str(loaded["suite_id"]), label)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,25 +101,51 @@ async def evaluate_suite(
     max_turns: int = fastcontext.DEFAULT_MAX_TURNS,
     label: str | None = None,
     limit_tasks: int | None = None,
+    task_timeout_seconds: float | None = None,
+    progress: bool = False,
 ) -> dict[str, Any]:
     if max_turns < 1:
         raise ValueError("max_turns must be at least 1.")
     if limit_tasks is not None and limit_tasks < 1:
         raise ValueError("limit_tasks must be at least 1.")
+    if task_timeout_seconds is not None and task_timeout_seconds <= 0:
+        raise ValueError("task_timeout_seconds must be greater than 0.")
 
     tasks = list(suite["tasks"])
     if limit_tasks is not None:
         tasks = tasks[:limit_tasks]
 
     task_reports = []
-    for task in tasks:
-        task_reports.append(
-            await _evaluate_task(
-                task,
-                default_project_path=str(suite["default_project_path"]),
-                max_turns=max_turns,
+    total_tasks = len(tasks)
+    for index, task in enumerate(tasks, start=1):
+        if progress:
+            print(
+                f"[{index}/{total_tasks}] {task['id']} ...",
+                file=sys.stderr,
+                flush=True,
             )
+        task_report = await _evaluate_task(
+            task,
+            default_project_path=str(suite["default_project_path"]),
+            max_turns=max_turns,
+            task_timeout_seconds=task_timeout_seconds,
         )
+        task_reports.append(task_report)
+        if progress:
+            print(
+                "[{index}/{total}] {id} {status} {duration:.1f}s "
+                "path_hit={path_hit} line_hit={line_hit}".format(
+                    index=index,
+                    total=total_tasks,
+                    id=task["id"],
+                    status=task_report["status"],
+                    duration=float(task_report["duration_seconds"]),
+                    path_hit=bool(task_report["any_expected_path_hit"]),
+                    line_hit=bool(task_report["any_line_overlap_hit"]),
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
 
     metrics = _metrics(task_reports)
     passed = _passes_threshold(metrics, suite["pass_threshold"])
@@ -120,6 +154,7 @@ async def evaluate_suite(
         "description": suite.get("description", ""),
         "label": label,
         "max_turns": max_turns,
+        "task_timeout_seconds": task_timeout_seconds,
         "model_id": lmstudio.get_config().fastcontext_model,
         "prompt_version": PROMPT_VERSION,
         "analyzer_version": ANALYZER_VERSION,
@@ -168,6 +203,8 @@ def _validate_task(task: Any, index: int) -> dict[str, Any]:
         "expected_citations": expected,
         "acceptable_citations": acceptable,
         "manual_search_terms": _string_list(task.get("manual_search_terms")),
+        "task_type": _task_type(task, task_text),
+        "target_family": _target_family(task, task_text),
         "notes": str(task.get("notes", "")),
     }
 
@@ -192,22 +229,80 @@ def _validate_threshold(raw: Any) -> dict[str, Any]:
     }
 
 
+def _task_type(task: dict[str, Any], task_text: str) -> str:
+    explicit = str(task.get("task_type", "")).strip()
+    if explicit:
+        return explicit
+    terms = set(_words(task_text))
+    if terms & {"golden", "fixture", "fixtures", "suite", "eval", "evals", "evaluation"}:
+        return "fixture_navigation"
+    if terms & {"test", "tests", "pytest", "assert", "asserts", "verifies", "verify"}:
+        return "test_navigation"
+    if terms & {"cli", "command", "commands", "parser", "argparse"}:
+        return "cli_navigation"
+    if terms & {"mcp", "tool", "tools", "fastmcp"}:
+        return "mcp_navigation"
+    if terms & {"assessment", "assessor", "reuse", "verdict"}:
+        return "assessment_navigation"
+    if terms & {"documentation", "docs", "readme", "agents"}:
+        return "documentation_navigation"
+    return "source_navigation"
+
+
+def _target_family(task: dict[str, Any], task_text: str) -> str:
+    explicit = str(task.get("target_family", "")).strip()
+    if explicit:
+        return explicit
+    task_type = _task_type(task, task_text)
+    if task_type == "fixture_navigation":
+        return "evals"
+    if task_type == "test_navigation":
+        return "tests"
+    if task_type == "cli_navigation":
+        return "cli"
+    if task_type == "mcp_navigation":
+        return "mcp"
+    if task_type == "documentation_navigation":
+        return "docs"
+    if task_type == "assessment_navigation":
+        return "assessment"
+    return "src"
+
+
+def _words(text: str) -> list[str]:
+    return [
+        raw.lower().replace("-", "_")
+        for raw in re.findall(r"[A-Za-z_][A-Za-z0-9_-]{1,}", text)
+    ]
+
+
 async def _evaluate_task(
     task: dict[str, Any],
     *,
     default_project_path: str,
     max_turns: int,
+    task_timeout_seconds: float | None,
 ) -> dict[str, Any]:
     project_root = _resolve_project_path(str(task.get("project_path") or default_project_path))
     started = time.perf_counter()
     error: str | None = None
     result: Any = None
+    error_tool_trace: list[dict[str, object]] = []
     try:
-        result = await fastcontext.explore_local_project(
+        explore = fastcontext.explore_local_project(
             task=str(task["task"]),
             project_path=project_root,
             max_turns=max_turns,
         )
+        if task_timeout_seconds is None:
+            result = await explore
+        else:
+            result = await asyncio.wait_for(explore, timeout=task_timeout_seconds)
+    except TimeoutError:
+        error = f"Timed out after {task_timeout_seconds:g} seconds."
+    except fastcontext.FastContextLoopError as exc:
+        error = str(exc)
+        error_tool_trace = fastcontext._tool_trace_summary(exc.trajectory)
     except Exception as exc:
         error = str(exc)
     duration_seconds = round(time.perf_counter() - started, 4)
@@ -229,11 +324,13 @@ async def _evaluate_task(
         _manual_terms(task),
     )
     scoring = _score_citations(project_root, expected, acceptable, returned_citations)
-    tool_trace = list(getattr(result, "tool_trace", [])) if result else []
+    tool_trace = list(getattr(result, "tool_trace", [])) if result else error_tool_trace
     result_status = str(getattr(result, "status", "")) if result else ""
     report = {
         "id": task["id"],
         "task": task["task"],
+        "task_type": task["task_type"],
+        "target_family": task["target_family"],
         "project_path": str(project_root),
         "status": "failed" if error else result_status or "completed",
         "error": error,
@@ -244,11 +341,7 @@ async def _evaluate_task(
         "notes": list(getattr(result, "notes", [])) if result else [],
         "tool_trace": tool_trace,
         "turn_count": len(tool_trace),
-        "tool_call_count": sum(
-            int(turn.get("tool_call_count", 0))
-            for turn in tool_trace
-            if isinstance(turn, dict)
-        ),
+        "tool_call_count": _tool_call_count(tool_trace),
         "manual_search": manual,
         **scoring,
     }
@@ -440,6 +533,17 @@ def _failure_bucket_flags(report: dict[str, Any]) -> dict[str, bool]:
     return flags
 
 
+def _tool_call_count(tool_trace: list[dict[str, object]]) -> int:
+    count = 0
+    for turn in tool_trace:
+        raw_count = turn.get("tool_call_count", 0)
+        if isinstance(raw_count, int):
+            count += raw_count
+        elif isinstance(raw_count, str) and raw_count.isdigit():
+            count += int(raw_count)
+    return count
+
+
 def _has_final_answer_oscillation(tool_trace: Any) -> bool:
     if not isinstance(tool_trace, list):
         return False
@@ -594,9 +698,46 @@ def _metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
         if reductions
         else 0.0,
         "failure_bucket_counts": failure_bucket_counts,
+        "by_task_type": _group_metrics(task_reports, "task_type"),
+        "by_target_family": _group_metrics(task_reports, "target_family"),
         "tool_call_count": sum(int(task["tool_call_count"]) for task in task_reports),
         "turn_count": sum(int(task["turn_count"]) for task in task_reports),
     }
+
+
+def _group_metrics(task_reports: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for task in task_reports:
+        grouped.setdefault(str(task.get(key) or "unknown"), []).append(task)
+
+    result: dict[str, dict[str, Any]] = {}
+    for group, tasks in sorted(grouped.items()):
+        total = len(tasks)
+        duration = sum(float(task["duration_seconds"]) for task in tasks)
+        result[group] = {
+            "task_count": total,
+            "completed_tasks": sum(1 for task in tasks if task["status"] == "completed"),
+            "passed_tasks": sum(1 for task in tasks if task["passed"]),
+            "path_hit_rate": round(
+                sum(1 for task in tasks if task["any_expected_path_hit"]) / total,
+                4,
+            )
+            if total
+            else 0.0,
+            "line_overlap_rate": round(
+                sum(1 for task in tasks if task["any_line_overlap_hit"]) / total,
+                4,
+            )
+            if total
+            else 0.0,
+            "wrong_file_count": sum(
+                1
+                for task in tasks
+                if bool(task.get("failure_buckets", {}).get("wrong_file", False))
+            ),
+            "average_duration_seconds": round(duration / total, 4) if total else 0.0,
+        }
+    return result
 
 
 def _failure_bucket_counts(task_reports: list[dict[str, Any]]) -> dict[str, int]:

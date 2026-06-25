@@ -6,7 +6,7 @@ import sys
 import pytest
 
 import source_scout.__main__ as main_module
-from source_scout import cli_checks
+from source_scout import cli_checks, fastcontext
 
 
 def _completed(command: list[str], returncode: int = 0) -> subprocess.CompletedProcess[object]:
@@ -67,7 +67,7 @@ def test_check_cli_local_explore_flag_appends_eval(
         "--suite",
         "source-scout",
         "--max-turns",
-        "6",
+        str(fastcontext.DEFAULT_MAX_TURNS),
         "--label",
         "check-local-explore",
     ]
@@ -83,7 +83,7 @@ def test_check_cli_local_explore_flag_appends_eval(
             "--suite",
             "source-scout",
             "--max-turns",
-            "6",
+            str(fastcontext.DEFAULT_MAX_TURNS),
             "--label",
             "check-local-explore",
         ],

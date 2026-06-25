@@ -6,6 +6,7 @@ import sys
 from dataclasses import asdict
 
 from . import cli_checks as _cli_checks
+from . import fastcontext
 from .cli_output import _format_local_explore_text
 from .cli_status import _fastcontext_status, _lmstudio_status
 
@@ -78,10 +79,12 @@ def main() -> None:
         help="Run a FastContext local exploration golden eval suite",
     )
     local_eval_parser.add_argument("--suite", default="source-scout")
-    local_eval_parser.add_argument("--max-turns", type=int, default=6)
+    local_eval_parser.add_argument("--max-turns", type=int, default=fastcontext.DEFAULT_MAX_TURNS)
     local_eval_parser.add_argument("--label", default=None)
     local_eval_parser.add_argument("--output", default=None)
     local_eval_parser.add_argument("--limit-tasks", type=int, default=None)
+    local_eval_parser.add_argument("--task-timeout-seconds", type=float, default=None)
+    local_eval_parser.add_argument("--progress", action="store_true")
 
     assess_eval_parser = subparsers.add_parser(
         "eval-assess",
@@ -141,7 +144,7 @@ def main() -> None:
     refine_parser.add_argument("--label", default=None)
     refine_parser.add_argument("--output", default=None)
     refine_parser.add_argument("--limit-tasks", type=int, default=None)
-    refine_parser.add_argument("--max-turns", type=int, default=6)
+    refine_parser.add_argument("--max-turns", type=int, default=fastcontext.DEFAULT_MAX_TURNS)
 
     explore_local_parser = subparsers.add_parser(
         "explore-local",
@@ -149,7 +152,7 @@ def main() -> None:
     )
     explore_local_parser.add_argument("--task", required=True)
     explore_local_parser.add_argument("--project-path", default=".")
-    explore_local_parser.add_argument("--max-turns", type=int, default=6)
+    explore_local_parser.add_argument("--max-turns", type=int, default=fastcontext.DEFAULT_MAX_TURNS)
     explore_local_parser.add_argument("--format", choices=["json", "text"], default="json")
     explore_local_parser.add_argument("--trace-path", default=None)
 
@@ -228,6 +231,8 @@ def main() -> None:
                 label=args.label,
                 output_path=output_path,
                 limit_tasks=args.limit_tasks,
+                task_timeout_seconds=args.task_timeout_seconds,
+                progress=args.progress,
             )
         )
         summary = {
@@ -323,8 +328,6 @@ def main() -> None:
     if args.command == "refine-evidence":
         from pathlib import Path
 
-        from . import fastcontext
-
         if args.suite:
             if args.candidate_id or args.task:
                 refine_parser.error("--suite cannot be combined with --candidate-id or --task.")
@@ -361,8 +364,6 @@ def main() -> None:
         return
 
     if args.command == "explore-local":
-        from . import fastcontext
-
         local_result = asyncio.run(
             fastcontext.explore_local_project(
                 task=args.task,

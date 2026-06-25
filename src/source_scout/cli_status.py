@@ -125,7 +125,11 @@ async def _fastcontext_status(
     load_result: dict[str, object] | None = None
     inventory_status = _status_with_inventory(status, config)
     fastcontext_state = _configured_model_state(inventory_status, "fastcontext")
-    if load_model and not bool(fastcontext_state.get("loaded")):
+    if load_model and _should_load_model(
+        fastcontext_state,
+        context_length,
+        exact_context=True,
+    ):
         try:
             load_result = lmstudio.load_fastcontext_model(
                 config,
@@ -230,7 +234,12 @@ def _configured_model_state(status: dict[str, object], key: str) -> dict[str, ob
     return state if isinstance(state, dict) else {}
 
 
-def _should_load_model(state: dict[str, object], desired_context_length: int) -> bool:
+def _should_load_model(
+    state: dict[str, object],
+    desired_context_length: int,
+    *,
+    exact_context: bool = False,
+) -> bool:
     if not bool(state.get("loaded")):
         return True
     detail = state.get("loaded_detail")
@@ -240,4 +249,6 @@ def _should_load_model(state: dict[str, object], desired_context_length: int) ->
         current_context = int(detail.get("contextLength", 0))
     except (TypeError, ValueError):
         return True
+    if exact_context:
+        return current_context != desired_context_length
     return current_context < desired_context_length

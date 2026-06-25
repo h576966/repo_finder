@@ -1,44 +1,64 @@
 # Project Instructions
 
-Local-first Codex development for `source_scout`. Be concise, avoid over-engineering,
-and keep changes focused on the requested outcome.
+Local-first Codex development for Source Scout. Be concise, avoid
+over-engineering, and keep changes focused on the requested outcome.
+
+## Current Product Priority
+
+Optimize this loop:
+
+```text
+find_reusable_code -> assess_reusable_code -> get_source_bundle
+```
+
+Given a coding task, Source Scout should return one or a few evidence-backed
+source bundles that make Codex faster and less wasteful.
 
 ## Workflow
 
-1. **Plan first for non-trivial changes.** A short written plan is enough when the
+1. Plan before non-trivial changes. A short written plan is enough when the
    direction is clear.
-2. **Implement in small steps.** Prefer existing project patterns over new
+2. Implement in small, focused steps. Prefer existing project patterns over new
    abstractions.
-3. **Review locally after meaningful changes.** Prioritize correctness, security,
+3. Review locally after meaningful changes. Prioritize correctness, security,
    edge cases, and missing tests.
-4. **Verify before done.** Run linting, type-checking, and tests unless explicitly
-   impossible.
+4. Verify before done. Use `source-scout check` unless explicitly impossible.
 
 ## Review Policy
 
 This is a single-developer project. Reviews are local/manual through Codex or
-direct code inspection only. Do **not** use CodeRabbit, `coderabbit`, or any
+direct code inspection only. Do not use CodeRabbit, `coderabbit`, or any
 external/hosted PR review service.
 
-## Current Direction
+## Model Role Boundaries
 
-The product direction is a catalog-first local reuse layer for Next.js/React UI
-code. Keep the full design reference in `docs/source-scout-direction.md`.
+- Deterministic code validates paths, line ranges, commit SHA, evidence hashes,
+  scores, verdicts, and persistence.
+- FastContext scouts file and line evidence only.
+- Gemma assesses validated evidence only; it does not write final scores.
+- Codex reads cited source, edits code, and runs tests.
 
-Near-term priorities:
+## FastContext Local Exploration
 
-1. Make the deterministic catalog pipeline useful end-to-end.
-2. Harden task-specific assessment before adding MCP or broader product scope.
-3. Keep the role split explicit: deterministic code validates and persists,
-   FastContext scouts evidence, and Gemma assesses validated evidence.
+Standalone local exploration is available through the global `fastcontext-local`
+Codex skill or:
 
-Standalone local exploration is also available through the global
-`fastcontext-local` Codex skill or `source-scout explore-local`. Use it before
-broad manual grep/read loops when the relevant files in a local repo are
-unknown. Treat its output as read-only navigation; Codex still owns edits and
-tests. Read only the top one or two tight cited ranges first. If citations are
-sparse or off-target, refine once with concrete symbols, subsystem names, or
-filenames before falling back to `rg`.
+```powershell
+source-scout explore-local --project-path . --task "<task>"
+```
+
+Use it earlier for cold-start code comprehension, multi-file traces, impact
+analysis, and cases where direct `rg` does not find the needed code. Prefer
+`rg` first for exact symbols, exact files, commands, test names, config keys, or
+quick-answer tasks. Treat FastContext output as read-only navigation.
+
+The default local exploration budget is seven turns. After FastContext returns,
+read only the top one or two cited ranges first, with
+tight 30-80 line windows. Batch independent narrow reads when more than one
+range is needed, do not repeat broad repository-wide searches for the same
+question, and do not re-read regions already seen. If citations are sparse or
+off-target, refine once with concrete symbols, subsystem names, or filenames
+before falling back to manual `rg`.
 
 ## Engineering Constraints
 
@@ -47,12 +67,19 @@ filenames before falling back to `rg`.
 - Do not leave debug logs, TODO comments, or commented-out code.
 - Do not execute arbitrary cloned repository code.
 - Tie source analysis to exact commit SHAs.
-- Keep local generated data under `.source_scout/`.
-- Keep all model outputs versioned by model, prompt, schema, and analyzer version.
+- Keep generated data under `.source_scout/`.
+- Keep all model outputs versioned by model, prompt, schema, and analyzer
+  version.
 
-## Quality Checks
+## Local Checks
 
-Use the local checks as the source of truth:
+Use the local check wrapper as the default confidence gate:
+
+```powershell
+source-scout check
+```
+
+This runs:
 
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check .
@@ -60,17 +87,4 @@ Use the local checks as the source of truth:
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-For corpus quality checks:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\run_quality_checks.py
-```
-
-## Continuous Improvement Loop
-
-1. Run `scripts/run_quality_checks.py` against the ground-truth corpus.
-2. Review failures as either stale ground truth or regressions.
-3. Adjust ranker weights through `RANKER_WEIGHT_*` env vars when possible.
-4. Fix framework detection in `_FRAMEWORK_MARKERS` when stack signals are missing.
-5. Tune hardcoded thresholds only when tests or real catalog runs justify it.
-6. Update `tests/corpus/ground_truth.json` when repository metadata changes.
+Use explicit eval commands only when tuning the relevant subsystem.

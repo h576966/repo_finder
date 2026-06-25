@@ -83,6 +83,9 @@ def load_fastcontext_model(
     gpu: str = DEFAULT_FASTCONTEXT_GPU,
 ) -> dict[str, Any]:
     active = config or get_config()
+    state = model_inventory(active)["configured_models"].get("fastcontext", {})
+    if state.get("loaded"):
+        _run_lms(["unload", active.fastcontext_model], {"model_id": active.fastcontext_model})
     return _run_lms(
         [
             "load",
@@ -286,6 +289,7 @@ async def chat_json(
     temperature: float = 0.1,
     attempts: int = 2,
     response_format: dict[str, Any] | None = None,
+    seed: int | None = None,
 ) -> dict[str, Any]:
     last_error: LMStudioError | None = None
     for _attempt in range(max(1, attempts)):
@@ -298,6 +302,7 @@ async def chat_json(
                 max_tokens=max_tokens,
                 temperature=temperature,
                 response_format=response_format,
+                seed=seed,
             )
             return parse_json_content(content)
         except LMStudioError as exc:
@@ -315,6 +320,7 @@ async def chat_text(
     max_tokens: int = 1600,
     temperature: float = 0.1,
     response_format: dict[str, Any] | None = None,
+    seed: int | None = None,
 ) -> str:
     completion = await chat_completion(
         model_id=model_id,
@@ -324,6 +330,7 @@ async def chat_text(
         max_tokens=max_tokens,
         temperature=temperature,
         response_format=response_format,
+        seed=seed,
     )
     if not completion.content.strip():
         raise LMStudioError("LM Studio returned an empty chat completion.")
@@ -341,6 +348,7 @@ async def chat_completion(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
     extra_body: dict[str, Any] | None = None,
+    seed: int | None = None,
 ) -> LMStudioChatCompletion:
     active = config or get_config()
     payload: dict[str, Any] = {
@@ -355,6 +363,8 @@ async def chat_completion(
         payload["tools"] = tools
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
+    if seed is not None:
+        payload["seed"] = seed
     if extra_body is not None:
         payload.update(extra_body)
 
