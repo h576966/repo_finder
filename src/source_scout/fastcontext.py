@@ -1,147 +1,94 @@
 import json
 import os
 import re
-import shutil
-import subprocess
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 import httpx
 
-from . import catalog, lmstudio, path_safety
-from .constants import SKIP_DIRS
+from . import catalog, fastcontext_prompts, fastcontext_routing, lmstudio
+from . import fastcontext_tools as fastcontext_tooling
+from .fastcontext_constants import (
+    ANALYZER_VERSION,
+    DEFAULT_FASTCONTEXT_SEED,
+    DEFAULT_MAX_TURNS,
+    FASTCONTEXT_SEED_ENV,
+    FASTCONTEXT_STRUCTURED_OUTPUT_ENV,
+    FOCUSED_FINAL_CITATION_LINES,
+    MAX_CITATION_LINES,
+    MAX_FALLBACK_CITATIONS,
+    MAX_FINAL_CITATION_CHOICES,
+    MAX_FINAL_CITATIONS,
+    MAX_FINAL_FILES,
+    MAX_TOOL_CALLS_PER_TURN,
+    PRIORITY_OBSERVATION_PATH_LIMIT,
+    PROMPT_VERSION,
+    SCHEMA_VERSION,
+    TARGET_FINAL_CITATIONS,
+)
+from .fastcontext_types import (
+    EvidenceBudgetResult,
+    FastContextCitation,
+    FastContextError,
+    FastContextLoopError,
+    FastContextLoopResult,
+    ObservationSupport,
+    ParsedFastContextResponse,
+)
 from .models import LocalExploreResult
 
-PROMPT_VERSION = "fastcontext-refine-v1"
-SCHEMA_VERSION = "fastcontext-evidence-v1"
-ANALYZER_VERSION = "fastcontext-harness-v1"
+execute_tool = fastcontext_tooling.execute_tool
+glob_paths = fastcontext_tooling.glob_paths
+grep_paths = fastcontext_tooling.grep_paths
+read_file = fastcontext_tooling.read_file
+_canonical_tool_name = fastcontext_tooling._canonical_tool_name
+_evidence_path_sort_key = fastcontext_tooling._evidence_path_sort_key
+_fastcontext_tools = fastcontext_prompts.fastcontext_tool_schemas
+_first_quoted = fastcontext_tooling._first_quoted
+_has_glob_meta = fastcontext_tooling._has_glob_meta
+_is_noisy_evidence_path = fastcontext_tooling._is_noisy_evidence_path
+_is_primary_source_path = fastcontext_tooling._is_primary_source_path
+_iter_files = fastcontext_tooling._iter_files
+_match_sort_key = fastcontext_tooling._match_sort_key
+_optional_int = fastcontext_tooling._optional_int
+_parse_call_args = fastcontext_tooling._parse_call_args
+_relative_path = fastcontext_tooling._relative_path
+_resolve_under_root = fastcontext_tooling._resolve_under_root
+_rg_skip_globs = fastcontext_tooling._rg_skip_globs
+_safe_label = fastcontext_tooling._safe_label
+_tool_args = fastcontext_tooling._tool_args
+_tool_name = fastcontext_tooling._tool_name
+_generic_local_task_file_bonus = fastcontext_routing._generic_local_task_file_bonus
+_likely_source_files = fastcontext_routing._likely_source_files
+_local_seed_context = fastcontext_routing._local_seed_context
+_seed_path_priority = fastcontext_routing._seed_path_priority
+_seed_priority_paths = fastcontext_routing._seed_priority_paths
+_task_family_path_bonus = fastcontext_routing._task_family_path_bonus
+_task_family_routing = fastcontext_routing._task_family_routing
+_task_file_bonus = fastcontext_routing._task_file_bonus
+_task_grep_pattern = fastcontext_routing._task_grep_pattern
+_task_terms = fastcontext_routing._task_terms
 
-DEFAULT_MAX_TURNS = 7
-MAX_TOOL_CALLS_PER_TURN = 5
-MAX_GLOB_RESULTS = 80
-MAX_GREP_RESULTS = 80
-MAX_READ_LINES = 160
-MAX_READ_FILE_BYTES = 240_000
-MAX_GREP_FILE_BYTES = 1_000_000
-MAX_CITATION_LINES = 240
-MAX_FINAL_CITATION_CHOICES = 24
-MAX_FINAL_CITATIONS = 3
-MAX_FALLBACK_CITATIONS = 3
-MAX_FINAL_FILES = 3
-TARGET_FINAL_CITATIONS = 2
-FOCUSED_FINAL_CITATION_LINES = 80
-PRIORITY_OBSERVATION_PATH_LIMIT = 4
-RG_TIMEOUT_SECONDS = 10
-LOCAL_CONTEXT_FILE_LIMIT = 40
-LOCAL_CONTEXT_GREP_LIMIT = 20
-LOCAL_EXTRA_SKIP_DIRS = {".agents", ".next", ".source_scout", "build", "coverage", "dist"}
-LOCAL_SKIP_FILE_NAMES = {
-    "package-lock.json",
-    "pnpm-lock.yaml",
-    "tsconfig.tsbuildinfo",
-    "yarn.lock",
-}
-FASTCONTEXT_STRUCTURED_OUTPUT_ENV = "SOURCE_SCOUT_FASTCONTEXT_STRUCTURED_OUTPUT"
-FASTCONTEXT_SEED_ENV = "SOURCE_SCOUT_FASTCONTEXT_SEED"
-DEFAULT_FASTCONTEXT_SEED = 20260624
-PRIMARY_SOURCE_PREFIXES = ("src/source_scout/", "src/", "app/", "components/", "lib/")
-NOISY_EVIDENCE_PREFIXES = (
-    ".agents/",
-    "docs/",
-    "eval/",
-    "evals/",
-    "scripts/",
-    "supabase/migrations/",
-    "tests/",
-)
-NOISY_EVIDENCE_FILES = {"README.md", "AGENTS.md", "pyproject.toml"}
-LOCAL_TASK_STOPWORDS = {
-    "actual",
-    "and",
-    "are",
-    "as",
-    "before",
-    "be",
-    "code",
-    "find",
-    "for",
-    "from",
-    "into",
-    "is",
-    "of",
-    "or",
-    "local",
-    "registered",
-    "repo",
-    "task",
-    "that",
-    "the",
-    "this",
-    "to",
-    "where",
-    "with",
-    "working",
-}
-
-
-class FastContextError(RuntimeError):
-    pass
-
-
-class FastContextLoopError(FastContextError):
-    def __init__(self, message: str, trajectory: list[dict[str, Any]]) -> None:
-        super().__init__(message)
-        self.trajectory = trajectory
-
-
-@dataclass(frozen=True)
-class FastContextCitation:
-    path: str
-    start_line: int | None = None
-    end_line: int | None = None
-    reason: str = ""
-
-    def evidence_path(self) -> str:
-        if self.start_line is None:
-            return self.path
-        end_line = self.end_line if self.end_line is not None else self.start_line
-        return f"{self.path}:{self.start_line}-{max(self.start_line, end_line)}"
-
-
-@dataclass(frozen=True)
-class ParsedFastContextResponse:
-    tool_calls: list[dict[str, Any]]
-    citations: list[FastContextCitation]
-    citation_ids: list[str]
-    notes: list[str]
-
-
-@dataclass(frozen=True)
-class ObservationSupport:
-    files: set[str]
-    ranges: dict[str, list[tuple[int, int]]]
-
-
-@dataclass(frozen=True)
-class EvidenceBudgetResult:
-    evidence_paths: list[str]
-    notes: list[str]
-    over_budget: bool
-    truncated: bool
-    original_count: int
-    accepted_count: int
-    original_file_count: int
-    accepted_file_count: int
-
-
-@dataclass(frozen=True)
-class FastContextLoopResult:
-    status: str
-    evidence_paths: list[str]
-    notes: list[str]
-    trajectory: list[dict[str, Any]]
+__all__ = [
+    "ANALYZER_VERSION",
+    "DEFAULT_MAX_TURNS",
+    "FastContextError",
+    "FastContextLoopError",
+    "MAX_FINAL_CITATIONS",
+    "MAX_FINAL_FILES",
+    "PROMPT_VERSION",
+    "SCHEMA_VERSION",
+    "execute_tool",
+    "explore_local_project",
+    "glob_paths",
+    "grep_paths",
+    "parse_fastcontext_response",
+    "read_file",
+    "refine_candidate",
+    "refine_suite",
+    "smoke_test",
+]
 
 
 async def ensure_fastcontext_available(
@@ -523,23 +470,16 @@ async def _run_tool_loop(
                 )
 
         if tool_calls and allow_tools:
-            observations = [
-                execute_tool(root, call)
-                for call in tool_calls[:MAX_TOOL_CALLS_PER_TURN]
-            ]
+            observations = [execute_tool(root, call) for call in tool_calls[:MAX_TOOL_CALLS_PER_TURN]]
             observation_support = _merge_observation_support(
                 observation_support,
                 _observation_support(observations),
             )
             turn_record["tool_observations"] = observations
             if tool_mode_response:
-                active_messages.extend(
-                    _tool_observation_messages(completion, observations)
-                )
+                active_messages.extend(_tool_observation_messages(completion, observations))
             else:
-                active_messages.extend(
-                    _fallback_observation_messages(content, observations)
-                )
+                active_messages.extend(_fallback_observation_messages(content, observations))
             finalization_reason = _finalization_reason(
                 turn,
                 max_turns,
@@ -569,11 +509,7 @@ async def _run_tool_loop(
             continue
 
         if parsed.citation_ids or parsed.citations:
-            if (
-                not allow_tools
-                and observation_support.ranges
-                and not final_answer_retry_used
-            ):
+            if not allow_tools and observation_support.ranges and not final_answer_retry_used:
                 active_messages.extend(
                     _validation_feedback_messages(
                         content,
@@ -590,8 +526,7 @@ async def _run_tool_loop(
                     observation_support,
                     trajectory,
                     note=(
-                        "Accepted observed task-priority citations after final-answer "
-                        "retry did not validate."
+                        "Accepted observed task-priority citations after final-answer retry did not validate."
                     ),
                     priority_paths=active_priority_paths,
                 )
@@ -701,8 +636,7 @@ async def _run_tool_loop(
                 observation_support,
                 trajectory,
                 note=(
-                    "Accepted observed task-priority citations after max_turns "
-                    "without a valid final answer."
+                    "Accepted observed task-priority citations after max_turns without a valid final answer."
                 ),
                 priority_paths=active_priority_paths,
             )
@@ -810,98 +744,6 @@ async def _chat_fastcontext(
         )
 
 
-def _fastcontext_tools() -> list[dict[str, Any]]:
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": "Read",
-                "description": "Read a UTF-8 text file under the workspace root by line range.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "File path relative to the workspace root. Do not shorten it.",
-                        },
-                        "offset": {
-                            "type": "integer",
-                            "description": "1-based start line. Defaults to 1.",
-                            "minimum": 1,
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Maximum lines to read.",
-                            "minimum": 1,
-                            "maximum": MAX_READ_LINES,
-                        },
-                    },
-                    "required": ["path"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "Glob",
-                "description": "List files under the workspace root using ripgrep-style glob patterns.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "directory": {
-                            "type": "string",
-                            "description": "Directory relative to the workspace root. Defaults to '.'.",
-                        },
-                        "pattern": {
-                            "type": "string",
-                            "description": "Glob pattern such as '**/*.ts' or 'src/**/*.tsx'.",
-                        },
-                    },
-                    "required": ["pattern"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "Grep",
-                "description": "Search text under the workspace root with ripgrep-compatible options.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "pattern": {"type": "string"},
-                        "path": {
-                            "type": "string",
-                            "description": "Directory or file path relative to the workspace root.",
-                        },
-                        "glob": {"type": "string"},
-                        "output_mode": {
-                            "type": "string",
-                            "enum": ["content", "files", "files_with_matches", "count"],
-                        },
-                        "-A": {"type": "integer", "minimum": 0, "maximum": 20},
-                        "-B": {"type": "integer", "minimum": 0, "maximum": 20},
-                        "-C": {"type": "integer", "minimum": 0, "maximum": 20},
-                        "-n": {"type": "boolean"},
-                        "-i": {"type": "boolean"},
-                        "type": {"type": "string"},
-                        "head_limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": MAX_GREP_RESULTS,
-                        },
-                        "multiline": {"type": "boolean"},
-                    },
-                    "required": ["pattern"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-    ]
-
-
 def _tool_calls_from_completion(
     completion: lmstudio.LMStudioChatCompletion,
 ) -> list[dict[str, Any]]:
@@ -993,7 +835,7 @@ def _final_answer_request_message(
         "content": (
             "Tool observations are now available. Do not call tools on this turn. "
             "Return final_answer JSON only. Prefer citation_ids from the observed choices below, "
-            "for example {\"final_answer\":{\"citation_ids\":[\"C1\"],\"notes\":[\"why\"]}}. "
+            'for example {"final_answer":{"citation_ids":["C1"],"notes":["why"]}}. '
             f"Choose 1-{MAX_FINAL_CITATIONS} citation IDs, ideally {TARGET_FINAL_CITATIONS}. "
             "Use the smallest set that directly answers the task. Do not include background, "
             "supporting, test, docs, or broad ranges unless they are necessary. "
@@ -1064,9 +906,7 @@ def _final_response_feedback_messages(
             {"role": "assistant", "content": content},
             _final_answer_request_message(
                 observation_support,
-                feedback=(
-                    f"{feedback} Retry once using only exact observed path:start-end choices."
-                ),
+                feedback=(f"{feedback} Retry once using only exact observed path:start-end choices."),
                 priority_paths=priority_paths,
             ),
         ]
@@ -1298,8 +1138,7 @@ def _apply_evidence_budget(
         )
     if truncated:
         notes.append(
-            "Citation budget applied: "
-            f"accepted {len(accepted)} citations across {accepted_file_count} files."
+            f"Citation budget applied: accepted {len(accepted)} citations across {accepted_file_count} files."
         )
     return EvidenceBudgetResult(
         evidence_paths=accepted,
@@ -1392,14 +1231,8 @@ def _finalization_reason(
         and turn < max(1, max_turns - 1)
     ):
         return None
-    primary_choices = [
-        citation
-        for _choice_id, citation in choices
-        if _is_primary_source_path(citation.path)
-    ]
-    focused_primary_count = sum(
-        1 for citation in primary_choices if _is_focused_citation(citation)
-    )
+    primary_choices = [citation for _choice_id, citation in choices if _is_primary_source_path(citation.path)]
+    focused_primary_count = sum(1 for citation in primary_choices if _is_focused_citation(citation))
     if len(primary_choices) >= 2:
         return "enough_primary_source_ranges"
     if turn >= max(1, max_turns - 1):
@@ -1507,24 +1340,6 @@ def _completed_priority_observation_result(
     )
 
 
-def _evidence_path_sort_key(path: str) -> tuple[int, str]:
-    normalized = path.replace("\\", "/")
-    if _is_primary_source_path(normalized):
-        return (0, normalized)
-    if _is_noisy_evidence_path(normalized):
-        return (2, normalized)
-    return (1, normalized)
-
-
-def _is_primary_source_path(path: str) -> bool:
-    return path.replace("\\", "/").startswith(PRIMARY_SOURCE_PREFIXES)
-
-
-def _is_noisy_evidence_path(path: str) -> bool:
-    normalized = path.replace("\\", "/")
-    return normalized in NOISY_EVIDENCE_FILES or normalized.startswith(NOISY_EVIDENCE_PREFIXES)
-
-
 def _citation_choice_label(citation: FastContextCitation) -> str:
     if _is_primary_source_path(citation.path):
         if _is_focused_citation(citation):
@@ -1549,13 +1364,6 @@ def _citation_line_span(citation: FastContextCitation) -> int | None:
     if end_line < citation.start_line:
         return None
     return end_line - citation.start_line + 1
-
-
-def _match_sort_key(match: dict[str, Any]) -> tuple[int, str, int]:
-    path = str(match.get("path", ""))
-    line = _optional_int(match.get("start_line") or match.get("line")) or 0
-    priority, normalized = _evidence_path_sort_key(path)
-    return priority, normalized, line
 
 
 def _tool_observation_content(observation: dict[str, Any]) -> str:
@@ -1659,246 +1467,6 @@ def parse_fastcontext_response(content: str) -> ParsedFastContextResponse:
     )
 
 
-def execute_tool(root: Path, call: dict[str, Any]) -> dict[str, Any]:
-    tool = _canonical_tool_name(_tool_name(call))
-    args = _tool_args(call)
-    try:
-        if args.get("arguments_error") or call.get("arguments_error"):
-            raise FastContextError(str(args.get("arguments_error") or call["arguments_error"]))
-        if tool == "Read":
-            result = read_file(
-                root,
-                str(args.get("path", "")),
-                offset=_optional_int(args.get("offset") or args.get("start") or args.get("start_line")),
-                limit=_optional_int(args.get("limit")),
-                end=_optional_int(args.get("end") or args.get("end_line")),
-            )
-        elif tool == "Glob":
-            result = glob_paths(
-                root,
-                str(args.get("pattern") or args.get("glob") or "**/*"),
-                directory=str(args.get("directory") or "."),
-            )
-        elif tool == "Grep":
-            result = grep_paths(
-                root,
-                str(args.get("pattern", "")),
-                file_glob=str(args["glob"]) if args.get("glob") else None,
-                search_path=str(args.get("path") or "."),
-                output_mode=str(args.get("output_mode") or "content"),
-                before_context=_optional_int(args.get("-B")) or 0,
-                after_context=_optional_int(args.get("-A")) or 0,
-                context=_optional_int(args.get("-C")) or 0,
-                line_numbers=bool(args.get("-n", True)),
-                ignore_case=bool(args.get("-i", False)),
-                file_type=str(args["type"]) if args.get("type") else None,
-                head_limit=_optional_int(args.get("head_limit")) or MAX_GREP_RESULTS,
-                multiline=bool(args.get("multiline", False)),
-            )
-        else:
-            raise FastContextError(f"Unsupported tool: {tool}")
-        return {
-            "tool_call_id": call.get("id"),
-            "tool": tool,
-            "args": args,
-            "ok": True,
-            "result": result,
-            "text": _tool_result_text(tool, result),
-        }
-    except Exception as exc:
-        return {
-            "tool_call_id": call.get("id"),
-            "tool": tool,
-            "args": args,
-            "ok": False,
-            "error": _tool_error_text(root, exc),
-        }
-
-
-def _tool_error_text(root: Path, exc: Exception) -> str:
-    message = str(exc)
-    lowered = message.lower()
-    if any(term in lowered for term in ["escapes", "absolute", "relative", "does not exist"]):
-        return (
-            f"{message} Use paths relative to {root.resolve()}, for example "
-            "src/source_scout/server.py, not /source_scout/src/source_scout/server.py."
-        )
-    return message
-
-
-def read_file(
-    root: Path,
-    rel_path: str,
-    start: int | None = None,
-    offset: int | None = None,
-    limit: int | None = None,
-    end: int | None = None,
-) -> dict[str, Any]:
-    path, safe_rel = _resolve_under_root(root, rel_path)
-    if not path.is_file():
-        raise FastContextError(f"READ target is not a file: {safe_rel}")
-    if path.stat().st_size > MAX_READ_FILE_BYTES:
-        raise FastContextError(f"READ target is too large: {safe_rel}")
-
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    if not lines:
-        return {"path": safe_rel, "start_line": 1, "end_line": 0, "content": "", "line_count": 0}
-
-    start_line = min(max(1, offset or start or 1), len(lines))
-    read_limit = min(max(1, limit or MAX_READ_LINES), MAX_READ_LINES)
-    end_line = min(len(lines), end or start_line + read_limit - 1)
-    if end_line - start_line + 1 > MAX_READ_LINES:
-        end_line = start_line + MAX_READ_LINES - 1
-    selected = lines[start_line - 1 : end_line]
-    content = "\n".join(
-        f"{line_number}|{line}"
-        for line_number, line in enumerate(selected, start=start_line)
-    )
-    return {
-        "path": safe_rel,
-        "start_line": start_line,
-        "end_line": end_line,
-        "content": content,
-        "line_count": len(lines),
-    }
-
-
-def glob_paths(
-    root: Path,
-    pattern: str,
-    limit: int = MAX_GLOB_RESULTS,
-    directory: str = ".",
-) -> dict[str, Any]:
-    safe_pattern = _safe_glob_pattern(root, pattern)
-    directory_path, safe_directory = _resolve_directory(root, directory)
-    rg_matches = _rg_glob(root, directory_path, safe_pattern, limit)
-    if rg_matches is not None:
-        return {
-            "directory": safe_directory,
-            "pattern": safe_pattern,
-            "matches": rg_matches[:limit],
-            "truncated": len(rg_matches) >= limit,
-            "backend": "rg",
-        }
-    matches: list[str] = []
-    for path in _iter_files(root, file_glob=safe_pattern):
-        if len(matches) >= limit:
-            break
-        if not _path_is_under(path, directory_path):
-            continue
-        matches.append(_relative_path(root, path))
-    matches.sort(key=_evidence_path_sort_key)
-    return {
-        "directory": safe_directory,
-        "pattern": safe_pattern,
-        "matches": matches,
-        "truncated": len(matches) >= limit,
-        "backend": "python",
-    }
-
-
-def grep_paths(
-    root: Path,
-    pattern: str,
-    file_glob: str | None = None,
-    limit: int = MAX_GREP_RESULTS,
-    search_path: str = ".",
-    output_mode: str = "content",
-    before_context: int = 0,
-    after_context: int = 0,
-    context: int = 0,
-    line_numbers: bool = True,
-    ignore_case: bool = False,
-    file_type: str | None = None,
-    head_limit: int | None = None,
-    multiline: bool = False,
-) -> dict[str, Any]:
-    if not pattern.strip():
-        raise FastContextError("GREP requires a non-empty pattern.")
-    effective_limit = min(max(1, head_limit or limit), MAX_GREP_RESULTS)
-    search_root, safe_search_path = _resolve_search_path(root, search_path)
-    rg_result = _rg_grep(
-        root=root,
-        search_path=search_root,
-        safe_search_path=safe_search_path,
-        pattern=pattern,
-        file_glob=file_glob,
-        limit=effective_limit,
-        output_mode=output_mode,
-        before_context=before_context,
-        after_context=after_context,
-        context=context,
-        line_numbers=line_numbers,
-        ignore_case=ignore_case,
-        file_type=file_type,
-        multiline=multiline,
-    )
-    if rg_result is not None:
-        return rg_result
-    try:
-        flags = re.IGNORECASE if ignore_case else 0
-        compiled = re.compile(pattern, flags=flags)
-        regex_mode = True
-    except re.error:
-        compiled = re.compile(re.escape(pattern), flags=re.IGNORECASE if ignore_case else 0)
-        regex_mode = False
-
-    candidates = [
-        path for path in _grep_candidate_files(root, file_glob)
-        if _path_is_under(path, search_root)
-    ]
-    candidates.sort(key=lambda path: _evidence_path_sort_key(_relative_path(root, path)))
-    matches: list[dict[str, Any]] = []
-    for path in candidates:
-        if len(matches) >= effective_limit:
-            break
-        if path.stat().st_size > MAX_GREP_FILE_BYTES:
-            continue
-        try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            continue
-        rel_path = _relative_path(root, path)
-        file_matched = False
-        for line_number, line in enumerate(lines, start=1):
-            if not compiled.search(line):
-                continue
-            file_matched = True
-            if output_mode in {"files", "files_with_matches"}:
-                matches.append({"path": rel_path})
-                break
-            if output_mode == "count":
-                continue
-            start_line = max(1, line_number - (context or before_context))
-            end_line = min(len(lines), line_number + (context or after_context))
-            matches.append(
-                {
-                    "path": rel_path,
-                    "line": line_number,
-                    "start_line": start_line,
-                    "end_line": end_line,
-                    "citation": f"{rel_path}:{line_number}-{line_number}",
-                    "text": line.strip()[:220],
-                }
-            )
-            if len(matches) >= effective_limit:
-                break
-        if output_mode == "count" and file_matched:
-            count = sum(1 for line in lines if compiled.search(line))
-            matches.append({"path": rel_path, "count": count})
-
-    return {
-        "path": safe_search_path,
-        "pattern": pattern,
-        "glob": file_glob,
-        "regex_mode": regex_mode,
-        "matches": matches,
-        "truncated": len(matches) >= effective_limit,
-        "output_mode": output_mode,
-        "backend": "python",
-    }
-
-
 async def _refine_suite_task(
     *,
     task: dict[str, Any],
@@ -1968,8 +1536,7 @@ async def _refine_suite_task(
 
 def _deterministic_candidate_report(task: dict[str, Any], candidate: Any, rank: int) -> dict[str, Any]:
     label_match = (
-        candidate.repo_id in task["expected_repo_ids"]
-        or candidate.repo_id in task["acceptable_repo_ids"]
+        candidate.repo_id in task["expected_repo_ids"] or candidate.repo_id in task["acceptable_repo_ids"]
     )
     deterministic_paths = [str(path) for path in candidate.evidence_paths]
     return {
@@ -1995,11 +1562,7 @@ def _deterministic_candidate_report(task: dict[str, Any], candidate: Any, rank: 
 
 
 def _batch_metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
-    candidates = [
-        candidate
-        for task in task_reports
-        for candidate in task["candidates"]
-    ]
+    candidates = [candidate for task in task_reports for candidate in task["candidates"]]
     total_candidates = len(candidates)
     completed = sum(1 for candidate in candidates if candidate["refinement_status"] == "completed")
     failed = total_candidates - completed
@@ -2011,14 +1574,12 @@ def _batch_metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
     refined_label_matches = [
         candidate
         for candidate in label_matches
-        if candidate["refinement_status"] == "completed"
-        and int(candidate["refined_evidence_count"]) > 0
+        if candidate["refinement_status"] == "completed" and int(candidate["refined_evidence_count"]) > 0
     ]
     refined_path_constraint_failures = sum(
         1
         for candidate in label_matches
-        if candidate["refinement_status"] == "completed"
-        and not candidate["refined_path_constraint_ok"]
+        if candidate["refinement_status"] == "completed" and not candidate["refined_path_constraint_ok"]
     )
     top_1_refined = sum(
         1
@@ -2043,7 +1604,9 @@ def _batch_metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
         "evidence_compaction_ratio": round(
             refined_evidence_total / deterministic_evidence_total,
             4,
-        ) if deterministic_evidence_total else 0.0,
+        )
+        if deterministic_evidence_total
+        else 0.0,
     }
 
 
@@ -2144,8 +1707,7 @@ def _messages(asset: dict[str, Any], query: str) -> list[dict[str, str]]:
         {
             "role": "user",
             "content": (
-                f"Context JSON:\n{json.dumps(context, sort_keys=True)}\n\n"
-                f"Exploration query:\n{query}"
+                f"Context JSON:\n{json.dumps(context, sort_keys=True)}\n\nExploration query:\n{query}"
             ),
         },
     ]
@@ -2224,883 +1786,6 @@ def _local_messages(
     ]
 
 
-def _local_seed_context(root: Path, task: str) -> dict[str, Any]:
-    files = glob_paths(root, "**/*", limit=LOCAL_CONTEXT_FILE_LIMIT)
-    pattern = _task_grep_pattern(task)
-    matches: list[dict[str, Any]] = []
-    if pattern:
-        matches = grep_paths(root, pattern, limit=LOCAL_CONTEXT_GREP_LIMIT)["matches"]
-    terms = _task_terms(task)
-    routing = _task_family_routing(terms)
-    likely_source_files = _likely_source_files(root, terms, matches, routing=routing)
-    return {
-        "task_type": routing["task_type"],
-        "target_family": routing["target_family"],
-        "priority_paths": routing["priority_paths"],
-        "priority_prefixes": routing["priority_prefixes"],
-        "likely_source_files": likely_source_files,
-        "priority_file_matches": _priority_file_matches(root, terms, likely_source_files),
-        "known_files_sample": files["matches"],
-        "known_files_truncated": files["truncated"],
-        "initial_grep_pattern": pattern,
-        "initial_grep_matches": matches,
-    }
-
-
-def _task_grep_pattern(task: str) -> str:
-    return "|".join(re.escape(term) for term in _task_terms(task)[:14])
-
-
-def _seed_priority_paths(seed_context: dict[str, Any]) -> list[str]:
-    ordered: list[str] = []
-    for key in ("priority_paths", "likely_source_files"):
-        value = seed_context.get(key, [])
-        if not isinstance(value, list):
-            continue
-        for item in value:
-            path = str(item).replace("\\", "/")
-            if path and path not in ordered:
-                ordered.append(path)
-    return ordered
-
-
-def _priority_file_matches(
-    root: Path,
-    terms: list[str],
-    likely_source_files: list[str],
-    *,
-    file_limit: int = 6,
-    per_file_limit: int = 4,
-) -> list[dict[str, Any]]:
-    useful_terms = [
-        term
-        for term in terms
-        if len(term) >= 4 and term not in {"source", "local", "project", "implementation"}
-    ][:18]
-    if not useful_terms:
-        return []
-    matches: list[dict[str, Any]] = []
-    for rel_path in likely_source_files[:file_limit]:
-        try:
-            path, safe_rel = _resolve_under_root(root, rel_path)
-        except FastContextError:
-            continue
-        if not path.is_file():
-            continue
-        file_matches = _file_term_matches(
-            path,
-            safe_rel,
-            useful_terms,
-            limit=per_file_limit,
-        )
-        matches.extend(file_matches)
-    return matches
-
-
-def _file_term_matches(
-    path: Path,
-    safe_rel: str,
-    terms: list[str],
-    *,
-    limit: int,
-) -> list[dict[str, Any]]:
-    scored_results: list[tuple[int, int, dict[str, Any]]] = []
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return []
-    for line_number, text in enumerate(lines, start=1):
-        searchable = text.lower().replace("-", "_")
-        matched_terms = [
-            term
-            for term in terms
-            if term in searchable
-        ]
-        if not matched_terms:
-            continue
-        score = _file_term_match_score(text, matched_terms)
-        scored_results.append(
-            (
-                -score,
-                line_number,
-                {
-                    "path": safe_rel,
-                    "line": line_number,
-                    "citation": f"{safe_rel}:{line_number}-{line_number}",
-                    "matched_terms": matched_terms[:5],
-                    "score": score,
-                    "text": text.strip()[:240],
-                },
-            )
-        )
-    return [item for _score, _line, item in sorted(scored_results)[:limit]]
-
-
-def _file_term_match_score(text: str, matched_terms: list[str]) -> int:
-    stripped = text.strip()
-    lowered = stripped.lower()
-    score = len(set(matched_terms)) * 4
-    if lowered.startswith(("def ", "async def ", "class ")):
-        score += 20
-    if lowered.startswith(("return ", "if ", "for ", "while ", "with ")):
-        score += 4
-    if lowered.startswith(("from ", "import ")):
-        score -= 12
-    if re.match(r"^[A-Z0-9_]+\s*=", stripped):
-        score -= 6
-    if any(term in {"path", "source", "repository"} for term in matched_terms):
-        score -= 2
-    return score
-
-
-def _task_terms(task: str) -> list[str]:
-    raw_terms = [
-        raw_term.lower().replace("-", "_")
-        for raw_term in re.findall(r"[A-Za-z_][A-Za-z0-9_-]{1,}", task)
-    ]
-    terms: list[str] = []
-
-    def add_term(term: str) -> None:
-        if term not in terms:
-            terms.append(term)
-
-    for term in raw_terms:
-        if len(term) >= 3 and term not in LOCAL_TASK_STOPWORDS:
-            add_term(term)
-            if term.endswith("s") and len(term) > 4:
-                add_term(term[:-1])
-    for left, right in zip(raw_terms, raw_terms[1:]):
-        joined = f"{left}{right}"
-        if len(joined) >= 5 and left not in LOCAL_TASK_STOPWORDS and right not in LOCAL_TASK_STOPWORDS:
-            add_term(joined)
-    return terms
-
-
-def _task_family_routing(terms: list[str]) -> dict[str, Any]:
-    term_set = set(terms)
-    if term_set & {"documentation", "docs", "readme", "agents", "usage"}:
-        return {
-            "task_type": "documentation_navigation",
-            "target_family": "docs",
-            "priority_paths": ["README.md", "AGENTS.md"],
-            "priority_prefixes": ["docs/"],
-        }
-    if term_set & {"test", "tests", "pytest", "assert", "asserts", "verifies", "verify", "prove"}:
-        priority_paths: list[str] = []
-        if {"fastcontext", "explore_local", "exploration", "eval_local_explore"} & term_set:
-            priority_paths = [
-                "tests/test_fastcontext_local_explore.py",
-                "tests/test_fastcontext_cli.py",
-                "tests/test_local_explore_eval.py",
-            ]
-        return {
-            "task_type": "test_navigation",
-            "target_family": "tests",
-            "priority_paths": priority_paths,
-            "priority_prefixes": ["tests/"],
-        }
-    if term_set & {"mcp", "fastmcp"}:
-        return {
-            "task_type": "mcp_navigation",
-            "target_family": "mcp",
-            "priority_paths": [
-                "src/source_scout/server.py",
-                "src/source_scout/models.py",
-                "tests/test_server.py",
-            ],
-            "priority_prefixes": ["tests/"],
-        }
-    if {"status", "server", "loaded", "load", "smoke"} & term_set and (
-        {"lmstudio", "studio", "fastcontext"} & term_set
-    ):
-        return {
-            "task_type": "cli_navigation",
-            "target_family": "cli",
-            "priority_paths": [
-                "src/source_scout/__main__.py",
-                "src/source_scout/cli_status.py",
-                "src/source_scout/lmstudio.py",
-            ],
-            "priority_prefixes": ["src/source_scout/cli_"],
-        }
-    if (
-        {"dataclass", "dataclasses", "model", "models", "result", "results", "shape", "shapes"}
-        & term_set
-        and {"candidate", "candidates", "bundle", "bundles", "outcome", "outcomes", "explore_local"}
-        & term_set
-    ):
-        return {
-            "task_type": "source_navigation",
-            "target_family": "src",
-            "priority_paths": ["src/source_scout/models.py"],
-            "priority_prefixes": ["src/source_scout/"],
-        }
-    if {"github", "api", "rate_limit", "repository", "search", "calls", "requests"} & term_set and (
-        {"github", "api", "rate_limit"} & term_set
-    ):
-        return {
-            "task_type": "source_navigation",
-            "target_family": "src",
-            "priority_paths": ["src/source_scout/github_client.py"],
-            "priority_prefixes": ["src/source_scout/"],
-        }
-    if term_set & {"cli", "command", "commands", "parser", "argparse"}:
-        priority_paths = ["src/source_scout/__main__.py"]
-        if {"eval", "evals", "evaluation", "suite"} & term_set:
-            priority_paths.append("src/source_scout/local_explore_eval.py")
-        if {"status", "lmstudio", "fastcontext_status"} & term_set:
-            priority_paths.append("src/source_scout/cli_status.py")
-        return {
-            "task_type": "cli_navigation",
-            "target_family": "cli",
-            "priority_paths": priority_paths,
-            "priority_prefixes": ["src/source_scout/cli_"],
-        }
-    if {"fastcontext", "explore_local", "exploration", "tool_loop", "tool"} & term_set and (
-        {"fastcontext", "explore_local", "exploration"} & term_set
-    ):
-        priority_paths = ["src/source_scout/fastcontext.py"]
-        if {"localexploreresult", "result", "returns", "dataclass", "dataclasses"} & term_set:
-            priority_paths.append("src/source_scout/models.py")
-        if {"structured", "output", "schema", "response_format", "json"} & term_set:
-            priority_paths = [
-                "src/source_scout/lmstudio.py",
-                *priority_paths,
-            ]
-        return {
-            "task_type": "source_navigation",
-            "target_family": "src",
-            "priority_paths": priority_paths,
-            "priority_prefixes": ["src/source_scout/"],
-        }
-    if {"bundle", "bundles", "opened_bundle", "outcome", "outcomes"} & term_set:
-        return {
-            "task_type": "source_navigation",
-            "target_family": "src",
-            "priority_paths": [
-                "src/source_scout/bundles.py",
-                "src/source_scout/server.py",
-                "src/source_scout/catalog.py",
-                "src/source_scout/models.py",
-            ],
-            "priority_prefixes": ["src/source_scout/"],
-        }
-    if {"gemma", "profile", "profiles", "profiler", "gemma_profile"} & term_set and (
-        {"strict", "json", "card", "cards", "repository"} & term_set
-    ):
-        return {
-            "task_type": "source_navigation",
-            "target_family": "src",
-            "priority_paths": [
-                "src/source_scout/profiler.py",
-                "src/source_scout/catalog.py",
-                "src/source_scout/lmstudio.py",
-            ],
-            "priority_prefixes": ["src/source_scout/"],
-        }
-    if {"evidence", "scanner", "scan", "dependency", "dependencies", "signal", "signals"} & term_set and (
-        {"evidence", "scanner", "scan"} & term_set
-    ):
-        return {
-            "task_type": "source_navigation",
-            "target_family": "src",
-            "priority_paths": [
-                "src/source_scout/evidence.py",
-                "src/source_scout/catalog.py",
-            ],
-            "priority_prefixes": ["src/source_scout/"],
-        }
-    if {"eval", "evals", "evaluation", "suite"} & term_set and {
-        "loaded",
-        "scored",
-        "score",
-        "summarized",
-        "summary",
-        "runner",
-        "exposed",
-    } & term_set:
-        if {"catalog", "top_1", "avoid"} & term_set:
-            priority_paths = [
-                "src/source_scout/eval_runner.py",
-                "tests/test_eval_runner.py",
-                "src/source_scout/local_explore_eval.py",
-                "tests/test_local_explore_eval.py",
-                "src/source_scout/assessment_eval.py",
-                "tests/test_assessment_eval.py",
-            ]
-        elif {"assessment", "assessor", "smoke"} & term_set:
-            priority_paths = [
-                "src/source_scout/assessment_eval.py",
-                "tests/test_assessment_eval.py",
-                "src/source_scout/eval_runner.py",
-                "tests/test_eval_runner.py",
-                "src/source_scout/local_explore_eval.py",
-                "tests/test_local_explore_eval.py",
-            ]
-        else:
-            priority_paths = [
-                "src/source_scout/local_explore_eval.py",
-                "tests/test_local_explore_eval.py",
-                "src/source_scout/eval_runner.py",
-                "tests/test_eval_runner.py",
-                "src/source_scout/assessment_eval.py",
-                "tests/test_assessment_eval.py",
-            ]
-        return {
-            "task_type": "eval_runner_navigation",
-            "target_family": "eval_runner",
-            "priority_paths": priority_paths,
-            "priority_prefixes": ["src/source_scout/", "tests/"],
-        }
-    if {"catalog", "candidate", "candidates", "search_assets"} & term_set and (
-        {
-            "score",
-            "scored",
-            "scoring",
-            "search",
-            "searched",
-            "capability",
-            "intent",
-            "gemma",
-            "profile",
-            "signals",
-        }
-        & term_set
-    ):
-        return {
-            "task_type": "source_navigation",
-            "target_family": "src",
-            "priority_paths": [
-                "src/source_scout/catalog.py",
-                "src/source_scout/capabilities.py",
-                "src/source_scout/evidence.py",
-            ],
-            "priority_prefixes": ["src/source_scout/"],
-        }
-    if term_set & {"golden", "fixture", "fixtures", "suite", "eval", "evals", "evaluation"}:
-        return {
-            "task_type": "fixture_navigation",
-            "target_family": "evals",
-            "priority_paths": [],
-            "priority_prefixes": ["evals/"],
-        }
-    if term_set & {"assessment", "assessor", "verdict", "reuse"}:
-        return {
-            "task_type": "assessment_navigation",
-            "target_family": "assessment",
-            "priority_paths": [
-                "src/source_scout/assessor.py",
-                "src/source_scout/assessment_eval.py",
-                "tests/test_assessor.py",
-                "tests/test_assessment_eval.py",
-            ],
-            "priority_prefixes": ["tests/"],
-        }
-    return {
-        "task_type": "source_navigation",
-        "target_family": "src",
-        "priority_paths": [],
-        "priority_prefixes": ["src/"],
-    }
-
-
-def _likely_source_files(
-    root: Path,
-    terms: list[str],
-    grep_matches: list[dict[str, Any]],
-    limit: int = 18,
-    routing: dict[str, Any] | None = None,
-) -> list[str]:
-    scores: dict[str, int] = {}
-    term_set = set(terms)
-    active_routing = routing or _task_family_routing(terms)
-    for match in grep_matches:
-        path = match.get("path")
-        if isinstance(path, str):
-            priority, _ = _evidence_path_sort_key(path)
-            scores[path] = scores.get(path, 0) + (3 if priority == 0 else 1)
-            scores[path] += _task_family_path_bonus(path, active_routing)
-
-    for path in _iter_files(root):
-        rel_path = _relative_path(root, path)
-        searchable = rel_path.lower().replace("-", "_")
-        stem = path.stem.lower().replace("-", "_")
-        score = sum(5 for term in term_set if term in searchable or term in stem)
-        score += _task_file_bonus(rel_path, term_set)
-        score += _task_family_path_bonus(rel_path, active_routing)
-        if {"cli", "command", "commands"} & term_set and path.name in {"__main__.py", "cli.py"}:
-            score += 6
-        if {"mcp", "tool", "tools", "server"} & term_set and path.name in {"server.py"}:
-            score += 5
-        if (
-            {"model", "models", "result", "results", "shape", "shapes"} & term_set
-            and path.name == "models.py"
-        ):
-            score += 6
-        if score:
-            if rel_path.startswith(PRIMARY_SOURCE_PREFIXES):
-                score += 2
-            scores[rel_path] = scores.get(rel_path, 0) + score
-
-    ranked = sorted(
-        scores,
-        key=lambda path: (
-            _seed_path_priority(path, term_set, active_routing),
-            -scores[path],
-            _evidence_path_sort_key(path)[1],
-        ),
-    )
-    return ranked[:limit]
-
-
-def _task_family_path_bonus(rel_path: str, routing: dict[str, Any]) -> int:
-    normalized = rel_path.replace("\\", "/")
-    bonus = 0
-    if normalized in set(routing.get("priority_paths", [])):
-        bonus += 40
-    for prefix in routing.get("priority_prefixes", []):
-        if normalized.startswith(str(prefix)):
-            bonus += 18
-            break
-    target_family = str(routing.get("target_family", ""))
-    if (
-        target_family == "tests"
-        and normalized.startswith("tests/")
-        and Path(normalized).name.startswith("test_")
-    ):
-        bonus += 12
-    if target_family == "evals" and normalized.startswith("evals/"):
-        bonus += 14
-    if target_family == "eval_runner" and normalized in {
-        "src/source_scout/local_explore_eval.py",
-        "src/source_scout/eval_runner.py",
-        "src/source_scout/assessment_eval.py",
-        "tests/test_local_explore_eval.py",
-        "tests/test_eval_runner.py",
-        "tests/test_assessment_eval.py",
-    }:
-        bonus += 24
-    if target_family == "cli":
-        if normalized == "src/source_scout/__main__.py":
-            bonus += 18
-        if normalized.startswith("tests/") and "cli" in normalized:
-            bonus += 10
-    if target_family == "mcp":
-        if normalized in {"src/source_scout/server.py", "tests/test_server.py"}:
-            bonus += 18
-    if target_family == "assessment" and (
-        "assessor" in normalized or "assessment" in normalized
-    ):
-        bonus += 16
-    return bonus
-
-
-def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
-    normalized = rel_path.replace("\\", "/")
-    bonus = _generic_local_task_file_bonus(normalized, term_set)
-    if normalized == "src/source_scout/pipeline.py":
-        if {"scout", "freshness", "created", "pushed", "query", "queries"} & term_set:
-            bonus += 14
-        if {
-            "qualification",
-            "rejects",
-            "reject",
-            "archived",
-            "forked",
-            "template",
-            "mirror",
-            "oversized",
-            "docs_only",
-            "vendor_heavy",
-        } & term_set:
-            bonus += 14
-    if normalized == "src/source_scout/constants.py" and {
-        "freshness",
-        "created",
-        "pushed",
-        "size",
-        "stale",
-    } & term_set:
-        bonus += 10
-    if normalized == "src/source_scout/catalog.py" and {
-        "catalog",
-        "assets",
-        "asset",
-        "searched",
-        "scored",
-        "search",
-        "score",
-        "gemma",
-        "profile",
-        "capability",
-        "intent",
-    } & term_set:
-        bonus += 100
-    if normalized == "src/source_scout/evidence.py" and {
-        "evidence",
-        "scanner",
-        "scan",
-        "dependency",
-        "dependencies",
-        "signal",
-        "signals",
-    } & term_set:
-        bonus += 100
-    if normalized == "src/source_scout/profiler.py" and {
-        "gemma",
-        "profile",
-        "profiles",
-        "profiler",
-        "strict",
-        "json",
-    } & term_set:
-        bonus += 100
-    if normalized == "src/source_scout/local_explore_eval.py" and {
-        "local_explore",
-        "explore_local",
-        "exploration",
-        "eval",
-        "suite",
-        "scored",
-        "loaded",
-    } & term_set:
-        bonus += 80
-    if normalized == "src/source_scout/eval_runner.py" and {
-        "catalog",
-        "golden",
-        "eval",
-        "suite",
-        "scored",
-        "loaded",
-        "summarized",
-    } & term_set:
-        bonus += 90
-    if normalized == "src/source_scout/assessment_eval.py" and {
-        "assessment",
-        "assessor",
-        "eval",
-        "suite",
-        "smoke",
-    } & term_set:
-        bonus += 50
-    if normalized == "src/source_scout/server.py" and {
-        "mcp",
-        "tool",
-        "tools",
-        "server",
-        "exposed",
-        "read_only",
-    } & term_set:
-        bonus += 14
-    if normalized == "src/source_scout/bundles.py" and {
-        "bundle",
-        "bundles",
-        "opened_bundle",
-        "source",
-    } & term_set:
-        if {"source", "created", "opened_bundle", "recorded"} & term_set:
-            bonus += 100
-        else:
-            bonus += 20
-    if normalized == "src/source_scout/models.py" and {
-        "dataclass",
-        "dataclasses",
-        "model",
-        "models",
-        "result",
-        "results",
-        "shape",
-        "shapes",
-        "candidate",
-        "bundle",
-        "outcome",
-        "explore_local",
-    } & term_set:
-        bonus += 100
-    if normalized == "src/source_scout/fastcontext.py" and {
-        "fastcontext",
-        "explore_local",
-        "exploration",
-        "tool_loop",
-        "loop",
-        "sandbox",
-        "sandboxed",
-        "structured",
-        "output",
-        "schema",
-        "read_only",
-    } & term_set:
-        bonus += 100
-    if normalized == "src/source_scout/lmstudio.py" and {
-        "lm",
-        "studio",
-        "lmstudio",
-        "structured",
-        "output",
-        "schema",
-        "json",
-        "response_format",
-    } & term_set:
-        bonus += 80
-    if normalized == "README.md" and {"documentation", "docs", "readme", "usage"} & term_set:
-        bonus += 18
-    if normalized == "AGENTS.md" and {"documentation", "docs", "agents", "usage"} & term_set:
-        bonus += 12
-    if normalized == "tests/test_fastcontext_local_explore.py" and {
-        "exploration",
-        "explore_local",
-        "read_only",
-        "citation",
-        "citations",
-        "validates",
-    } & term_set:
-        bonus += 70
-    if normalized == "tests/test_local_explore_eval.py" and {
-        "local_explore",
-        "eval",
-        "eval_local_explore",
-        "exploration",
-    } & term_set:
-        bonus += 60
-    if normalized == "tests/test_fastcontext_cli.py" and {
-        "cli",
-        "command",
-        "commands",
-        "explore_local",
-        "fastcontext_status",
-    } & term_set:
-        bonus += 60
-    if normalized == "tests/test_eval_runner.py" and {
-        "catalog",
-        "golden",
-        "eval",
-        "suite",
-    } & term_set:
-        bonus += 60
-    return bonus
-
-
-def _generic_local_task_file_bonus(normalized: str, term_set: set[str]) -> int:
-    bonus = 0
-    stem = Path(normalized).stem.lower().replace("-", "_")
-    parts = set(normalized.lower().replace("-", "_").replace("/", "_").split("_"))
-    if stem in term_set or parts & term_set:
-        bonus += 6
-    if normalized.startswith(("app/", "components/", "lib/")):
-        bonus += 8
-    if normalized.startswith("lib/"):
-        bonus += 6
-    if normalized.endswith("protein-requirements.ts") and {
-        "protein",
-        "requirement",
-        "requirements",
-        "grams",
-        "energy_percent",
-    } & term_set:
-        bonus += 120
-    if normalized.endswith(("nutrition-risk.ts", "nutrition-risk-banner.tsx")) and {
-        "nutrition",
-        "risk",
-        "screening",
-        "previous",
-        "weight",
-        "bmi",
-    } & term_set:
-        bonus += 120
-    if normalized.endswith("bmi-form.tsx") and {
-        "bmi",
-        "calculator",
-        "submit",
-        "form",
-        "tdee",
-        "mifflin",
-        "risk",
-    } & term_set:
-        bonus += 90
-    if normalized.endswith("bmi-math.ts") and {
-        "bmi",
-        "mifflin",
-        "tdee",
-        "henry",
-        "nasem",
-        "energy",
-    } & term_set:
-        bonus += 120
-    if normalized.endswith("inntak-form.tsx") and {
-        "intake",
-        "inntak",
-        "registration",
-        "meal",
-        "meals",
-        "summary",
-        "active",
-    } & term_set:
-        bonus += 120
-    if normalized.endswith("use-intake-form-state.ts") and {
-        "state",
-        "active",
-        "day",
-        "meal",
-        "copy",
-        "update",
-        "item",
-        "localstorage",
-        "lifecycle",
-    } & term_set:
-        bonus += 120
-    if normalized.endswith("storage-lifecycle.ts") and {
-        "storage",
-        "localstorage",
-        "lifecycle",
-        "stored",
-        "write",
-        "read",
-    } & term_set:
-        bonus += 100
-    if normalized.endswith("app/api/parse-food/route.ts") and {
-        "parse",
-        "food",
-        "api",
-        "route",
-        "openai",
-        "trace",
-    } & term_set:
-        bonus += 120
-    if normalized.endswith("openai-parser.ts") and {
-        "openai",
-        "parser",
-        "parse",
-        "schema",
-        "prompt",
-        "normalization",
-        "normalize",
-        "reject",
-        "malformed",
-    } & term_set:
-        bonus += 120
-    if normalized.endswith("matcher.ts") and {
-        "matching",
-        "matcher",
-        "lexical",
-        "alias",
-        "semantic",
-        "modifier",
-        "portion",
-        "decision",
-    } & term_set:
-        bonus += 120
-    if normalized.endswith("decision.ts") and {
-        "decision",
-        "auto_select",
-        "needs_review",
-        "manual_required",
-        "threshold",
-    } & term_set:
-        bonus += 110
-    if normalized.endswith("semantic-search.ts") and {
-        "semantic",
-        "supabase",
-        "pgvector",
-        "embedding",
-        "embeds",
-        "rpc",
-    } & term_set:
-        bonus += 130
-    if normalized.endswith(("app/api/food-search/route.ts", "food-search-client.ts")) and {
-        "food_search",
-        "manual",
-        "matvaretabellen",
-        "lookup",
-        "direct",
-        "api",
-    } & term_set:
-        bonus += 120
-    if normalized.endswith("meal-section.tsx") and {
-        "meal",
-        "manual",
-        "search",
-        "lookup",
-        "food",
-    } & term_set:
-        bonus += 90
-    if normalized.endswith(("daily-summary-view.tsx", "daily-totals.tsx", "intake-math.ts")) and {
-        "daily",
-        "average",
-        "summary",
-        "macro",
-        "micro",
-        "nutrient",
-        "totals",
-        "safety",
-    } & term_set:
-        bonus += 110
-    if normalized.endswith(
-        (
-            "intake-export-panel.tsx",
-            "session.ts",
-            "intake-print-view.tsx",
-            "report-html.ts",
-        )
-    ) and {
-        "export",
-        "print",
-        "report",
-        "session",
-        "comparison",
-        "summary",
-    } & term_set:
-        bonus += 110
-    if normalized.endswith("tests/inntak-ui.spec.ts") and {
-        "seeded",
-        "intake",
-        "inntak",
-        "manual",
-        "styling",
-        "portion",
-        "helpers",
-    } & term_set:
-        bonus += 140
-    if normalized.endswith("tests/kalkulator-ui.spec.ts") and {
-        "calculator",
-        "kalkulator",
-        "desktop",
-        "mobile",
-        "protein",
-        "clinical",
-        "source",
-    } & term_set:
-        bonus += 140
-    if normalized.endswith(("app/layout.tsx", "components/ui/app-nav.tsx", "app/page.tsx")) and {
-        "routing",
-        "navigation",
-        "redirect",
-        "layout",
-        "links",
-        "shell",
-    } & term_set:
-        bonus += 100
-    return bonus
-
-
-def _seed_path_priority(
-    path: str,
-    term_set: set[str],
-    routing: dict[str, Any] | None = None,
-) -> int:
-    active_routing = routing or {}
-    normalized = path.replace("\\", "/")
-    priority_paths = [str(item) for item in active_routing.get("priority_paths", [])]
-    if normalized in priority_paths:
-        return -20 + priority_paths.index(normalized)
-    for prefix in active_routing.get("priority_prefixes", []):
-        if normalized.startswith(str(prefix)):
-            return -1
-    if {"documentation", "docs", "readme", "usage"} & term_set:
-        if normalized in {"README.md", "AGENTS.md"} or normalized.startswith("docs/"):
-            return -1
-    return _evidence_path_sort_key(path)[0]
-
-
 def _tool_trace_summary(trajectory: list[dict[str, Any]]) -> list[dict[str, object]]:
     summary: list[dict[str, object]] = []
     for turn in trajectory:
@@ -3115,10 +1800,10 @@ def _tool_trace_summary(trajectory: list[dict[str, Any]]) -> list[dict[str, obje
                 "turn": int(turn.get("turn", 0)),
                 "tools_enabled": bool(turn.get("tools_enabled", False)),
                 "tool_calls": [
-                    _canonical_tool_name(_tool_name(call))
-                    for call in tool_calls
-                    if isinstance(call, dict)
-                ] if isinstance(tool_calls, list) else [],
+                    _canonical_tool_name(_tool_name(call)) for call in tool_calls if isinstance(call, dict)
+                ]
+                if isinstance(tool_calls, list)
+                else [],
                 "tool_call_count": len(tool_calls) if isinstance(tool_calls, list) else 0,
                 "observation_count": len(observations) if isinstance(observations, list) else 0,
                 "final_citations": final_citations if isinstance(final_citations, list) else [],
@@ -3316,8 +2001,7 @@ def _line_validation_note(path: Path, safe_rel: str, citation: FastContextCitati
     line_count = _line_count(path)
     if start_line > line_count or end_line > line_count:
         return (
-            f"Skipped citation beyond EOF: {safe_rel}:{start_line}-{end_line} "
-            f"(file has {line_count} lines)"
+            f"Skipped citation beyond EOF: {safe_rel}:{start_line}-{end_line} (file has {line_count} lines)"
         )
     return None
 
@@ -3603,8 +2287,7 @@ def _parse_final_answer_citation_ids(content: str) -> list[str]:
 
 def _parse_citation_ids(text: str) -> list[str]:
     return _dedupe_preserve_order(
-        match.group(0).upper()
-        for match in re.finditer(r"\bC\d+\b", text, flags=re.IGNORECASE)
+        match.group(0).upper() for match in re.finditer(r"\bC\d+\b", text, flags=re.IGNORECASE)
     )
 
 
@@ -3668,474 +2351,3 @@ def _parse_function_style_tool_calls(content: str) -> list[dict[str, Any]]:
                 args["pattern"] = quoted
         calls.append({"tool": tool, "args": args})
     return calls
-
-
-def _parse_call_args(body: str) -> dict[str, Any]:
-    args: dict[str, Any] = {}
-    for match in re.finditer(
-        r"(?P<key>\w+)\s*=\s*(?P<value>\"[^\"]*\"|'[^']*'|\d+)",
-        body,
-        flags=re.DOTALL,
-    ):
-        value = match.group("value").strip()
-        if value.isdigit():
-            args[match.group("key")] = int(value)
-        else:
-            args[match.group("key")] = value.strip("\"'")
-    return args
-
-
-def _first_quoted(value: str) -> str | None:
-    match = re.search(r"\"([^\"]+)\"|'([^']+)'", value)
-    if not match:
-        return None
-    return str(match.group(1) or match.group(2))
-
-
-def _tool_name(call: dict[str, Any]) -> str:
-    function = call.get("function")
-    if isinstance(function, dict) and function.get("name"):
-        return str(function["name"]).upper()
-    return str(call.get("tool") or call.get("name") or "").upper()
-
-
-def _tool_args(call: dict[str, Any]) -> dict[str, Any]:
-    function = call.get("function")
-    raw_args: Any = call.get("args") or call.get("arguments")
-    if isinstance(function, dict) and function.get("arguments") is not None:
-        raw_args = function["arguments"]
-    if isinstance(raw_args, dict):
-        return raw_args
-    if isinstance(raw_args, str):
-        try:
-            parsed = json.loads(raw_args)
-        except json.JSONDecodeError:
-            return _parse_call_args(raw_args)
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
-
-
-def _canonical_tool_name(name: str) -> str:
-    normalized = name.strip().upper()
-    if normalized == "READ":
-        return "Read"
-    if normalized == "GLOB":
-        return "Glob"
-    if normalized == "GREP":
-        return "Grep"
-    return name
-
-
-def _tool_result_text(tool: str, result: dict[str, Any]) -> str:
-    if tool == "Read":
-        path = str(result.get("path", ""))
-        start = int(result.get("start_line", 1))
-        end = int(result.get("end_line", start))
-        return f"```{path}:{start}-{end}\n{result.get('content', '')}\n```"
-    if tool == "Glob":
-        matches = result.get("matches")
-        if isinstance(matches, list):
-            return "\n".join(str(match) for match in matches)
-    if tool == "Grep":
-        matches = result.get("matches")
-        if isinstance(matches, list):
-            lines = []
-            for match in matches:
-                if not isinstance(match, dict):
-                    continue
-                path = str(match.get("path", ""))
-                line = match.get("line")
-                text = str(match.get("text", ""))
-                if line is None:
-                    lines.append(path)
-                else:
-                    lines.append(f"{path}:{line}:{text}")
-            return "\n".join(lines)
-    return json.dumps(result, sort_keys=True)
-
-
-def _rg_glob(
-    root: Path,
-    directory_path: Path,
-    pattern: str,
-    limit: int,
-) -> list[str] | None:
-    rg = shutil.which("rg")
-    if rg is None:
-        return None
-    safe_directory = _relative_path(root, directory_path) if directory_path != root.resolve() else "."
-    command = [
-        rg,
-        "--no-config",
-        "--files",
-        safe_directory,
-        "--glob",
-        pattern,
-        *_rg_skip_globs(),
-    ]
-    completed = _run_rg(root, command)
-    if completed is None:
-        return None
-    if completed.returncode not in {0, 1}:
-        return None
-    matches = [
-        _normalize_rg_path(line)
-        for line in completed.stdout.splitlines()
-        if line.strip()
-    ]
-    safe_matches = [
-        path
-        for path in matches
-        if _is_safe_relative_result(root, path)
-    ]
-    return sorted(safe_matches, key=_evidence_path_sort_key)[:limit]
-
-
-def _rg_grep(
-    *,
-    root: Path,
-    search_path: Path,
-    safe_search_path: str,
-    pattern: str,
-    file_glob: str | None,
-    limit: int,
-    output_mode: str,
-    before_context: int,
-    after_context: int,
-    context: int,
-    line_numbers: bool,
-    ignore_case: bool,
-    file_type: str | None,
-    multiline: bool,
-) -> dict[str, Any] | None:
-    rg = shutil.which("rg")
-    if rg is None:
-        return None
-    safe_glob = _safe_glob_pattern(root, file_glob) if file_glob else None
-    search_arg = safe_search_path or "."
-    command = [rg, "--no-config", "--color", "never", "--no-heading", "--with-filename"]
-    if line_numbers:
-        command.append("--line-number")
-    if ignore_case:
-        command.append("--ignore-case")
-    if multiline:
-        command.append("--multiline")
-    if output_mode in {"files", "files_with_matches"}:
-        command.append("--files-with-matches")
-    elif output_mode == "count":
-        command.append("--count")
-    if context:
-        command.extend(["-C", str(max(0, context))])
-    else:
-        if before_context:
-            command.extend(["-B", str(max(0, before_context))])
-        if after_context:
-            command.extend(["-A", str(max(0, after_context))])
-    if safe_glob:
-        command.extend(["--glob", safe_glob])
-    if file_type:
-        command.extend(["--type", file_type])
-    command.extend([*_rg_skip_globs(), "--", pattern, search_arg])
-    completed = _run_rg(root, command)
-    if completed is None:
-        return None
-    if completed.returncode not in {0, 1}:
-        return None
-    matches = _parse_rg_output(
-        root=root,
-        output=completed.stdout,
-        output_mode=output_mode,
-        limit=limit,
-    )
-    return {
-        "path": safe_search_path,
-        "pattern": pattern,
-        "glob": safe_glob,
-        "regex_mode": True,
-        "matches": matches,
-        "truncated": len(matches) >= limit,
-        "output_mode": output_mode,
-        "backend": "rg",
-        "searched_path": _relative_path(root, search_path) if search_path != root.resolve() else ".",
-    }
-
-
-def _run_rg(root: Path, command: list[str]) -> subprocess.CompletedProcess[str] | None:
-    try:
-        return subprocess.run(
-            command,
-            cwd=root,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=RG_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
-def _rg_skip_globs() -> list[str]:
-    args: list[str] = []
-    for dirname in sorted(SKIP_DIRS | LOCAL_EXTRA_SKIP_DIRS):
-        args.extend(["--glob", f"!{dirname}/**"])
-    for filename in sorted(LOCAL_SKIP_FILE_NAMES):
-        args.extend(["--glob", f"!{filename}"])
-    return args
-
-
-def _parse_rg_output(
-    *,
-    root: Path,
-    output: str,
-    output_mode: str,
-    limit: int,
-) -> list[dict[str, Any]]:
-    matches: list[dict[str, Any]] = []
-    counts: dict[str, int] = {}
-    scan_limit = max(limit, limit * 5)
-    for raw_line in output.splitlines():
-        if len(matches) >= scan_limit:
-            break
-        line = raw_line.strip()
-        if not line:
-            continue
-        if output_mode in {"files", "files_with_matches"}:
-            path = _normalize_rg_path(line)
-            if _is_safe_relative_result(root, path):
-                matches.append({"path": path})
-            continue
-        if output_mode == "count":
-            path, raw_count = _split_rg_pair(line)
-            if path and _is_safe_relative_result(root, path):
-                counts[path] = counts.get(path, 0) + (_optional_int(raw_count) or 0)
-            continue
-        parsed = _parse_rg_content_line(line)
-        if parsed is None:
-            continue
-        path, line_number, text = parsed
-        if not _is_safe_relative_result(root, path):
-            continue
-        matches.append(
-            {
-                "path": path,
-                "line": line_number,
-                "start_line": line_number,
-                "end_line": line_number,
-                "citation": f"{path}:{line_number}-{line_number}",
-                "text": text[:220],
-            }
-        )
-    if output_mode == "count":
-        matches.extend(
-            {"path": path, "count": count}
-            for path, count in sorted(counts.items())
-        )
-    return sorted(matches, key=_match_sort_key)[:limit]
-
-
-def _split_rg_pair(line: str) -> tuple[str, str]:
-    if ":" not in line:
-        return _normalize_rg_path(line), ""
-    path, value = line.rsplit(":", 1)
-    return _normalize_rg_path(path), value
-
-
-def _parse_rg_content_line(line: str) -> tuple[str, int, str] | None:
-    match = re.match(r"(?P<path>.*?)(?P<sep>[:-])(?P<line>\d+)(?P=sep)(?P<text>.*)", line)
-    if match is None:
-        return None
-    line_number = _optional_int(match.group("line"))
-    if line_number is None:
-        return None
-    return _normalize_rg_path(match.group("path")), line_number, match.group("text").strip()
-
-
-def _normalize_rg_path(path: str) -> str:
-    return path.strip().replace("\\", "/").lstrip("./")
-
-
-def _is_safe_relative_result(root: Path, rel_path: str) -> bool:
-    return path_safety.is_safe_relative_result(
-        root,
-        rel_path,
-        extra_skip_dirs=LOCAL_EXTRA_SKIP_DIRS,
-    )
-
-
-def _resolve_under_root(root: Path, rel_path: str) -> tuple[Path, str]:
-    cleaned = _normalize_workspace_reference(root.resolve(), rel_path)
-    try:
-        return path_safety.resolve_under_root(
-            root,
-            cleaned,
-            extra_skip_dirs=LOCAL_EXTRA_SKIP_DIRS,
-        )
-    except path_safety.PathSafetyError as exc:
-        raise FastContextError(str(exc)) from exc
-
-
-def _relative_path(root: Path, path: Path) -> str:
-    return path_safety.relative_path(root, path)
-
-
-def _normalize_workspace_reference(
-    root: Path,
-    value: str,
-    *,
-    strip_line: bool = True,
-    allow_glob: bool = False,
-) -> str:
-    normalized = path_safety.normalize_workspace_reference(
-        root,
-        value,
-        strip_line=strip_line,
-        allow_glob=allow_glob,
-    )
-    alias_reference = _workspace_alias_reference(
-        root,
-        normalized,
-        allow_glob=allow_glob,
-    )
-    return alias_reference or normalized
-
-
-def _workspace_alias_reference(
-    root: Path,
-    cleaned: str,
-    *,
-    allow_glob: bool,
-) -> str | None:
-    aliases = {root.resolve().name.lower(), "source_scout"}
-    parts = [
-        part
-        for part in PurePosixPath(cleaned).parts
-        if part not in {"", ".", "/"}
-    ]
-    for index, part in enumerate(parts):
-        if part.lower() not in aliases:
-            continue
-        suffix_parts = parts[index + 1 :]
-        if not suffix_parts:
-            return "."
-        suffix = PurePosixPath(*suffix_parts).as_posix()
-        if _workspace_suffix_target_exists(root, suffix, allow_glob=allow_glob):
-            return suffix
-    return None
-
-
-def _workspace_suffix_reference(
-    root: Path,
-    cleaned: str,
-    *,
-    allow_glob: bool,
-) -> str | None:
-    return path_safety.workspace_suffix_reference(root, cleaned, allow_glob=allow_glob)
-
-
-def _workspace_suffix_target_exists(
-    root: Path,
-    suffix: str,
-    *,
-    allow_glob: bool,
-) -> bool:
-    return path_safety.workspace_suffix_target_exists(root, suffix, allow_glob=allow_glob)
-
-
-def _has_glob_meta(value: str) -> bool:
-    return path_safety.has_glob_meta(value)
-
-
-def _safe_glob_pattern(root: Path, pattern: str) -> str:
-    try:
-        cleaned = _normalize_workspace_reference(
-            root.resolve(),
-            pattern,
-            strip_line=False,
-            allow_glob=True,
-        ) or "**/*"
-        if Path(cleaned).is_absolute() or cleaned.startswith("/"):
-            raise path_safety.PathSafetyError(f"Glob pattern must be relative: {pattern}")
-        if ".." in PurePosixPath(cleaned).parts:
-            raise path_safety.PathSafetyError(f"Glob pattern escapes snapshot root: {pattern}")
-        return cleaned
-    except path_safety.PathSafetyError as exc:
-        raise FastContextError(str(exc)) from exc
-
-
-def _resolve_directory(root: Path, directory: str) -> tuple[Path, str]:
-    cleaned = _normalize_workspace_reference(root.resolve(), directory) or "."
-    if cleaned == ".":
-        return root.resolve(), "."
-    path, safe_rel = _resolve_under_root(root, cleaned)
-    if not path.is_dir():
-        raise FastContextError(f"Glob directory is not a directory: {safe_rel}")
-    return path, safe_rel
-
-
-def _resolve_search_path(root: Path, search_path: str) -> tuple[Path, str]:
-    cleaned = _normalize_workspace_reference(root.resolve(), search_path) or "."
-    if cleaned == ".":
-        return root.resolve(), "."
-    path, safe_rel = _resolve_under_root(root, cleaned)
-    if not path.exists():
-        raise FastContextError(f"Grep path does not exist: {safe_rel}")
-    return path, safe_rel
-
-
-def _path_is_under(path: Path, root: Path) -> bool:
-    return path_safety.path_is_under(path, root)
-
-
-def _should_skip_path(root: Path, path: Path) -> bool:
-    if path.name in LOCAL_SKIP_FILE_NAMES:
-        return True
-    return path_safety.should_skip_path(
-        root,
-        path,
-        extra_skip_dirs=LOCAL_EXTRA_SKIP_DIRS,
-    )
-
-
-def _grep_candidate_files(root: Path, file_glob: str | None) -> list[Path]:
-    safe_pattern = _safe_glob_pattern(root, file_glob) if file_glob else None
-    return list(_iter_files(root, file_glob=safe_pattern))
-
-
-def _iter_files(root: Path, file_glob: str | None = None) -> list[Path]:
-    root_resolved = root.resolve()
-    matches: list[Path] = []
-    for current_root, dirnames, filenames in os.walk(root_resolved):
-        dirnames[:] = [
-            dirname
-            for dirname in dirnames
-            if dirname not in SKIP_DIRS and dirname not in LOCAL_EXTRA_SKIP_DIRS
-        ]
-        current_path = Path(current_root)
-        for filename in filenames:
-            path = current_path / filename
-            if _should_skip_path(root_resolved, path):
-                continue
-            rel_path = _relative_path(root_resolved, path)
-            if file_glob and not PurePosixPath(rel_path).match(file_glob):
-                continue
-            matches.append(path)
-    return sorted(matches, key=lambda path: _evidence_path_sort_key(_relative_path(root_resolved, path)))
-
-
-def _strip_line_suffix(path: str) -> str:
-    return path_safety.strip_line_suffix(path)
-
-
-def _optional_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _safe_label(label: str | None) -> str:
-    if not label:
-        return ""
-    return "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in label)

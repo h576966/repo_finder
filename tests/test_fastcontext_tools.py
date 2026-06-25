@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 import pytest
 
-from source_scout import fastcontext, lmstudio
+from source_scout import fastcontext, fastcontext_tools, lmstudio
 from tests.fastcontext_helpers import _write_snapshot, isolated_catalog
 
 pytestmark = pytest.mark.usefixtures(isolated_catalog.__name__)
@@ -56,8 +56,8 @@ def test_glob_and_grep_prefer_rg_backend(tmp_path: Path, monkeypatch) -> None:
             stdout = "src/components/data-table.tsx:1:import { useReactTable } from '@tanstack/react-table'\n"
         return type("Completed", (), {"returncode": 0, "stdout": stdout, "stderr": ""})()
 
-    monkeypatch.setattr(fastcontext.shutil, "which", fake_which)
-    monkeypatch.setattr(fastcontext.subprocess, "run", fake_run)
+    monkeypatch.setattr(fastcontext_tools.shutil, "which", fake_which)
+    monkeypatch.setattr(fastcontext_tools.subprocess, "run", fake_run)
 
     glob_result = fastcontext.glob_paths(root, "**/*.tsx")
     grep_result = fastcontext.grep_paths(root, "useReactTable", file_glob="**/*.tsx")
@@ -82,13 +82,13 @@ def test_rg_grep_uses_delimiter_before_model_controlled_pattern(
     _write_snapshot(root)
     commands: list[list[str]] = []
 
-    monkeypatch.setattr(fastcontext.shutil, "which", lambda name: "rg")
+    monkeypatch.setattr(fastcontext_tools.shutil, "which", lambda name: "rg")
 
     def fake_run(command: list[str], **kwargs: Any) -> object:
         commands.append(command)
         return type("Completed", (), {"returncode": 1, "stdout": "", "stderr": ""})()
 
-    monkeypatch.setattr(fastcontext.subprocess, "run", fake_run)
+    monkeypatch.setattr(fastcontext_tools.subprocess, "run", fake_run)
 
     fastcontext.grep_paths(root, "-dangerous-pattern", file_glob="**/*.tsx")
 
@@ -118,7 +118,7 @@ def test_grep_is_case_sensitive_unless_ignore_case_requested(
     root = tmp_path / "snapshot"
     root.mkdir()
     _write_snapshot(root)
-    monkeypatch.setattr(fastcontext.shutil, "which", lambda name: None)
+    monkeypatch.setattr(fastcontext_tools.shutil, "which", lambda name: None)
 
     sensitive_result = fastcontext.grep_paths(
         root,
@@ -152,7 +152,7 @@ def test_workspace_prefix_paths_are_normalized_safely(
     root = tmp_path / "source_scout"
     root.mkdir()
     _write_snapshot(root)
-    monkeypatch.setattr(fastcontext.shutil, "which", lambda name: None)
+    monkeypatch.setattr(fastcontext_tools.shutil, "which", lambda name: None)
 
     pseudo_absolute = fastcontext.read_file(
         root,
@@ -560,7 +560,7 @@ def test_local_seed_context_includes_likely_source_files(tmp_path: Path, monkeyp
     (root / "src" / "source_scout" / "__main__.py").write_text("def cli(): pass\n", encoding="utf-8")
     (root / "tests").mkdir()
     (root / "tests" / "test_lmstudio.py").write_text("def test_status(): pass\n", encoding="utf-8")
-    monkeypatch.setattr(fastcontext.shutil, "which", lambda name: None)
+    monkeypatch.setattr(fastcontext_tools.shutil, "which", lambda name: None)
 
     seed = fastcontext._local_seed_context(root, "Find the LM Studio status CLI command")
 
