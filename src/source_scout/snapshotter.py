@@ -19,7 +19,13 @@ def clone_snapshot(
     if target.exists():
         try:
             existing = git.Repo(str(target))
-            return target, str(existing.head.commit.hexsha)
+            try:
+                existing_sha = str(existing.head.commit.hexsha)
+            finally:
+                existing.close()
+            if existing_sha == commit_sha:
+                return target, existing_sha
+            _remove_generated_path(target)
         except git.InvalidGitRepositoryError:
             _remove_generated_path(target)
 

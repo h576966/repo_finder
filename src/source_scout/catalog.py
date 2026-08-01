@@ -764,6 +764,15 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
     pushed_cutoff = _cutoff_date(MAX_STALE_DAYS)
     rows = conn.execute(
         """
+        WITH ranked_snapshots AS (
+            SELECT
+                *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY repo_id
+                    ORDER BY indexed_at DESC, snapshot_id DESC
+                ) AS snapshot_rank
+            FROM snapshots
+        )
         SELECT
             a.asset_id, a.repo_id, a.capability, a.entry_paths,
             a.dependency_paths, a.external_dependencies, a.evidence_paths,
@@ -771,10 +780,11 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
             r.is_public, r.is_archived, r.repo_size_kb, r.repo_created_at,
             r.pushed_at, c.gemma_profile
         FROM assets a
-        JOIN snapshots s ON s.snapshot_id = a.snapshot_id
+        JOIN ranked_snapshots s ON s.snapshot_id = a.snapshot_id
         JOIN repositories r ON r.repo_id = a.repo_id
         LEFT JOIN repository_cards c ON c.snapshot_id = a.snapshot_id
-        WHERE r.is_public = true
+        WHERE s.snapshot_rank = 1
+            AND r.is_public = true
             AND r.is_archived = false
             AND (r.is_mirror IS NULL OR r.is_mirror = false)
             AND (r.is_fork IS NULL OR r.is_fork = false)

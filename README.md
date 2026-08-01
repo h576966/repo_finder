@@ -17,6 +17,11 @@ See `docs/source_scout_direction.md` for the current product direction and
 The installed CLI exposes both `source-scout` and `source_scout`; examples use
 `source-scout`. The Python module/package remains `source_scout`.
 
+On Windows, other local applications can invoke `source-scout.cmd` from the
+repository root. The launcher resolves the project virtual environment relative
+to itself, so it does not depend on the application's working directory. A PATH
+shim can use `SOURCE_SCOUT_ROOT` when the checkout lives elsewhere.
+
 ## Prerequisites
 
 - Python 3.11+

@@ -19,12 +19,25 @@ from .catalog_scoring import (
 )
 from .constants import SKIP_DIRS
 
-SOURCE_EXTENSIONS = {".tsx", ".ts", ".jsx", ".js", ".css", ".mdx", ".py"}
-ENTRY_EXTENSIONS = {".tsx", ".ts", ".jsx", ".js", ".py"}
+SOURCE_EXTENSIONS = {
+    ".tsx",
+    ".ts",
+    ".mts",
+    ".cts",
+    ".jsx",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".css",
+    ".mdx",
+    ".py",
+}
+ENTRY_EXTENSIONS = {".tsx", ".ts", ".mts", ".cts", ".jsx", ".js", ".mjs", ".cjs", ".py"}
 CONFIG_NAMES = {
     "package.json",
     "components.json",
     "environment.yml",
+    "environment.yaml",
     "tailwind.config.js",
     "tailwind.config.ts",
     "postcss.config.js",
@@ -443,7 +456,7 @@ def collect_scan_files(snapshot_root: Path) -> list[Path]:
             continue
         if any(part in SKIP_DIRS or part in GENERATED_VENDOR_DIRS for part in path.parts):
             continue
-        if path.name in CONFIG_NAMES or path.suffix in SOURCE_EXTENSIONS:
+        if _is_manifest_path(path.name) or path.suffix in SOURCE_EXTENSIONS:
             try:
                 if path.stat().st_size <= MAX_FILE_BYTES:
                     files.append(path)
@@ -531,7 +544,8 @@ def _strong_content_hits(content: str, capability: str) -> int:
 
 
 def _is_manifest_path(rel_path: str) -> bool:
-    return Path(rel_path).name in CONFIG_NAMES
+    path = Path(rel_path)
+    return path.name in CONFIG_NAMES or (path.suffix == ".txt" and path.name.startswith("requirements"))
 
 
 def _server_action_file_signal(rel_path: str, searchable: str) -> bool:
@@ -613,6 +627,17 @@ def _load_package_dependencies(snapshot_root: Path) -> tuple[dict[str, str], lis
                             name = _normalize_python_dependency(str(raw))
                             if name:
                                 dependencies[name] = ""
+        dependency_groups = parsed.get("dependency-groups", {}) if isinstance(parsed, dict) else {}
+        if isinstance(dependency_groups, dict):
+            for values in dependency_groups.values():
+                if not isinstance(values, list):
+                    continue
+                for raw in values:
+                    if not isinstance(raw, str):
+                        continue
+                    name = _normalize_python_dependency(raw)
+                    if name:
+                        dependencies[name] = ""
         tool = parsed.get("tool", {}) if isinstance(parsed, dict) else {}
         poetry = tool.get("poetry", {}) if isinstance(tool, dict) else {}
         if isinstance(poetry, dict):
@@ -623,21 +648,32 @@ def _load_package_dependencies(snapshot_root: Path) -> tuple[dict[str, str], lis
                         name = _normalize_python_dependency(str(raw))
                         if name and name != "python":
                             dependencies[name] = ""
-    for manifest_name in ("requirements.txt", "requirements-dev.txt"):
-        for manifest in snapshot_root.rglob(manifest_name):
-            if any(part in SKIP_DIRS for part in manifest.parts):
+            poetry_groups = poetry.get("group", {})
+            if isinstance(poetry_groups, dict):
+                for group in poetry_groups.values():
+                    if not isinstance(group, dict):
+                        continue
+                    group_dependencies = group.get("dependencies", {})
+                    if not isinstance(group_dependencies, dict):
+                        continue
+                    for raw in group_dependencies:
+                        name = _normalize_python_dependency(str(raw))
+                        if name:
+                            dependencies[name] = ""
+    for manifest in snapshot_root.rglob("requirements*.txt"):
+        if any(part in SKIP_DIRS for part in manifest.parts):
+            continue
+        content = read_text(manifest)
+        if not content:
+            continue
+        manifests.append(_relative(snapshot_root, manifest))
+        for line in content.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("#", "-")):
                 continue
-            content = read_text(manifest)
-            if not content:
-                continue
-            manifests.append(_relative(snapshot_root, manifest))
-            for line in content.splitlines():
-                stripped = line.strip()
-                if not stripped or stripped.startswith(("#", "-")):
-                    continue
-                name = _normalize_python_dependency(stripped)
-                if name:
-                    dependencies[name] = ""
+            name = _normalize_python_dependency(stripped)
+            if name:
+                dependencies[name] = ""
     return dependencies, manifests
 
 

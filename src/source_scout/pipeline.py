@@ -13,7 +13,17 @@ from .github_client import get_client
 
 UI_RECENCY_DAYS = MAX_STALE_DAYS
 CARD_VERSION = "repo-card-v1"
-SOURCE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".py"}
+SOURCE_EXTENSIONS = {
+    ".ts",
+    ".tsx",
+    ".mts",
+    ".cts",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".py",
+}
 GENERATED_VENDOR_DIRS = {
     "dist",
     "generated",
@@ -38,6 +48,7 @@ PYTHON_MANIFEST_NAMES = {
     "uv.lock",
     "poetry.lock",
     "environment.yml",
+    "environment.yaml",
 }
 PYTHON_AI_DATA_DEPENDENCIES = {
     "anthropic",
@@ -280,10 +291,16 @@ def _python_dependency_dict(values: list[str]) -> dict[str, str]:
     return dependencies
 
 
+def _is_python_manifest(path: Path) -> bool:
+    return path.name in PYTHON_MANIFEST_NAMES or (
+        path.suffix == ".txt" and path.name.startswith("requirements")
+    )
+
+
 def _python_manifests(root: Path) -> dict[str, Any]:
     manifests: dict[str, Any] = {}
     for path in root.rglob("*"):
-        if not path.is_file() or path.name not in PYTHON_MANIFEST_NAMES:
+        if not path.is_file() or not _is_python_manifest(path):
             continue
         rel = path.relative_to(root)
         if any(part in SKIP_DIRS for part in rel.parts):
@@ -301,6 +318,11 @@ def _python_manifests(root: Path) -> dict[str, Any]:
                 for values in optional.values():
                     if isinstance(values, list):
                         dev_dependencies.extend(str(value) for value in values)
+            dependency_groups = parsed.get("dependency-groups", {}) if isinstance(parsed, dict) else {}
+            if isinstance(dependency_groups, dict):
+                for values in dependency_groups.values():
+                    if isinstance(values, list):
+                        dev_dependencies.extend(str(value) for value in values if isinstance(value, str))
             tool = parsed.get("tool", {}) if isinstance(parsed, dict) else {}
             poetry = tool.get("poetry", {}) if isinstance(tool, dict) else {}
             if isinstance(poetry, dict):
@@ -310,6 +332,14 @@ def _python_manifests(root: Path) -> dict[str, Any]:
                 poetry_dev = poetry.get("dev-dependencies", {})
                 if isinstance(poetry_dev, dict):
                     dev_dependencies.extend(str(name) for name in poetry_dev)
+                poetry_groups = poetry.get("group", {})
+                if isinstance(poetry_groups, dict):
+                    for group in poetry_groups.values():
+                        if not isinstance(group, dict):
+                            continue
+                        group_dependencies = group.get("dependencies", {})
+                        if isinstance(group_dependencies, dict):
+                            dev_dependencies.extend(str(name) for name in group_dependencies)
             manifests[rel.as_posix()] = {
                 "name": project.get("name") if isinstance(project, dict) else None,
                 "dependencies": _python_dependency_dict([str(value) for value in dependencies]),
@@ -363,15 +393,17 @@ def build_repository_card(snapshot_root: Path) -> dict[str, Any]:
     source_files = [p for p in files if Path(p).suffix in SOURCE_EXTENSIONS]
     usable_source_files = [p for p in source_files if not _has_generated_vendor_part(p)]
     tsx_files = [p for p in files if p.endswith(".tsx")]
-    js_ts_files = [p for p in files if p.endswith((".ts", ".tsx", ".js", ".jsx"))]
+    js_ts_files = [
+        p for p in files if p.endswith((".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"))
+    ]
     python_files = [p for p in files if p.endswith(".py")]
     generated_vendor_files = [p for p in files if _has_generated_vendor_part(p)]
     lockfiles = [p for p in files if Path(p).name in LOCKFILE_NAMES]
-    python_manifest_paths = [p for p in manifests if Path(p).name in PYTHON_MANIFEST_NAMES]
+    python_manifest_paths = [p for p in manifests if _is_python_manifest(Path(p))]
     stack_signals = {
         "has_react_dependency": "react" in deps,
         "has_next_dependency": "next" in deps,
-        "has_typescript_files": any(p.endswith((".ts", ".tsx")) for p in files),
+        "has_typescript_files": any(p.endswith((".ts", ".tsx", ".mts", ".cts")) for p in files),
         "has_tsx_files": bool(tsx_files),
         "has_javascript_or_typescript_files": bool(js_ts_files),
         "has_package_manifest": any(Path(path).name == "package.json" for path in manifests),

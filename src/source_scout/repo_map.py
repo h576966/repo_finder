@@ -11,7 +11,7 @@ from typing import Any
 from .constants import SKIP_DIRS
 from .fastcontext_constants import LOCAL_EXTRA_SKIP_DIRS, LOCAL_SKIP_FILE_NAMES, LOCAL_TASK_STOPWORDS
 
-SOURCE_SUFFIXES = {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
+SOURCE_SUFFIXES = {".py", ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"}
 TEXT_MAP_SUFFIXES = SOURCE_SUFFIXES | {".json", ".toml", ".txt", ".md", ".yml", ".yaml"}
 MANIFEST_NAMES = {
     "package.json",
@@ -114,7 +114,7 @@ def build_repo_map(root: Path, *, max_files: int = 200, max_symbols: int = 300) 
             tests.extend(extracted["tests"])
             if path.name == "setup.py":
                 cli_entrypoints.extend(_setup_py_scripts(path, rel_path))
-        elif path.suffix in {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}:
+        elif path.suffix in {".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"}:
             extracted = _js_ts_entries(path, rel_path)
             symbols.extend(extracted["symbols"])
             tests.extend(extracted["tests"])
@@ -604,7 +604,8 @@ def _file_kind(rel_path: str) -> str:
 
 
 def _is_manifest(rel_path: str) -> bool:
-    return Path(rel_path).name in MANIFEST_NAMES
+    path = Path(rel_path)
+    return path.name in MANIFEST_NAMES or (path.suffix == ".txt" and path.name.startswith("requirements"))
 
 
 def _is_fixture(rel_path: str) -> bool:

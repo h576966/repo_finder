@@ -378,6 +378,73 @@ def test_python_repository_card_and_reuse_gates(tmp_path: Path) -> None:
     assert reason == "qualified"
 
 
+def test_modern_python_dependency_formats_are_indexed(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "retrieval.py").write_text(
+        "def retrieve_context(query):\n    return embed(query)\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        "\n".join(
+            [
+                "[project]",
+                'name = "modern-python"',
+                "dependencies = []",
+                "",
+                "[dependency-groups]",
+                'ai = ["openai>=2"]',
+                'lint = [{ include-group = "ai" }, "ruff>=0.12"]',
+                "",
+                "[tool.poetry.group.analytics.dependencies]",
+                'duckdb = ">=1"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "requirements-test.txt").write_text("pydantic>=2\n", encoding="utf-8")
+
+    card = pipeline.build_repository_card(tmp_path)
+    package_manifests = card["package_manifests"]
+    declared_dependencies = {
+        dependency
+        for manifest in package_manifests.values()
+        for section in ("dependencies", "devDependencies")
+        for dependency in manifest[section]
+    }
+    result = evidence.scan_snapshot(tmp_path, "rag-retrieval")
+
+    assert {"openai", "ruff", "duckdb", "pydantic"} <= declared_dependencies
+    assert card["deterministic_features"]["python_manifest_count"] == 2
+    assert {"openai", "duckdb", "pydantic"} <= set(result["external_dependencies"])
+    assert "requirements-test.txt" in result["dependency_paths"]
+
+
+def test_modern_javascript_and_typescript_extensions_are_scanned(tmp_path: Path) -> None:
+    source_root = tmp_path / "src"
+    source_root.mkdir()
+    for filename in ("index.mjs", "worker.cjs", "types.mts", "config.cts"):
+        (source_root / filename).write_text(
+            f"export const {filename.split('.', 1)[0]} = true\n",
+            encoding="utf-8",
+        )
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+
+    card = pipeline.build_repository_card(tmp_path)
+    scanned_paths = {path.relative_to(tmp_path).as_posix() for path in evidence.collect_scan_files(tmp_path)}
+
+    assert card["stack_signals"]["has_typescript_files"] is True
+    assert card["stack_signals"]["has_javascript_or_typescript_files"] is True
+    assert card["deterministic_features"]["source_file_count"] == 4
+    assert card["deterministic_features"]["js_ts_source_file_count"] == 4
+    assert {
+        "src/index.mjs",
+        "src/worker.cjs",
+        "src/types.mts",
+        "src/config.cts",
+    } <= scanned_paths
+
+
 def test_scout_queries_filter_archived_stale_large_and_old_repos() -> None:
     query = pipeline.build_nextjs_ui_queries()[0][1]
 
@@ -894,6 +961,48 @@ def test_bundle_rerun_removes_stale_source_files(tmp_path: Path) -> None:
     assert Path(second.manifest_path).exists()
 
 
+def test_failed_bundle_rerun_preserves_previous_bundle(tmp_path: Path, monkeypatch) -> None:
+    snapshot_root = tmp_path / "snapshot"
+    snapshot_root.mkdir()
+    (snapshot_root / "src").mkdir()
+    (snapshot_root / "src" / "entry.ts").write_text(
+        "export const ok = true\n",
+        encoding="utf-8",
+    )
+
+    repo_id = catalog.upsert_repository(_repo_metadata("owner", "repo"), "test")
+    snapshot_id = catalog.upsert_snapshot(repo_id, "abc123", "main", snapshot_root)
+    catalog.upsert_repository_card(snapshot_id, {"card_version": "repo-card-v1"})
+    asset_id = catalog.upsert_asset(
+        snapshot_id,
+        repo_id,
+        "route-handlers",
+        {
+            "entry_paths": ["src/entry.ts"],
+            "dependency_paths": [],
+            "external_dependencies": [],
+            "evidence_paths": ["src/entry.ts:1-1"],
+            "synthesis": {},
+            "reuse_score": 0.8,
+        },
+    )
+    first = bundles.create_source_bundle(asset_id, "task123")
+    manifest_path = Path(first.manifest_path)
+    source_path = Path(first.bundle_path) / "source" / "src" / "entry.ts"
+    original_manifest = manifest_path.read_text(encoding="utf-8")
+
+    def fail_copy(*_args, **_kwargs) -> None:
+        raise OSError("simulated copy failure")
+
+    monkeypatch.setattr(bundles.shutil, "copy2", fail_copy)
+    with pytest.raises(OSError, match="simulated copy failure"):
+        bundles.create_source_bundle(asset_id, "task123")
+
+    assert manifest_path.read_text(encoding="utf-8") == original_manifest
+    assert source_path.read_text(encoding="utf-8") == "export const ok = true\n"
+    assert not list(Path(first.bundle_path).parent.glob(".*.staging-*"))
+
+
 def test_bundle_rejects_unsafe_paths(tmp_path: Path) -> None:
     snapshot_root = tmp_path / "snapshot"
     snapshot_root.mkdir()
@@ -1101,6 +1210,54 @@ def test_search_assets_fail_closes_repos_without_freshness_metadata(tmp_path: Pa
     results = catalog.search_assets("Find a reusable data table", max_repos=5)
 
     assert [result.candidate_id for result in results] == [fresh_asset_id]
+
+
+def test_search_assets_only_uses_latest_snapshot_per_repository(tmp_path: Path) -> None:
+    repo_id = catalog.upsert_repository(_repo_metadata("owner", "repo"), "test")
+    old_root = tmp_path / "old"
+    new_root = tmp_path / "new"
+    old_root.mkdir()
+    new_root.mkdir()
+    old_snapshot_id = catalog.upsert_snapshot(repo_id, "oldsha", "main", old_root)
+    new_snapshot_id = catalog.upsert_snapshot(repo_id, "newsha", "main", new_root)
+    catalog.get_connection().execute(
+        "UPDATE snapshots SET indexed_at = ? WHERE snapshot_id = ?",
+        ["2026-07-01T00:00:00+00:00", old_snapshot_id],
+    )
+    catalog.get_connection().execute(
+        "UPDATE snapshots SET indexed_at = ? WHERE snapshot_id = ?",
+        ["2026-07-02T00:00:00+00:00", new_snapshot_id],
+    )
+
+    common = {
+        "entry_paths": ["components/data-table.tsx"],
+        "dependency_paths": ["package.json"],
+        "external_dependencies": ["@tanstack/react-table"],
+        "evidence_paths": ["components/data-table.tsx:1-3"],
+        "synthesis": {
+            "adaptation_notes": [],
+            "ui_path_score": 1.0,
+            "noise_penalty": 0.0,
+            "capability_path_score": 1.0,
+        },
+    }
+    catalog.upsert_asset(
+        old_snapshot_id,
+        repo_id,
+        "data-table",
+        {**common, "reuse_score": 1.0},
+    )
+    latest_asset_id = catalog.upsert_asset(
+        new_snapshot_id,
+        repo_id,
+        "data-table",
+        {**common, "reuse_score": 0.1},
+    )
+
+    results = catalog.search_assets("Find a reusable data table", max_repos=1)
+
+    assert [result.candidate_id for result in results] == [latest_asset_id]
+    assert results[0].commit_sha == "newsha"
 
 
 def test_search_assets_sorts_by_raw_score_before_display_clamp(tmp_path: Path) -> None:
