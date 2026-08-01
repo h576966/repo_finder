@@ -1,15 +1,26 @@
 # Source Scout
 
-RLM-first local MCP server and CLI for finding reusable TypeScript,
+Local-first MCP server and CLI for finding reusable TypeScript,
 JavaScript, Python, AI/data, Next.js, Node, and React source in public GitHub
 repositories.
 
-The current direction is an **RLM-first local source reuse assistant**, not
-generic GitHub search. The deterministic catalog search is broad retrieval; RLM
-reasoning is the future intelligence layer for project understanding, candidate
-comparison, reranking, bundle review, and eval diagnostics. Deterministic code
-still owns bounded file access, validation, hashing, persistence, traces,
-manifests, and eval metrics.
+Source Scout optimizes one precision-first reuse loop:
+
+```text
+find_reusable_code -> assess_reusable_code -> get_source_bundle
+```
+
+Catalog retrieval can abstain when no candidate clears the versioned relevance
+threshold. An optional read-only target-project profile improves deterministic
+fit ranking. Assessment validates evidence at an exact commit, and only that
+assessment can authorize a bounded source bundle. Deterministic code owns
+scores, verdict gates, path and SHA validation, dependency closure, hashing,
+persistence, manifests, and eval metrics. Gemma interprets validated evidence;
+FastContext only finds file and line evidence.
+
+Version 0.2.0 intentionally replaces the bundle MCP contract with
+`get_source_bundle(assessment_id)`. Callers using the 0.1.x candidate/task
+signature form must reassess before creating a new bundle.
 
 See `docs/source_scout_direction.md` for the current product direction and
 `docs/complexity-budget.md` for scope boundaries and model role rules.
@@ -48,7 +59,7 @@ source-scout qualify --limit 100
 source-scout lmstudio-status --smoke-test
 source-scout profile --limit 30
 source-scout evidence --domain personal-code --limit 100
-source-scout assess --candidate-id <asset_id> --task "Find a reusable route handler"
+source-scout assess --candidate-id <asset_id> --task "Find a reusable route handler" --project-path .
 source-scout eval --suite ui-reuse --top-k 5
 source-scout serve-mcp
 ```
@@ -65,15 +76,21 @@ catalog runs.
 assessment:
 
 ```powershell
-source-scout assess --candidate-id <asset_id> --task "Find a reusable route handler" --fastcontext-policy auto --max-evidence-rounds 1
+source-scout assess --candidate-id <asset_id> --task "Find a reusable route handler" --project-path . --fastcontext-policy auto --max-evidence-rounds 1
 ```
+
+`--project-path` is optional. When supplied, Source Scout reads manifests and
+source layout without executing project code, stores only canonical profile
+facts, and includes the profile fingerprint in task signatures and assessment
+caching. Use the same target path for `find_reusable_code` and
+`assess_reusable_code`.
 
 Responsibilities stay split:
 
 - Deterministic code validates paths, line ranges, commit SHA, evidence hashes,
   scoring, verdicts, bounded file access, traces, manifests, and persistence.
-- RLM is the primary reasoning layer for project understanding, candidate
-  comparison, reranking, bundle review, and eval diagnostics.
+- Deterministic retrieval and target-fit scoring choose which candidates clear
+  the shortlist; model reranking is not part of the active baseline.
 - FastContext only scouts for additional file/line evidence. It never scores or
   decides reusability.
 - Gemma interprets the validated evidence for the task, returns dimensions and
@@ -96,6 +113,34 @@ Assessment evidence is commit-pinned and stored as a validated ledger with
 content hashes. License metadata from GitHub is kept as passive context only.
 Source Scout finds and assesses useful source; license review is outside scoring
 and left to the user when needed.
+
+## Assessment-Gated Bundles
+
+Call `get_source_bundle` with the `assessment_id` returned by
+`assess_reusable_code`. `select` creates a normal bundle; `inspect` creates a
+visibly marked inspection bundle with warnings. `reject` and
+`insufficient_evidence` fail closed. Stale assessment schema/analyzer versions,
+snapshot or commit mismatches, and assessments without validated adaptation
+source paths are also rejected.
+
+Bundles are published atomically under:
+
+```text
+.source_scout/bundles/<candidate_id>/<assessment_id>/
+```
+
+Required seeds come from assessed adaptation source paths. Source Scout follows
+local Python and JS/TS runtime imports to depth two, then applies limits of five
+supporting files, ten files total, and 512 KiB. A `select` bundle must have a
+complete required relative-import closure; an `inspect` bundle may retain
+explicit unresolved-import or truncation warnings.
+
+`bundle.json` uses `source-bundle-v2`. It records assessment/model/prompt/schema
+provenance, target-profile fingerprint, verdict and mode, required/optional
+files with selection reasons, closure diagnostics, repository URL and exact
+commit, source permalinks, file hashes, SPDX information, dependency
+constraints, warnings, and total bytes. Existing task-signature bundle
+directories are left untouched.
 
 Assessment calibration uses a mocked golden suite so assessor behavior can be
 checked without live model variability:
@@ -186,9 +231,9 @@ Default tools:
 
 | Tool | Purpose |
 |------|---------|
-| `find_reusable_code(task, project_path=None, max_repos=3)` | Return shortlisted reusable candidates, each with `task_signature`, evidence paths, and adaptation notes. |
-| `assess_reusable_code(candidate_id, task, fastcontext_policy="auto", max_evidence_rounds=1, force=False)` | Assess one candidate for a task using the same structured result as `source-scout assess`. |
-| `get_source_bundle(candidate_id, task_signature)` | Copy recommended files/config into a local bundle and write a manifest tied to the original task. |
+| `find_reusable_code(task, project_path=None, max_repos=3)` | Return only candidates above the relevance threshold, with target-fit facts when a project is supplied; an empty result is a valid abstention. |
+| `assess_reusable_code(candidate_id, task, fastcontext_policy="auto", max_evidence_rounds=1, force=False, project_path=None)` | Assess validated evidence for one candidate; reuse the same optional target project used during find. |
+| `get_source_bundle(assessment_id)` | Validate a current `select`/`inspect` assessment and atomically publish its dependency-aware manifest-v2 bundle. |
 | `record_reuse_outcome(candidate_id, task_signature, outcome, notes=None)` | Track selected, integrated, or rejected candidates against the original task. |
 | `explore_local_code(task, project_path, max_turns=7)` | Use FastContext to find relevant files and line ranges in a local project without catalog writes. |
 
@@ -310,6 +355,7 @@ Golden catalog evals:
 ```powershell
 source-scout eval --suite ui-reuse --top-k 5 --label local-ui-check
 source-scout eval --suite nextjs-backend --top-k 5 --label local-backend-check
+source-scout eval --suite core-holdout --top-k 5 --label local-core-holdout
 source-scout eval-reuse-loop --suite ui-reuse --top-k 3 --limit-tasks 3 --label local-loop-check
 source-scout eval-local-explore --suite source-scout --max-turns 7 --label local-fastcontext-check
 source-scout eval-assess --suite assessment-smoke --label local-assessment-check
@@ -323,16 +369,24 @@ reports are written to `.source_scout/local_explore_eval_runs/<suite_id>/`.
 Reuse-loop quality reports are written to
 `.source_scout/reuse_loop_reports/<suite_id>/`. They run the active
 `find_reusable_code -> assess_reusable_code -> get_source_bundle` shape over a
-small golden suite and record the returned candidates, whether an
-expected/acceptable repo appeared in top-k, the selected candidate, assessment
-verdict/score/confidence/evidence coverage, selected/top-1 hit rate, bundle
-path, copied/missing file counts, and notable validation notes. By default the
+golden suite and separate positive retrieval from correct no-match abstention.
+Reports include capability and target-fit correctness, expected commit/source
+checks, assessment verdict/score/confidence/evidence coverage, bundle
+required-file recall, allowed-file precision, unresolved imports, total bytes,
+and SHA/hash failures. Correct no-match tasks must perform no assessment,
+FastContext, or bundle work. By default the
 command uses `--fastcontext-policy never --max-evidence-rounds 0` to keep the
 report focused on shortlist quality plus Gemma assessment and bundle creation.
 Treat failures as routing signals: missing expected repos point at
 shortlist/scoring issues, assessment errors or low evidence coverage point at
 assessment/evidence quality, and missing bundle files point at asset evidence or
 snapshot issues.
+
+Low-intent retrieval uses dependency-free BM25 over compact asset role cards.
+It is limited to versioned role terms that pass the tracked regression and
+keyword-ablation gates; recognized-intent ranking keeps the deterministic
+baseline. Tree-sitter is not installed because the current JS/TS closure
+fixtures do not demonstrate a structural miss.
 
 ## Project Structure
 
@@ -347,7 +401,9 @@ src/source_scout/
   fastcontext.py     # FastContext local exploration and evidence refinement
   local_explore_eval.py # FastContext local exploration eval runner
   profiler.py        # Gemma repository-card profiling
-  bundles.py         # Source bundle generation
+  target_profile.py  # Read-only deterministic target-project profiling
+  bundle_closure.py  # Bounded local import closure planning
+  bundles.py         # Assessment-gated manifest-v2 bundle generation
   snapshotter.py     # Commit-SHA local snapshots
   github_client.py   # GitHub REST client
 ```

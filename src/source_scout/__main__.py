@@ -137,6 +137,11 @@ def main() -> None:
     assess_parser.add_argument("--candidate-id", required=True)
     assess_parser.add_argument("--task", required=True)
     assess_parser.add_argument(
+        "--project-path",
+        default=None,
+        help="Optional target project path for deterministic compatibility profiling",
+    )
+    assess_parser.add_argument(
         "--fastcontext-policy",
         choices=["auto", "always", "never"],
         default="auto",
@@ -368,6 +373,7 @@ def main() -> None:
                 assess_candidate(
                     candidate_id=args.candidate_id,
                     task=args.task,
+                    project_path=args.project_path,
                     fastcontext_policy=args.fastcontext_policy,
                     max_evidence_rounds=args.max_evidence_rounds,
                     force=args.force,

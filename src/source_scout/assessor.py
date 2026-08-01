@@ -16,10 +16,11 @@ from .models import (
     MissingEvidenceRequest,
     ReuseAssessmentResult,
 )
+from .target_profile import TargetProfileV1, build_target_profile
 
-PROMPT_VERSION = "gemma-reuse-assessor-v3"
-SCHEMA_VERSION = "reuse-assessment-v2"
-ANALYZER_VERSION = "gemma-reuse-assessor-v2"
+PROMPT_VERSION = "gemma-reuse-assessor-v4"
+SCHEMA_VERSION = "reuse-assessment-v3"
+ANALYZER_VERSION = "gemma-reuse-assessor-v3"
 _EVIDENCE_IDS_SCHEMA = {
     "type": "array",
     "items": {"type": "string"},
@@ -201,6 +202,7 @@ async def assess_candidate(
     candidate_id: str,
     task: str,
     *,
+    project_path: str | Path | None = None,
     fastcontext_policy: Literal["auto", "always", "never"] = "auto",
     max_evidence_rounds: int = 1,
     force: bool = False,
@@ -213,12 +215,18 @@ async def assess_candidate(
         raise AssessorError("fastcontext_policy must be one of: auto, always, never.")
     if max_evidence_rounds < 0 or max_evidence_rounds > 2:
         raise AssessorError("max_evidence_rounds must be between 0 and 2.")
+    profile = (
+        build_target_profile(project_path)
+        if project_path is not None and str(project_path).strip()
+        else None
+    )
 
     if fastcontext_policy == "never":
         context = _load_context(
             candidate_id,
             task,
             fastcontext_policy,
+            target_profile=profile,
             fastcontext_status="not_requested",
         )
         return await _assess_context(context, force=force, transport=transport, runtime=runtime)
@@ -228,6 +236,7 @@ async def assess_candidate(
             candidate_id,
             task,
             max_evidence_rounds=max_evidence_rounds,
+            target_profile=profile,
             transport=transport,
             runtime=runtime,
         )
@@ -235,6 +244,7 @@ async def assess_candidate(
             candidate_id,
             task,
             fastcontext_policy,
+            target_profile=profile,
             fastcontext_evidence_paths=evidence_paths,
             fastcontext_events=events,
             fastcontext_status=status,
@@ -245,13 +255,17 @@ async def assess_candidate(
         candidate_id,
         task,
         fastcontext_policy,
+        target_profile=profile,
         fastcontext_status="not_requested",
     )
     initial = await _assess_context(initial_context, force=force, transport=transport, runtime=runtime)
     if max_evidence_rounds == 0 or not _has_eligible_fastcontext_request(initial):
         return initial
 
-    parent_task_signature = catalog.task_signature(task)
+    parent_task_signature = catalog.task_signature(
+        task,
+        profile.fingerprint if profile is not None else "",
+    )
     existing_paths, existing_events = _existing_fastcontext_evidence(
         candidate_id,
         parent_task_signature,
@@ -261,6 +275,7 @@ async def assess_candidate(
             candidate_id,
             task,
             fastcontext_policy,
+            target_profile=profile,
             fastcontext_evidence_paths=existing_paths,
             fastcontext_events=existing_events,
             fastcontext_status="reused_existing",
@@ -272,6 +287,7 @@ async def assess_candidate(
         task,
         assessment=initial,
         max_evidence_rounds=max_evidence_rounds,
+        target_profile=profile,
         transport=transport,
         runtime=runtime,
     )
@@ -279,6 +295,7 @@ async def assess_candidate(
         candidate_id,
         task,
         fastcontext_policy,
+        target_profile=profile,
         fastcontext_evidence_paths=evidence_paths,
         fastcontext_events=events,
         fastcontext_status=status,
@@ -389,12 +406,16 @@ async def _fastcontext_evidence_for_always(
     task: str,
     *,
     max_evidence_rounds: int,
+    target_profile: TargetProfileV1 | None,
     transport: httpx.AsyncBaseTransport | None,
     runtime: AssessmentRuntime | None = None,
 ) -> tuple[list[str], list[dict[str, Any]], str]:
     if max_evidence_rounds == 0:
         return [], [], "not_requested"
-    parent_task_signature = catalog.task_signature(task)
+    parent_task_signature = catalog.task_signature(
+        task,
+        target_profile.fingerprint if target_profile is not None else "",
+    )
     existing_paths, existing_events = _existing_fastcontext_evidence(
         candidate_id,
         parent_task_signature,
@@ -403,6 +424,7 @@ async def _fastcontext_evidence_for_always(
         candidate_id,
         task,
         "always",
+        target_profile=target_profile,
         fastcontext_evidence_paths=existing_paths,
         fastcontext_events=existing_events,
         fastcontext_status="attempting",
@@ -431,6 +453,7 @@ async def _run_fastcontext_rounds(
     *,
     assessment: ReuseAssessmentResult,
     max_evidence_rounds: int,
+    target_profile: TargetProfileV1 | None,
     transport: httpx.AsyncBaseTransport | None,
     runtime: AssessmentRuntime | None,
 ) -> tuple[list[str], list[dict[str, Any]], str]:
@@ -442,6 +465,7 @@ async def _run_fastcontext_rounds(
             candidate_id,
             task,
             "auto",
+            target_profile=target_profile,
             fastcontext_evidence_paths=evidence_paths,
             fastcontext_events=events,
             fastcontext_status="attempting",
@@ -622,6 +646,7 @@ def _load_context(
     task: str,
     fastcontext_policy: str,
     *,
+    target_profile: TargetProfileV1 | None = None,
     fastcontext_evidence_paths: Sequence[str] = (),
     fastcontext_events: Sequence[Mapping[str, Any]] = (),
     fastcontext_status: str,
@@ -639,7 +664,8 @@ def _load_context(
     if card is None:
         raise AssessorError(f"Repository card is missing for snapshot {asset['snapshot_id']}")
 
-    task_sig = catalog.task_signature(task)
+    target_profile_fingerprint = target_profile.fingerprint if target_profile is not None else ""
+    task_sig = catalog.task_signature(task, target_profile_fingerprint)
     ledger = evidence_ledger.build_candidate_evidence_ledger(
         candidate_id,
         task_signature=task_sig,
@@ -663,6 +689,7 @@ def _load_context(
         evidence_items=ledger.items,
         bundle_manifest=bundle_manifest,
         license_status=license_status,
+        target_profile=target_profile,
     )
     fingerprint_payload = {
         "model_id": config.gemma_model,
@@ -682,6 +709,8 @@ def _load_context(
         "card": card,
         "task": task.strip(),
         "task_signature": task_sig,
+        "target_profile": target_profile.to_jsonable() if target_profile is not None else {},
+        "target_profile_fingerprint": target_profile_fingerprint,
         "fastcontext_policy": fastcontext_policy,
         "fastcontext_status": fastcontext_status,
         "fastcontext_events": [dict(event) for event in fastcontext_events],
@@ -783,10 +812,12 @@ def _prompt_payload(
     evidence_items: Sequence[Mapping[str, Any]],
     bundle_manifest: Mapping[str, Any] | None,
     license_status: str,
+    target_profile: TargetProfileV1 | None,
 ) -> dict[str, Any]:
     return {
         "task": task,
         "task_signature": task_signature,
+        "target_project": target_profile.to_jsonable() if target_profile is not None else None,
         "candidate": {
             "candidate_id": asset["asset_id"],
             "capability": asset["capability"],
@@ -899,6 +930,8 @@ def _persist_assessment(
         missing_evidence=list(normalized["missing_evidence"]),
         evidence_ledger=list(context["evidence_ledger"].items),
         validation_notes=notes,
+        target_profile=dict(context["target_profile"]),
+        target_profile_fingerprint=str(context["target_profile_fingerprint"]),
     )
     return _store_and_record(context, assessment, status=status)
 
@@ -961,6 +994,8 @@ def _persist_safe_assessment(
         ],
         evidence_ledger=list(context["evidence_ledger"].items),
         validation_notes=[*validation_notes, *_fastcontext_event_notes(context["fastcontext_events"])],
+        target_profile=dict(context["target_profile"]),
+        target_profile_fingerprint=str(context["target_profile_fingerprint"]),
     )
     return _store_and_record(context, assessment, status=status)
 

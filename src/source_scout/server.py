@@ -18,6 +18,7 @@ from .models import (
     RecordReuseOutcomeResult,
     SourceBundleResult,
 )
+from .target_profile import TargetProfileError, build_target_profile
 
 mcp = FastMCP("SourceScout")
 
@@ -93,6 +94,10 @@ async def assess_reusable_code(
         bool,
         Field(description="Bypass cached assessments and force a fresh assessment"),
     ] = False,
+    project_path: Annotated[
+        str | None,
+        Field(description="Optional local target project path for deterministic compatibility profiling"),
+    ] = None,
 ) -> dict[str, Any]:
     if not candidate_id.strip():
         raise ToolError("candidate_id is required.")
@@ -110,6 +115,7 @@ async def assess_reusable_code(
             fastcontext_policy=fastcontext_policy,
             max_evidence_rounds=max_evidence_rounds,
             force=force,
+            project_path=project_path,
         )
     except (assessor.AssessorError, lmstudio.LMStudioError, OSError, ValueError) as exc:
         raise ToolError(str(exc))
@@ -130,7 +136,7 @@ async def find_reusable_code(
     ],
     project_path: Annotated[
         str | None,
-        Field(description="Optional local target project path for future project profiling"),
+        Field(description="Optional local target project path for deterministic compatibility profiling"),
     ] = None,
     max_repos: Annotated[
         int,
@@ -139,12 +145,14 @@ async def find_reusable_code(
 ) -> FindReusableCodeResult:
     if not task.strip():
         raise ToolError("Task description is required.")
-    if project_path:
-        # Reserved for later project profiling; accepted now so the MCP contract is stable.
-        _ = project_path
+    try:
+        profile = build_target_profile(project_path) if project_path and project_path.strip() else None
+    except TargetProfileError as exc:
+        raise ToolError(str(exc)) from exc
 
-    results = catalog.search_assets(task, max_repos)
-    signature = catalog.task_signature(task)
+    results = catalog.search_assets(task, max_repos, target_profile=profile)
+    profile_fingerprint = profile.fingerprint if profile is not None else ""
+    signature = catalog.task_signature(task, profile_fingerprint)
     for result in results:
         result.task_signature = signature
     for result in results:
@@ -162,7 +170,9 @@ async def find_reusable_code(
         )
     else:
         next_steps.append(
-            "Call get_source_bundle(candidate_id, task_signature) for the most relevant candidate."
+            "Call assess_reusable_code(candidate_id, task) for the strongest candidates, using the "
+            "same project_path when one was provided. Then call get_source_bundle(assessment_id) "
+            "for a select or inspect assessment."
         )
 
     return FindReusableCodeResult(
@@ -172,6 +182,7 @@ async def find_reusable_code(
         results=results,
         timestamp=_now_iso(),
         next_steps=next_steps,
+        target_profile_fingerprint=profile_fingerprint,
     )
 
 
@@ -183,22 +194,18 @@ async def find_reusable_code(
     annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
 )
 async def get_source_bundle(
-    candidate_id: Annotated[
+    assessment_id: Annotated[
         str,
-        Field(description="Candidate id returned by find_reusable_code"),
-    ],
-    task_signature: Annotated[
-        str,
-        Field(description="Task signature returned by find_reusable_code"),
+        Field(description="Assessment id returned by assess_reusable_code"),
     ],
 ) -> SourceBundleResult:
-    if not task_signature.strip():
-        raise ToolError("task_signature is required.")
-    result = bundles.create_source_bundle(candidate_id, task_signature)
+    if not assessment_id.strip():
+        raise ToolError("assessment_id is required.")
+    result = bundles.create_source_bundle(assessment_id)
     catalog.record_reuse_outcome(
-        asset_id=candidate_id,
+        asset_id=result.candidate_id,
         repo_id=result.repo_id,
-        task_signature=task_signature,
+        task_signature=result.task_signature,
         outcome="opened_bundle",
     )
     return result

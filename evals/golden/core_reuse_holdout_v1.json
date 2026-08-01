@@ -1,0 +1,150 @@
+{
+  "suite_id": "core-reuse-holdout-v1",
+  "description": "Repository-disjoint holdout for paraphrases, keyword ablation, target fit, hard negatives, and bounded TS/Python bundle closure.",
+  "tasks": [
+    {
+      "id": "holdout_keyword_ablated_table",
+      "task": "A tabular record browser with sorting filters and pagination",
+      "capability": "data-table",
+      "expected_repo_ids": ["Ala-Eddine-Mezdoud/dzignex-studio"],
+      "acceptable_repo_ids": [],
+      "avoid_repo_ids": [],
+      "expected_commit_sha": "3108c3a93f26357288884f805f59fbf42e7bf59d",
+      "expected_source_paths_any": ["features/dashboard/projects/components/data-table.tsx"],
+      "required_path_terms_any": ["data-table"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "holdout_keyword_ablated_palette_ts_closure",
+      "task": "A keyboard-driven launcher overlay for navigating application actions",
+      "capability": "command-palette",
+      "expected_repo_ids": ["joajo13/quick-outerbase"],
+      "acceptable_repo_ids": [],
+      "avoid_repo_ids": [],
+      "expected_commit_sha": "3142af1278f5aa34733ca78931d9d367a36bb4f4",
+      "expected_source_paths_any": ["src/components/ui/command.tsx"],
+      "required_path_terms_any": ["command"],
+      "required_dependencies_any": ["cmdk"],
+      "required_bundle_files_all": ["src/components/ui/command.tsx"],
+      "allowed_bundle_files": [
+        "src/components/ui/command.tsx",
+        "components.json",
+        "package.json"
+      ],
+      "max_unresolved_local_imports": 2,
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "holdout_python_application_closure",
+      "task": "Find a Python FastAPI application bootstrap with middleware and Pydantic models",
+      "capability": "python-api",
+      "expected_repo_ids": ["ukanhaupa/projx"],
+      "acceptable_repo_ids": [],
+      "avoid_repo_ids": [],
+      "expected_commit_sha": "627fd25b9f05faf7a28d98d2380df9c7c148510d",
+      "expected_source_paths_any": ["fastapi/src/app.py"],
+      "required_path_terms_any": ["fastapi/src", "app.py"],
+      "required_dependencies_any": ["fastapi", "pydantic"],
+      "required_bundle_files_all": ["fastapi/src/app.py"],
+      "allowed_bundle_files": ["fastapi/src/app.py", "fastapi/pyproject.toml"],
+      "max_unresolved_local_imports": 0,
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "holdout_route_handler_ts_closure",
+      "task": "Find a JavaScript API route handler with validation",
+      "capability": "route-handlers",
+      "expected_repo_ids": ["sparshsharma81/WOW"],
+      "acceptable_repo_ids": [],
+      "avoid_repo_ids": [],
+      "expected_commit_sha": "36a253ad2657350a126739709f8517a1e9b4a0fb",
+      "expected_source_paths_any": ["src/app/api/oauth/[provider]/route.ts"],
+      "required_path_terms_any": ["api", "route"],
+      "required_dependencies_any": ["next"],
+      "required_bundle_files_all": ["src/app/api/oauth/[provider]/route.ts"],
+      "allowed_bundle_files": [
+        "src/app/api/oauth/[provider]/route.ts",
+        "components.json",
+        "package.json"
+      ],
+      "max_unresolved_local_imports": 1,
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "holdout_background_job_paraphrase",
+      "task": "Find background jobs for booking email reminders and pending expiry",
+      "capability": "background-jobs",
+      "expected_repo_ids": ["franciscojgonzalezfernandez-lgtm/snowboard-booking-platform"],
+      "acceptable_repo_ids": [],
+      "avoid_repo_ids": [],
+      "expected_commit_sha": "d62a7c8392ad101f9ce6fb3a9c0b5f4a7c05851c",
+      "expected_source_paths_any": ["lib/cron/booking-emails.ts"],
+      "required_path_terms_any": ["cron", "booking-emails"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "holdout_target_stack_conflict",
+      "task": "Find a reusable data table with sorting filters and pagination",
+      "capability": "data-table",
+      "project_path": "evals/fixtures/target_next16_react18",
+      "expected_repo_ids": ["Ala-Eddine-Mezdoud/dzignex-studio"],
+      "acceptable_repo_ids": [],
+      "avoid_repo_ids": [],
+      "expected_commit_sha": "3108c3a93f26357288884f805f59fbf42e7bf59d",
+      "expected_source_paths_any": ["features/dashboard/projects/components/data-table.tsx"],
+      "required_path_terms_any": ["data-table"],
+      "required_dependencies_any": ["react"],
+      "max_rank_for_hit": 1
+    },
+    {
+      "id": "holdout_no_match_kubernetes_spiffe",
+      "task": "Implement a Kubernetes operator for rotating SPIFFE workload certificates",
+      "capability": "unsupported",
+      "expect_no_match": true
+    },
+    {
+      "id": "holdout_no_match_rust_embedded",
+      "task": "Find a no_std Rust I2C sensor driver for an STM32 microcontroller",
+      "capability": "unsupported",
+      "expect_no_match": true
+    },
+    {
+      "id": "holdout_no_match_ios_camera",
+      "task": "Build an iOS AVFoundation camera pipeline with Metal effects",
+      "capability": "unsupported",
+      "expect_no_match": true
+    },
+    {
+      "id": "holdout_no_match_webrtc_sfu",
+      "task": "Find a WebRTC SFU that forwards RTP simulcast layers",
+      "capability": "unsupported",
+      "expect_no_match": true
+    },
+    {
+      "id": "holdout_no_match_android_ble",
+      "task": "Build Android Bluetooth LE scanning with Jetpack Compose",
+      "capability": "unsupported",
+      "expect_no_match": true
+    },
+    {
+      "id": "holdout_no_match_vulkan",
+      "task": "Find a C++ Vulkan ray tracer with BVH traversal",
+      "capability": "unsupported",
+      "expect_no_match": true
+    },
+    {
+      "id": "holdout_no_match_elixir_liveview",
+      "task": "Implement an Elixir Phoenix LiveView presence channel",
+      "capability": "unsupported",
+      "expect_no_match": true
+    },
+    {
+      "id": "holdout_no_match_cuda",
+      "task": "Find a CUDA kernel for fused matrix multiplication",
+      "capability": "unsupported",
+      "expect_no_match": true
+    }
+  ]
+}

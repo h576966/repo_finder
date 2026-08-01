@@ -214,6 +214,51 @@ async def test_assess_candidate_normalizes_valid_response_and_records_analysis(
 
 
 @pytest.mark.asyncio
+async def test_assess_candidate_persists_target_profile_in_context_and_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = "Assess reusable route handler"
+    candidate_id = _candidate(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "package.json").write_text(
+        json.dumps({"dependencies": {"next": "15.0.0", "react": "19.0.0"}}),
+        encoding="utf-8",
+    )
+    (target / "app.tsx").write_text("export const app = true\n", encoding="utf-8")
+    calls = 0
+
+    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        payload = _prompt_payload_from_messages(kwargs["messages"])
+        assert payload["target_project"]["framework_signals"] == ["nextjs", "react"]
+        return _valid_response("E1")
+
+    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+
+    first = await assessor.assess_candidate(
+        candidate_id,
+        task,
+        project_path=target,
+        fastcontext_policy="never",
+    )
+    cached = await assessor.assess_candidate(
+        candidate_id,
+        task,
+        project_path=target,
+        fastcontext_policy="never",
+    )
+
+    assert first.target_profile_fingerprint.startswith("sha256:")
+    assert first.target_profile["framework_signals"] == ["nextjs", "react"]
+    assert first.task_signature == catalog.task_signature(task, first.target_profile_fingerprint)
+    assert cached.assessment_id == first.assessment_id
+    assert calls == 1
+
+
+@pytest.mark.asyncio
 async def test_assess_candidate_accepts_recommendation_verdict_alias(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

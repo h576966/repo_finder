@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -6,7 +7,12 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from source_scout import catalog, fastcontext, server
-from source_scout.models import LocalExploreResult
+from source_scout.models import (
+    AdaptationStep,
+    AssessmentDimensions,
+    LocalExploreResult,
+    ReuseAssessmentResult,
+)
 
 
 @pytest.mark.asyncio
@@ -101,6 +107,7 @@ async def test_assess_reusable_code_tool_is_registered_and_returns_cli_shape(
             "fastcontext_policy": "never",
             "max_evidence_rounds": 0,
             "force": True,
+            "project_path": None,
         }
     ]
 
@@ -186,6 +193,56 @@ def _create_reusable_asset(tmp_path: Path) -> str:
     )
 
 
+def _store_reusable_assessment(asset_id: str, task: str) -> str:
+    asset = catalog.get_asset_detail(asset_id)
+    assert asset is not None
+    source_path = Path(str(asset["snapshot_path"])) / "components" / "data-table.tsx"
+    first_line = source_path.read_text(encoding="utf-8").splitlines()[0]
+    assessment = ReuseAssessmentResult(
+        candidate_id=asset_id,
+        repo_id=str(asset["repo_id"]),
+        snapshot_id=str(asset["snapshot_id"]),
+        commit_sha=str(asset["commit_sha"]),
+        task=task,
+        task_signature=catalog.task_signature(task),
+        model_id="test-model",
+        prompt_version=server.assessor.PROMPT_VERSION,
+        schema_version=server.assessor.SCHEMA_VERSION,
+        analyzer_version=server.assessor.ANALYZER_VERSION,
+        input_fingerprint="server-assessment-input",
+        fastcontext_policy="never",
+        fastcontext_status="not_requested",
+        license_status="unknown",
+        recommended_verdict="select",
+        final_verdict="select",
+        reuse_score=0.9,
+        model_confidence=0.9,
+        confidence=0.9,
+        evidence_coverage=1.0,
+        requirement_count=1,
+        satisfied_requirement_count=1,
+        evidence_requirement_count=1,
+        dimensions=AssessmentDimensions(0.9, 0.9, 0.9, 0.1, 0.1),
+        adaptation_steps=[
+            AdaptationStep(
+                "Reuse the data table.",
+                ["components/data-table.tsx"],
+            )
+        ],
+        evidence_ledger=[
+            {
+                "path": "components/data-table.tsx",
+                "start_line": 1,
+                "end_line": 1,
+                "commit_sha": str(asset["commit_sha"]),
+                "content_hash": f"sha256:{hashlib.sha256(first_line.encode()).hexdigest()}",
+                "validated": True,
+            }
+        ],
+    )
+    return catalog.store_reuse_assessment(assessment)
+
+
 @pytest.mark.asyncio
 async def test_reuse_tools_carry_task_signature_and_record_outcomes(tmp_path: Path) -> None:
     asset_id = _create_reusable_asset(tmp_path)
@@ -195,16 +252,18 @@ async def test_reuse_tools_carry_task_signature_and_record_outcomes(tmp_path: Pa
     assert result.task_signature == catalog.task_signature("Find a reusable data table")
     assert result.results[0].candidate_id == asset_id
     assert result.results[0].task_signature == result.task_signature
-    assert "get_source_bundle(candidate_id, task_signature)" in result.next_steps[0]
+    assert "assess_reusable_code(candidate_id, task)" in result.next_steps[0]
 
-    bundle = await server.get_source_bundle(asset_id, result.task_signature)
+    assessment_id = _store_reusable_assessment(asset_id, result.task)
+    bundle = await server.get_source_bundle(assessment_id)
     manifest = json.loads(Path(bundle.manifest_path).read_text(encoding="utf-8"))
     assert bundle.task_signature == result.task_signature
-    assert Path(bundle.bundle_path).parts[-2:] == (asset_id, result.task_signature)
+    assert Path(bundle.bundle_path).parts[-2:] == (asset_id, assessment_id)
     assert bundle.files == ["components/data-table.tsx"]
     assert bundle.recommended_read_order == ["components/data-table.tsx"]
     assert "components/data-table.tsx" in bundle.file_hashes
     assert manifest["task_signature"] == result.task_signature
+    assert manifest["assessment_id"] == assessment_id
     assert manifest["copied_files"] == bundle.files
     assert manifest["recommended_read_order"] == bundle.recommended_read_order
 
@@ -232,6 +291,45 @@ async def test_reuse_tools_carry_task_signature_and_record_outcomes(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_find_reusable_code_profiles_target_project(tmp_path: Path) -> None:
+    _create_reusable_asset(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "package.json").write_text(
+        json.dumps({"dependencies": {"next": "15.0.0", "react": "19.0.0"}}),
+        encoding="utf-8",
+    )
+    (target / "app.tsx").write_text("export const App = () => null\n", encoding="utf-8")
+
+    result = await server.find_reusable_code(
+        "Find a reusable data table",
+        project_path=str(target),
+        max_repos=1,
+    )
+
+    assert result.target_profile_fingerprint.startswith("sha256:")
+    assert result.task_signature == catalog.task_signature(
+        result.task,
+        result.target_profile_fingerprint,
+    )
+    assert result.results[0].target_fit_score >= 0.03
+    assert result.results[0].target_fit_notes
+
+    without_profile = await server.find_reusable_code(
+        "Find a reusable data table",
+        project_path="  ",
+        max_repos=1,
+    )
+    assert without_profile.target_profile_fingerprint == ""
+
+    with pytest.raises(ToolError, match="does not exist"):
+        await server.find_reusable_code(
+            "Find a reusable data table",
+            project_path=str(tmp_path / "missing"),
+        )
+
+
+@pytest.mark.asyncio
 async def test_reuse_tools_advertise_local_mutations() -> None:
     tools = {tool.name: tool for tool in await server.mcp.list_tools()}
 
@@ -243,11 +341,11 @@ async def test_reuse_tools_advertise_local_mutations() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reuse_tools_require_task_signature(tmp_path: Path) -> None:
+async def test_reuse_tools_require_assessment_and_task_signature(tmp_path: Path) -> None:
     asset_id = _create_reusable_asset(tmp_path)
 
-    with pytest.raises(ToolError, match="task_signature is required"):
-        await server.get_source_bundle(asset_id, "")
+    with pytest.raises(ToolError, match="assessment_id is required"):
+        await server.get_source_bundle("")
 
     with pytest.raises(ToolError, match="task_signature is required"):
         await server.record_reuse_outcome(asset_id, "", "selected")

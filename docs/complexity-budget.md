@@ -1,27 +1,29 @@
 # Complexity Budget
 
-This document is the scope guardrail for Source Scout. Source Scout is moving
-toward an RLM-first local architecture, but the budget stays local, bounded, and
-evidence-backed rather than hosted, autonomous, or generic search.
+This document is the scope guardrail for Source Scout. The budget stays local,
+bounded, and evidence-backed rather than hosted, autonomous, or generic search.
 
 ## Product Core
 
 - Local-first catalog of reusable source candidates.
 - Commit-pinned snapshots and reproducible local evidence.
 - Deterministic file, path, dependency, freshness, and evidence validation.
-- RLM reasoning over bounded read-only context for project understanding,
-  candidate comparison, reranking, bundle review, and eval diagnostics.
+- Precision-first retrieval with explicit no-match abstention.
+- Read-only deterministic target-project profiling and compatibility signals.
 - Task-specific reuse assessment for a candidate and a concrete user task.
+- Assessment-gated, dependency-aware, atomically published source bundles.
 - Small MCP surface that helps coding agents find, assess, bundle, and track
   reusable code.
 
 ## Allowed Near-Term Features
 
 - Eval-backed scoring and shortlist tuning.
-- RLM core scaffolding: schemas, traces, prompts, and read-only local tools.
-- RLM-backed diagnostics for failed evals and bundle usefulness.
-- RLM-backed candidate comparison and reranking over broad catalog retrieval.
-- Read-only target-project understanding for fit signals.
+- Positive/no-match retrieval and bundle-quality evals.
+- Read-only target-project fit signals.
+- Dependency-free BM25 role cards only while they pass regression, ablation,
+  and context-efficiency gates.
+- Optional structural parsing only when fixtures demonstrate a real miss and
+  installation/precision/recall gates pass.
 - Better deterministic evidence extraction and path/dependency signals.
 - Gemma assessor calibration over validated evidence.
 - Bounded FastContext refinement for missing or weak evidence.
@@ -33,9 +35,12 @@ evidence-backed rather than hosted, autonomous, or generic search.
 
 - Broad framework, language, or repository-type coverage.
 - Full dashboard or hosted UI product.
-- Vector database or semantic index layer.
+- Vector or graph database or semantic index layer.
 - Autonomous integration into target projects.
 - Full open-ended RLM controller without eval coverage and hard tool bounds.
+- Model reranking, outcome-based ranking, and full RLM orchestration before the
+  deterministic/BM25 baseline is established.
+- Online self-adjusting ranking.
 - Cloud/frontier model routing and provider abstraction.
 - Multi-user accounts, auth, billing, or permissions.
 - Full dependency, license, or legal compliance automation.
@@ -66,9 +71,8 @@ Default MCP tools stay small:
 - Deterministic code validates paths, line ranges, commit SHA, evidence hashes,
   scores, verdicts, bounded file access, manifests, traces, eval metrics, and
   persistence.
-- RLM is the primary reasoning layer for understanding projects, comparing and
-  reranking candidates, reviewing bundles, and diagnosing eval failures.
-- Catalog search is broad retrieval, not the final intelligence layer.
+- Catalog search owns deterministic relevance and target-fit ranking and may
+  abstain below its calibrated threshold.
 - FastContext scouts for file and line evidence only.
 - Gemma assesses validated evidence only; it does not write final scores.
 - Codex reads cited source, edits code, and runs tests.

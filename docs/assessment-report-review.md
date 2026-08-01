@@ -5,6 +5,11 @@ Use this guide when reading `source-scout assess` output or
 
 ## Key Fields
 
+- `assessment_id`: Stable identifier required by `get_source_bundle`. Do not
+  reconstruct bundle inputs from candidate and task fields.
+- `target_profile_fingerprint`: Canonical fingerprint of the optional read-only
+  target-project profile. Reusing the same target facts produces the same
+  profile-aware task signature and assessment cache key.
 - `recommended_verdict`: Gemma's recommendation from the validated evidence.
   Treat it as model judgment, not the final decision.
 - `final_verdict`: Source Scout's deterministic verdict after applying evidence
@@ -22,11 +27,17 @@ Use this guide when reading `source-scout assess` output or
 
 ## Verdicts
 
-- `select`: Strong candidate for the task. Open the cited files or bundle first.
-- `inspect`: Potentially useful, but needs manual review or more evidence.
+- `select`: Strong candidate for the task. It may create a normal bundle only
+  when required source and local-import closure validation succeeds.
+- `inspect`: Potentially useful, but needs manual review or more evidence. It may
+  create a clearly marked inspection bundle with explicit warnings.
 - `reject`: Evidence shows poor fit, hard blockers, or too much coupling.
 - `insufficient_evidence`: Do not judge the candidate yet; refresh or refine
   evidence before spending integration time.
+
+`reject` and `insufficient_evidence` cannot create bundles. A stale
+schema/analyzer, commit/snapshot mismatch, or missing validated adaptation path
+also requires reassessment before bundling.
 
 ## Fast Review Loop
 
@@ -36,7 +47,9 @@ Use this guide when reading `source-scout assess` output or
 3. Read the top `reasons` and their evidence paths.
 4. If `evidence_coverage` is low or `missing_evidence` is important, rerun with
    `--fastcontext-policy auto` or `always`.
-5. Ignore license as a scoring signal. Review it manually only when you plan to
+5. For `select` or `inspect`, call `get_source_bundle(assessment_id)` and read
+   required files before optional files.
+6. Ignore license as a scoring signal. Review it manually only when you plan to
    reuse code outside private experimentation.
 
 ## Calibration Signals

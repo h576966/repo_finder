@@ -33,6 +33,24 @@ Useful implementation notes for the current Source Scout product path.
 - Store generated catalog data under `.source_scout/`.
 - Garbage-collect old snapshots through `source-scout gc`.
 
+## Reuse Loop Contracts
+
+- Preserve the order `find_reusable_code -> assess_reusable_code ->
+  get_source_bundle`.
+- Pass the same optional `project_path` to find and assess. Target profiling is
+  read-only: do not execute code, follow directory symlinks, persist source
+  text, or store the absolute project path.
+- `get_source_bundle` accepts only an `assessment_id`. Do not add a legacy
+  candidate/task-signature bridge.
+- Only current `select` and `inspect` assessments can create bundles. Old-schema
+  assessments must be rerun.
+- New bundles live at
+  `.source_scout/bundles/<candidate_id>/<assessment_id>/`; legacy bundle
+  directories remain readable and untouched.
+- Manifest `source-bundle-v2` records exact commit/provenance, required and
+  optional files, import-closure diagnostics, source hashes/permalinks, warnings,
+  dependency constraints, and total bytes.
+
 ## Model Runtime
 
 - LM Studio is the intended local OpenAI-compatible endpoint.

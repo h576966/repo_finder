@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Any
 
@@ -191,13 +192,16 @@ def _background_job_path_alignment_score(paths: list[Any]) -> float:
 
 
 def _capability_intent_scores(task: str) -> dict[str, float]:
-    lowered = task.lower().replace("-", " ").replace("_", " ")
+    lowered = " ".join(task.lower().replace("-", " ").replace("_", " ").split())
     scores: dict[str, float] = {}
     for capability, hints in CAPABILITY_INTENT_HINTS.items():
         score = 0.0
         for hint in hints:
-            normalized_hint = hint.lower().replace("-", " ").replace("_", " ")
-            if normalized_hint in lowered:
+            normalized_hint = " ".join(
+                hint.lower().replace("-", " ").replace("_", " ").split()
+            )
+            pattern = rf"(?<![a-z0-9]){re.escape(normalized_hint)}(?![a-z0-9])"
+            if re.search(pattern, lowered):
                 score += 0.35 if " " in hint else 0.18
         scores[capability] = min(1.0, score)
     return scores

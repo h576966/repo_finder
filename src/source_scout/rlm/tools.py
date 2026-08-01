@@ -128,8 +128,8 @@ class RlmReadOnlyTools:
             "card": _compact_card(card) if card is not None else None,
         }
 
-    def load_bundle_manifest(self, candidate_id: str, task_signature: str) -> dict[str, Any]:
-        manifest_path = self._bundle_manifest_path(candidate_id, task_signature)
+    def load_bundle_manifest(self, candidate_id: str, assessment_id: str) -> dict[str, Any]:
+        manifest_path = self._bundle_manifest_path(candidate_id, assessment_id)
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -138,7 +138,7 @@ class RlmReadOnlyTools:
             raise RlmToolError(f"Bundle manifest has invalid shape: {manifest_path}")
         return {
             "candidate_id": candidate_id,
-            "task_signature": task_signature,
+            "assessment_id": assessment_id,
             "manifest_path": str(manifest_path),
             "manifest": _jsonable(manifest),
         }
@@ -205,14 +205,14 @@ class RlmReadOnlyTools:
     def read_bundle_source(
         self,
         candidate_id: str,
-        task_signature: str,
+        assessment_id: str,
         path: str,
         *,
         start_line: int = 1,
         end_line: int | None = None,
         limit: int | None = None,
     ) -> dict[str, Any]:
-        source_root = self._bundle_source_root(candidate_id, task_signature)
+        source_root = self._bundle_source_root(candidate_id, assessment_id)
         result = self._read_file_range_under_root(
             source_root,
             path,
@@ -221,7 +221,7 @@ class RlmReadOnlyTools:
             limit=limit,
         )
         result["candidate_id"] = candidate_id
-        result["task_signature"] = task_signature
+        result["assessment_id"] = assessment_id
         result["root"] = str(source_root)
         return result
 
@@ -268,7 +268,7 @@ class RlmReadOnlyTools:
         if tool == "load_bundle_manifest":
             return self.load_bundle_manifest(
                 str(arguments.get("candidate_id") or ""),
-                str(arguments.get("task_signature") or ""),
+                str(arguments.get("assessment_id") or ""),
             )
         if tool == "load_repo_map":
             return self.load_repo_map(
@@ -287,7 +287,7 @@ class RlmReadOnlyTools:
         if tool == "read_bundle_source":
             return self.read_bundle_source(
                 str(arguments.get("candidate_id") or ""),
-                str(arguments.get("task_signature") or ""),
+                str(arguments.get("assessment_id") or ""),
                 str(arguments.get("path") or ""),
                 start_line=_optional_int(arguments.get("start_line")) or 1,
                 end_line=_optional_int(arguments.get("end_line")),
@@ -478,22 +478,22 @@ class RlmReadOnlyTools:
             raise RlmToolError(f"Snapshot path does not exist: {root}")
         return root
 
-    def _bundle_manifest_path(self, candidate_id: str, task_signature: str) -> Path:
+    def _bundle_manifest_path(self, candidate_id: str, assessment_id: str) -> Path:
         if not candidate_id.strip():
             raise RlmToolError("candidate_id is required.")
-        if not task_signature.strip():
-            raise RlmToolError("task_signature is required.")
+        if not assessment_id.strip():
+            raise RlmToolError("assessment_id is required.")
         try:
-            manifest_path = catalog.bundle_path(candidate_id, task_signature) / "bundle.json"
+            manifest_path = catalog.assessment_bundle_path(candidate_id, assessment_id) / "bundle.json"
         except ValueError as exc:
             raise RlmToolError(str(exc)) from exc
         if not manifest_path.exists():
             raise RlmToolError(f"Bundle manifest not found: {manifest_path}")
         return manifest_path
 
-    def _bundle_source_root(self, candidate_id: str, task_signature: str) -> Path:
-        self._bundle_manifest_path(candidate_id, task_signature)
-        source_root = catalog.bundle_path(candidate_id, task_signature) / "source"
+    def _bundle_source_root(self, candidate_id: str, assessment_id: str) -> Path:
+        self._bundle_manifest_path(candidate_id, assessment_id)
+        source_root = catalog.assessment_bundle_path(candidate_id, assessment_id) / "source"
         if not source_root.exists() or not source_root.is_dir():
             raise RlmToolError(f"Bundle source root not found: {source_root}")
         return source_root.resolve()

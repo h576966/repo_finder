@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 from fastmcp.exceptions import ToolError
 
-from source_scout import bundles, capabilities, catalog, catalog_scoring, evidence, pipeline
+from source_scout import assessor, bundles, capabilities, catalog, catalog_scoring, evidence, pipeline
+from source_scout.models import AdaptationStep, AssessmentDimensions, ReuseAssessmentResult
 
 
 def _repo_metadata(owner: str, name: str, **overrides) -> dict:
@@ -28,6 +29,94 @@ def _repo_metadata(owner: str, name: str, **overrides) -> dict:
     }
     metadata.update(overrides)
     return metadata
+
+
+def _store_bundle_assessment(
+    asset_id: str,
+    task_signature: str,
+    *,
+    source_paths: list[str] | None = None,
+    verdict: str = "select",
+    schema_version: str | None = None,
+    commit_sha: str | None = None,
+) -> str:
+    asset = catalog.get_asset_detail(asset_id)
+    assert asset is not None
+    selected_paths = (
+        source_paths if source_paths is not None else [str(path) for path in asset["entry_paths"]]
+    )
+    assessment = ReuseAssessmentResult(
+        candidate_id=asset_id,
+        repo_id=str(asset["repo_id"]),
+        snapshot_id=str(asset["snapshot_id"]),
+        commit_sha=commit_sha or str(asset["commit_sha"]),
+        task="Test bundle",
+        task_signature=task_signature,
+        model_id="test-model",
+        prompt_version=assessor.PROMPT_VERSION,
+        schema_version=schema_version or assessor.SCHEMA_VERSION,
+        analyzer_version=assessor.ANALYZER_VERSION,
+        input_fingerprint=f"input-{task_signature}",
+        fastcontext_policy="never",
+        fastcontext_status="not_requested",
+        license_status="unknown",
+        recommended_verdict=verdict,
+        final_verdict=verdict,
+        reuse_score=0.9,
+        model_confidence=0.9,
+        confidence=0.9,
+        evidence_coverage=1.0,
+        requirement_count=1,
+        satisfied_requirement_count=1,
+        evidence_requirement_count=1,
+        dimensions=AssessmentDimensions(0.9, 0.9, 0.9, 0.1, 0.1),
+        adaptation_steps=[AdaptationStep("Reuse the selected source.", selected_paths)],
+        evidence_ledger=[
+            {
+                "path": path,
+                "start_line": 1,
+                "end_line": 1,
+                "commit_sha": commit_sha or str(asset["commit_sha"]),
+                "content_hash": (
+                    "sha256:"
+                    + hashlib.sha256(
+                        (Path(str(asset["snapshot_path"])) / path)
+                        .read_text(encoding="utf-8", errors="replace")
+                        .splitlines()[0]
+                        .encode()
+                    ).hexdigest()
+                ),
+                "validated": True,
+            }
+            for path in selected_paths
+        ],
+    )
+    return catalog.store_reuse_assessment(assessment)
+
+
+def _create_simple_bundle_asset(tmp_path: Path) -> str:
+    snapshot_root = tmp_path / "bundle-snapshot"
+    (snapshot_root / "src").mkdir(parents=True)
+    (snapshot_root / "src" / "entry.ts").write_text(
+        "export const ok = true\n",
+        encoding="utf-8",
+    )
+    repo_id = catalog.upsert_repository(_repo_metadata("owner", "bundle-repo"), "test")
+    snapshot_id = catalog.upsert_snapshot(repo_id, "bundle-sha", "main", snapshot_root)
+    catalog.upsert_repository_card(snapshot_id, {"card_version": "repo-card-v1"})
+    return catalog.upsert_asset(
+        snapshot_id,
+        repo_id,
+        "route-handlers",
+        {
+            "entry_paths": ["src/entry.ts"],
+            "dependency_paths": [],
+            "external_dependencies": [],
+            "evidence_paths": ["src/entry.ts:1-1"],
+            "synthesis": {},
+            "reuse_score": 0.8,
+        },
+    )
 
 
 def _write_nextjs_fixture(root: Path) -> None:
@@ -817,7 +906,12 @@ def test_bundle_manifest_copies_evidence_files(tmp_path: Path) -> None:
         evidence.scan_snapshot(snapshot_root, "data-table"),
     )
 
-    result = bundles.create_source_bundle(asset_id, "task123")
+    assessment_id = _store_bundle_assessment(
+        asset_id,
+        "task123",
+        source_paths=["components/data-table/data-table.tsx"],
+    )
+    result = bundles.create_source_bundle(assessment_id)
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
     assert manifest["candidate_id"] == asset_id
     assert manifest["task_signature"] == "task123"
@@ -841,13 +935,15 @@ def test_bundle_path_is_task_specific_and_includes_hashes_and_read_order(tmp_pat
         evidence.scan_snapshot(snapshot_root, "data-table"),
     )
 
-    first = bundles.create_source_bundle(asset_id, "task-one")
-    second = bundles.create_source_bundle(asset_id, "task-two")
+    first_assessment_id = _store_bundle_assessment(asset_id, "task-one")
+    second_assessment_id = _store_bundle_assessment(asset_id, "task-two")
+    first = bundles.create_source_bundle(first_assessment_id)
+    second = bundles.create_source_bundle(second_assessment_id)
     first_manifest = json.loads(Path(first.manifest_path).read_text(encoding="utf-8"))
 
     copied_file = "components/data-table/data-table.tsx"
     expected_hash = hashlib.sha256((snapshot_root / copied_file).read_bytes()).hexdigest()
-    assert Path(first.bundle_path).parts[-2:] == (asset_id, "task-one")
+    assert Path(first.bundle_path).parts[-2:] == (asset_id, first_assessment_id)
     assert second.bundle_path != first.bundle_path
     assert first.files == first_manifest["copied_files"]
     assert copied_file in first.recommended_read_order
@@ -855,7 +951,7 @@ def test_bundle_path_is_task_specific_and_includes_hashes_and_read_order(tmp_pat
     assert first.file_hashes[copied_file] == expected_hash
 
 
-def test_bundle_manifest_records_missing_files(tmp_path: Path) -> None:
+def test_bundle_ignores_unrelated_missing_asset_dependency_paths(tmp_path: Path) -> None:
     snapshot_root = tmp_path / "snapshot"
     snapshot_root.mkdir()
     (snapshot_root / "src").mkdir()
@@ -878,12 +974,13 @@ def test_bundle_manifest_records_missing_files(tmp_path: Path) -> None:
         },
     )
 
-    result = bundles.create_source_bundle(asset_id, "task123")
+    assessment_id = _store_bundle_assessment(asset_id, "task123")
+    result = bundles.create_source_bundle(assessment_id)
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
 
     assert result.files == ["src/entry.ts"]
-    assert result.missing_files == ["missing.json"]
-    assert manifest["missing_files"] == ["missing.json"]
+    assert result.missing_files == []
+    assert manifest["missing_files"] == []
     assert "missing.json" not in manifest["file_hashes"]
 
 
@@ -914,7 +1011,12 @@ def test_bundle_copies_evidence_only_files(tmp_path: Path) -> None:
         },
     )
 
-    result = bundles.create_source_bundle(asset_id, "task123")
+    assessment_id = _store_bundle_assessment(
+        asset_id,
+        "task123",
+        source_paths=["src/evidence.ts"],
+    )
+    result = bundles.create_source_bundle(assessment_id)
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
 
     assert "src/evidence.ts" in result.files
@@ -949,11 +1051,12 @@ def test_bundle_rerun_removes_stale_source_files(tmp_path: Path) -> None:
         },
     )
 
-    first = bundles.create_source_bundle(asset_id, "task123")
+    assessment_id = _store_bundle_assessment(asset_id, "task123")
+    first = bundles.create_source_bundle(assessment_id)
     stale = Path(first.bundle_path) / "source" / "stale.ts"
     stale.write_text("export const stale = true\n", encoding="utf-8")
 
-    second = bundles.create_source_bundle(asset_id, "task123")
+    second = bundles.create_source_bundle(assessment_id)
 
     assert second.bundle_path == first.bundle_path
     assert not stale.exists()
@@ -986,7 +1089,8 @@ def test_failed_bundle_rerun_preserves_previous_bundle(tmp_path: Path, monkeypat
             "reuse_score": 0.8,
         },
     )
-    first = bundles.create_source_bundle(asset_id, "task123")
+    assessment_id = _store_bundle_assessment(asset_id, "task123")
+    first = bundles.create_source_bundle(assessment_id)
     manifest_path = Path(first.manifest_path)
     source_path = Path(first.bundle_path) / "source" / "src" / "entry.ts"
     original_manifest = manifest_path.read_text(encoding="utf-8")
@@ -996,7 +1100,7 @@ def test_failed_bundle_rerun_preserves_previous_bundle(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(bundles.shutil, "copy2", fail_copy)
     with pytest.raises(OSError, match="simulated copy failure"):
-        bundles.create_source_bundle(asset_id, "task123")
+        bundles.create_source_bundle(assessment_id)
 
     assert manifest_path.read_text(encoding="utf-8") == original_manifest
     assert source_path.read_text(encoding="utf-8") == "export const ok = true\n"
@@ -1027,11 +1131,16 @@ def test_bundle_rejects_unsafe_paths(tmp_path: Path) -> None:
         },
     )
 
-    with pytest.raises(ToolError, match="Unsafe source path"):
-        bundles.create_source_bundle(asset_id, "task123")
+    assessment_id = _store_bundle_assessment(
+        asset_id,
+        "task123",
+        source_paths=["../escape.ts"],
+    )
+    with pytest.raises(ToolError, match="Unsafe source path|escapes snapshot root"):
+        bundles.create_source_bundle(assessment_id)
 
 
-def test_bundle_rejects_unsafe_task_signature_path_segment(tmp_path: Path) -> None:
+def test_bundle_rejects_unsafe_assessment_id_path_segment(tmp_path: Path) -> None:
     snapshot_root = tmp_path / "snapshot"
     snapshot_root.mkdir()
     (snapshot_root / "src").mkdir()
@@ -1054,8 +1163,130 @@ def test_bundle_rejects_unsafe_task_signature_path_segment(tmp_path: Path) -> No
         },
     )
 
-    with pytest.raises(ToolError, match="Unsafe bundle task_signature"):
-        bundles.create_source_bundle(asset_id, "../other-task")
+    with pytest.raises(ValueError, match="Unsafe bundle assessment_id"):
+        catalog.assessment_bundle_path(asset_id, "../other-assessment")
+
+
+@pytest.mark.parametrize("verdict", ["reject", "insufficient_evidence"])
+def test_bundle_blocks_non_reusable_assessment_verdicts(tmp_path: Path, verdict: str) -> None:
+    asset_id = _create_simple_bundle_asset(tmp_path)
+    assessment_id = _store_bundle_assessment(asset_id, "task123", verdict=verdict)
+
+    with pytest.raises(ToolError, match="cannot create a bundle"):
+        bundles.create_source_bundle(assessment_id)
+
+
+def test_bundle_marks_inspection_verdict(tmp_path: Path) -> None:
+    asset_id = _create_simple_bundle_asset(tmp_path)
+    assessment_id = _store_bundle_assessment(asset_id, "task123", verdict="inspect")
+
+    result = bundles.create_source_bundle(assessment_id)
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+
+    assert result.bundle_mode == "inspection"
+    assert result.warnings[0].startswith("Inspection bundle")
+    assert manifest["bundle_schema_version"] == "source-bundle-v2"
+    assert manifest["assessment_id"] == assessment_id
+
+
+def test_bundle_requires_current_assessment_and_validated_source_paths(tmp_path: Path) -> None:
+    asset_id = _create_simple_bundle_asset(tmp_path)
+    stale_id = _store_bundle_assessment(
+        asset_id,
+        "stale-task",
+        schema_version="reuse-assessment-v2",
+    )
+    no_source_id = _store_bundle_assessment(asset_id, "empty-task", source_paths=[])
+    stale_commit_id = _store_bundle_assessment(
+        asset_id,
+        "commit-task",
+        commit_sha="old-sha",
+    )
+
+    with pytest.raises(ToolError, match="schema is stale"):
+        bundles.create_source_bundle(stale_id)
+    with pytest.raises(ToolError, match="no validated adaptation source paths"):
+        bundles.create_source_bundle(no_source_id)
+    with pytest.raises(ToolError, match="no longer matches"):
+        bundles.create_source_bundle(stale_commit_id)
+    with pytest.raises(ToolError, match="Unknown assessment_id"):
+        bundles.create_source_bundle("missing-assessment")
+
+
+def test_bundle_rejects_superseded_snapshot_and_changed_evidence(tmp_path: Path) -> None:
+    asset_id = _create_simple_bundle_asset(tmp_path)
+    assessment_id = _store_bundle_assessment(asset_id, "task123")
+    asset = catalog.get_asset_detail(asset_id)
+    assert asset is not None
+    snapshot_root = Path(str(asset["snapshot_path"]))
+
+    (snapshot_root / "src" / "entry.ts").write_text(
+        "export const changed = true\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ToolError, match="evidence hash is stale"):
+        bundles.create_source_bundle(assessment_id)
+
+    (snapshot_root / "src" / "entry.ts").write_text(
+        "export const ok = true\n",
+        encoding="utf-8",
+    )
+    repo_id = str(asset["repo_id"])
+    newer_root = tmp_path / "newer-snapshot"
+    newer_root.mkdir()
+    newer_snapshot_id = catalog.upsert_snapshot(repo_id, "newer-sha", "main", newer_root)
+    catalog.get_connection().execute(
+        "UPDATE snapshots SET indexed_at = ? WHERE snapshot_id = ?",
+        ["2026-08-02T00:00:00+00:00", newer_snapshot_id],
+    )
+    with pytest.raises(ToolError, match="superseded catalog snapshot"):
+        bundles.create_source_bundle(assessment_id)
+
+
+def test_select_bundle_rejects_unparseable_required_source(tmp_path: Path) -> None:
+    snapshot_root = tmp_path / "python-bundle"
+    (snapshot_root / "src").mkdir(parents=True)
+    (snapshot_root / "src" / "entry.py").write_text("def broken(:\n", encoding="utf-8")
+    repo_id = catalog.upsert_repository(_repo_metadata("owner", "python-bundle"), "test")
+    snapshot_id = catalog.upsert_snapshot(repo_id, "python-sha", "main", snapshot_root)
+    catalog.upsert_repository_card(snapshot_id, {"card_version": "repo-card-v1"})
+    asset_id = catalog.upsert_asset(
+        snapshot_id,
+        repo_id,
+        "python-api",
+        {
+            "entry_paths": ["src/entry.py"],
+            "dependency_paths": [],
+            "external_dependencies": [],
+            "evidence_paths": ["src/entry.py:1-1"],
+            "synthesis": {},
+            "reuse_score": 0.8,
+        },
+    )
+    assessment_id = _store_bundle_assessment(asset_id, "python-task")
+
+    with pytest.raises(ToolError, match="dependency closure is incomplete"):
+        bundles.create_source_bundle(assessment_id)
+
+
+def test_select_bundle_reports_path_alias_without_guessing(tmp_path: Path) -> None:
+    asset_id = _create_simple_bundle_asset(tmp_path)
+    asset = catalog.get_asset_detail(asset_id)
+    assert asset is not None
+    entry = Path(str(asset["snapshot_path"])) / "src" / "entry.ts"
+    entry.write_text(
+        'import { helper } from "@/lib/helper"\nexport const ok = helper\n',
+        encoding="utf-8",
+    )
+    assessment_id = _store_bundle_assessment(asset_id, "alias-task")
+
+    result = bundles.create_source_bundle(assessment_id)
+
+    assert result.bundle_mode == "assessment"
+    assert result.unresolved_local_imports == [
+        "src/entry.ts -> @/lib/helper (path_alias_not_supported)"
+    ]
+    assert "without guessing" in result.warnings[0]
 
 
 def test_search_assets_uses_gemma_profile_and_ui_scores(tmp_path: Path) -> None:

@@ -10,7 +10,7 @@ This document is a short product orientation. Scope boundaries live in
 
 ## Product Shape
 
-Source Scout is an RLM-first local source reuse assistant for coding agents. It
+Source Scout is a local source reuse assistant for coding agents. It
 is focused on your working stack: TypeScript, JavaScript, Python, AI/local-AI
 harnesses, data tooling, Next.js, Node, and React. It is not a generic GitHub
 search replacement, repo ranking site, SaaS product, or autonomous integration
@@ -20,28 +20,30 @@ The useful workflow is:
 
 ```text
 coding task
-  -> broad catalog retrieval
-  -> RLM project understanding, candidate comparison, and reranking
-  -> task-specific assessment and source bundle review
-  -> get_source_bundle
+  -> find_reusable_code(task, optional target project)
+  -> assess_reusable_code(candidate, task, same target project)
+  -> get_source_bundle(assessment_id)
   -> Codex reads cited source, edits, and tests
 ```
 
 The output should be small and actionable: exact files, line evidence, commit
-SHA, dependencies, adaptation notes, and a task-linked bundle.
+SHA, target-fit facts, dependencies, adaptation notes, and an assessment-linked
+bundle. Returning no candidate is correct when relevance evidence is weak.
 
 ## Architecture Direction
 
-- RLM is the primary reasoning layer for project understanding, candidate
-  comparison, reranking, source bundle review, and eval diagnostics.
-- The deterministic catalog search is broad retrieval. It should recall plausible
-  candidates quickly, then hand them to RLM reasoning instead of acting as the
-  final intelligence layer.
-- Deterministic code remains responsible for bounded file access, path safety,
-  line-range validation, hashing, persistence, traces, manifests, and eval
-  metrics.
-- The current `find_reusable_code -> assess_reusable_code -> get_source_bundle`
-  loop stays usable while RLM components become the main architecture around it.
+- Deterministic catalog retrieval applies a versioned, precision-first relevance
+  threshold before target compatibility. It may abstain.
+- Read-only target profiling detects languages, source/test roots, manifests,
+  dependencies, framework/test signals, Node module format, and basic
+  TypeScript configuration. Only canonical facts and a fingerprint are stored.
+- Deterministic code remains responsible for scores, verdicts, bounded file
+  access, path safety, line-range and exact-SHA validation, dependency closure,
+  hashing, persistence, traces, manifests, and eval metrics.
+- Gemma interprets validated assessment evidence. FastContext scouts file and
+  line evidence only. Neither writes final scores or bypasses bundle gates.
+- Model reranking, outcome-based ranking, and full RLM orchestration stay
+  deferred until deterministic retrieval and bundle evals establish a baseline.
 
 ## Current Product Path
 
@@ -49,37 +51,37 @@ SHA, dependencies, adaptation notes, and a task-linked bundle.
   snapshots from the opinionated `personal-code` discovery domain.
 - Extract deterministic evidence from paths, manifests, dependencies, and source
   files without executing repository code.
-- Use RLM reasoning to inspect project context, compare candidates, review
-  bundles, and explain eval failures over bounded read-only tools.
 - Use Gemma and FastContext as local model roles inside that architecture:
   FastContext finds file and line evidence, while Gemma assesses validated
   evidence for a specific task.
-- Track reuse outcomes against the original task signature.
+- Recompute deterministic target profiles during find and assessment, and tie
+  profile-aware work to the canonical fingerprint.
+- Create bundles only from current `select` or `inspect` assessments. Seed them
+  from validated adaptation paths, follow bounded local imports, and publish
+  atomically under the assessment ID.
+- Track reuse outcomes against the task signature; with a target profile, the
+  signature includes its fingerprint.
 
 ## Model Roles
 
 - Deterministic code validates, bounds, hashes, gates, fingerprints, and
   persists.
-- RLM coordinates reasoning over bounded local context and candidate data.
 - FastContext scouts evidence as a read-only specialist.
 - Gemma interprets validated evidence for task-specific assessment.
 - Codex reads the cited source and owns edits/tests.
 
 These boundaries keep Source Scout practical as a personal developer tool while
-making RLM the central reasoning architecture.
+leaving room for separately evaluated reasoning experiments later.
 
 ## Practical Priorities
 
-Near-term work should make the RLM-first loop more useful without expanding into
-a hosted or autonomous integration product:
+Near-term work should make the core loop more useful without expanding into a
+hosted or autonomous integration product:
 
-- Better shortlist quality for real coding tasks.
-- RLM-backed candidate comparison and reranking over broad retrieval results.
-- RLM bundle review that tells Codex what to read and adapt first.
-- RLM eval diagnostics that explain why expected candidates lost.
-- Read-only project understanding for target-project fit.
+- Calibrated no-match and positive-retrieval quality.
+- Better target-project fit without executing or mutating the target.
+- Assessment-driven dependency-complete bundles with fewer irrelevant files.
 - Better assessment calibration from golden evals.
-- Better evidence bundles with fewer irrelevant files.
 - Lower token/time waste for Codex through local exploration.
 - Simpler code and tests around the active product path.
 

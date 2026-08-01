@@ -1,7 +1,10 @@
 import hashlib
 import json
+import math
 import os
+import re
 import shutil
+from collections import Counter
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,6 +15,7 @@ import duckdb
 from .capabilities import (
     AI_DATA_CAPABILITIES,
     BACKEND_CAPABILITIES,
+    CAPABILITY_INTENT_HINTS,
     COMMAND_PALETTE_DEPENDENCIES,
     UI_CAPABILITIES,
 )
@@ -41,9 +45,47 @@ from .models import (
     ReusableCandidate,
     ReuseAssessmentResult,
 )
+from .target_profile import TargetProfileV1, npm_unambiguous_major
 
 ANALYZER_VERSION = "deterministic-ui-v1"
 DEFAULT_DB_NAME = "cache.duckdb"
+RETRIEVAL_THRESHOLD_VERSION = "retrieval-threshold-v1"
+MIN_RETRIEVAL_SCORE_V1 = 0.35
+MIN_TASK_RELEVANCE_SIGNAL_V1 = 0.50
+BM25_ROLE_VERSION = "bm25-role-v1"
+BM25_MAX_BOOST = 0.18
+BM25_MIN_ROLE_OVERLAP = 2
+_BM25_STOP_WORDS = {
+    "and",
+    "for",
+    "from",
+    "implementation",
+    "implement",
+    "into",
+    "that",
+    "the",
+    "using",
+    "with",
+}
+_CAPABILITY_ROLE_TERMS = {
+    "command-palette": {
+        "actions",
+        "keyboard",
+        "launcher",
+        "navigation",
+        "navigating",
+        "overlay",
+        "shortcuts",
+    },
+    "data-table": {
+        "browser",
+        "filters",
+        "pagination",
+        "records",
+        "sorting",
+        "tabular",
+    },
+}
 ALLOWED_REUSE_OUTCOMES = {
     "returned",
     "opened_bundle",
@@ -103,6 +145,11 @@ def bundle_path(candidate_id: str, task_signature: str | None = None) -> Path:
     if task_signature is None:
         return root
     return root / _safe_bundle_segment(task_signature, "task_signature")
+
+
+def assessment_bundle_path(candidate_id: str, assessment_id: str) -> Path:
+    root = ensure_home() / "bundles" / _safe_bundle_segment(candidate_id, "candidate_id")
+    return root / _safe_bundle_segment(assessment_id, "assessment_id")
 
 
 def reset_connection() -> None:
@@ -257,6 +304,8 @@ def initialize_catalog(conn: duckdb.DuckDBPyConnection | None = None) -> None:
             schema_version TEXT NOT NULL,
             analyzer_version TEXT NOT NULL,
             input_fingerprint TEXT NOT NULL,
+            target_profile TEXT NOT NULL,
+            target_profile_fingerprint TEXT NOT NULL,
             fastcontext_policy TEXT NOT NULL,
             fastcontext_status TEXT NOT NULL,
             license_status TEXT NOT NULL,
@@ -280,6 +329,8 @@ def initialize_catalog(conn: duckdb.DuckDBPyConnection | None = None) -> None:
             created_at TEXT NOT NULL
         )
     """)
+    _ensure_column(active, "reuse_assessments", "target_profile", "TEXT")
+    _ensure_column(active, "reuse_assessments", "target_profile_fingerprint", "TEXT")
 
 
 def _json_dump(value: Any) -> str:
@@ -711,7 +762,8 @@ def get_asset_detail(asset_id: str) -> dict[str, Any] | None:
     row = conn.execute(
         """
         SELECT
-            a.*, s.commit_sha, s.snapshot_path, r.html_url, r.owner, r.name
+            a.*, s.commit_sha, s.snapshot_path, r.html_url, r.owner, r.name,
+            r.license_spdx
         FROM assets a
         JOIN snapshots s ON s.snapshot_id = a.snapshot_id
         JOIN repositories r ON r.repo_id = a.repo_id
@@ -742,6 +794,22 @@ def get_asset_detail(asset_id: str) -> dict[str, Any] | None:
     return detail
 
 
+def get_latest_snapshot_identity(repo_id: str) -> tuple[str, str] | None:
+    row = get_connection().execute(
+        """
+        SELECT snapshot_id, commit_sha
+        FROM snapshots
+        WHERE repo_id = ?
+        ORDER BY indexed_at DESC, snapshot_id DESC
+        LIMIT 1
+        """,
+        [repo_id],
+    ).fetchone()
+    if row is None:
+        return None
+    return str(row[0]), str(row[1])
+
+
 def _resolve_snapshot_path(
     raw_path: Any,
     *,
@@ -758,7 +826,238 @@ def _resolve_snapshot_path(
     return path
 
 
-def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
+_FRAMEWORK_DEPENDENCY_SIGNALS = {
+    "@nestjs/core": "nestjs",
+    "@sveltejs/kit": "sveltekit",
+    "django": "django",
+    "express": "express",
+    "fastapi": "fastapi",
+    "fastify": "fastify",
+    "flask": "flask",
+    "hono": "hono",
+    "next": "nextjs",
+    "nuxt": "nuxt",
+    "react": "react",
+    "starlette": "starlette",
+    "svelte": "svelte",
+    "vue": "vue",
+}
+_NPM_MAJOR_FRAMEWORK_DEPENDENCIES = {
+    "@nestjs/core",
+    "@sveltejs/kit",
+    "express",
+    "fastify",
+    "hono",
+    "next",
+    "nuxt",
+    "react",
+    "svelte",
+    "vue",
+}
+
+
+def _target_fit(
+    target_profile: TargetProfileV1 | None,
+    *,
+    detected_languages: Any,
+    package_manifests: Any,
+    stack_signals: Any,
+) -> tuple[float, list[str]]:
+    if target_profile is None:
+        return 0.0, []
+
+    notes: list[str] = []
+    score = 0.0
+    candidate_languages = _candidate_languages(detected_languages, stack_signals)
+    target_ecosystems = _language_ecosystems(set(target_profile.languages))
+    candidate_ecosystems = _language_ecosystems(candidate_languages)
+    if target_ecosystems and candidate_ecosystems:
+        shared_ecosystems = sorted(target_ecosystems & candidate_ecosystems)
+        if shared_ecosystems:
+            score += 0.03
+            notes.append(f"Shared language ecosystem: {', '.join(shared_ecosystems)}.")
+        else:
+            score -= 0.10
+            notes.append("Candidate and target use different language ecosystems.")
+
+    candidate_dependencies = _candidate_dependencies(package_manifests)
+    target_dependencies = {
+        item.name: item.constraint
+        for item in (*target_profile.runtime_dependencies, *target_profile.dev_dependencies)
+    }
+    target_npm_dependencies = {
+        item.name: item.constraint
+        for item in (*target_profile.runtime_dependencies, *target_profile.dev_dependencies)
+        if item.ecosystem == "npm"
+    }
+    dependency_overlap = sorted(set(candidate_dependencies) & set(target_dependencies))
+    if dependency_overlap:
+        score += min(0.03, len(dependency_overlap) * 0.01)
+        notes.append(f"Shared dependencies: {', '.join(dependency_overlap[:6])}.")
+
+    candidate_frameworks = {
+        signal
+        for dependency, signal in _FRAMEWORK_DEPENDENCY_SIGNALS.items()
+        if dependency in candidate_dependencies
+    }
+    candidate_frameworks.update(_candidate_stack_frameworks(stack_signals))
+    shared_frameworks = sorted(set(target_profile.framework_signals) & candidate_frameworks)
+    if shared_frameworks:
+        score += 0.04
+        notes.append(f"Shared frameworks: {', '.join(shared_frameworks)}.")
+
+    major_conflicts: list[str] = []
+    unknown_major_constraints: list[str] = []
+    for dependency in sorted(
+        _NPM_MAJOR_FRAMEWORK_DEPENDENCIES & set(target_npm_dependencies)
+    ):
+        candidate_constraint = candidate_dependencies.get(dependency, "")
+        if dependency not in candidate_dependencies:
+            continue
+        target_constraint = target_npm_dependencies.get(dependency, "")
+        candidate_major = npm_unambiguous_major(candidate_constraint)
+        target_major = npm_unambiguous_major(target_constraint)
+        if candidate_major is not None and target_major is not None and candidate_major != target_major:
+            major_conflicts.append(f"{dependency} {candidate_major}→{target_major}")
+        elif candidate_major is None or target_major is None:
+            unknown_major_constraints.append(dependency)
+    if major_conflicts:
+        score -= 0.10
+        notes.append(f"Known npm major-version conflict: {', '.join(major_conflicts)}.")
+    if unknown_major_constraints:
+        notes.append(
+            "npm major-version compatibility is unknown for: "
+            f"{', '.join(unknown_major_constraints)}."
+        )
+
+    if not notes:
+        notes.append("Target compatibility is unknown from available deterministic metadata.")
+    return round(max(-0.20, min(0.10, score)), 4), notes
+
+
+def _candidate_languages(detected_languages: Any, stack_signals: Any) -> set[str]:
+    languages: set[str] = set()
+    if isinstance(detected_languages, dict):
+        languages.update(str(value).strip().lower() for value in detected_languages.values() if value)
+    elif isinstance(detected_languages, list):
+        languages.update(str(value).strip().lower() for value in detected_languages if value)
+    if isinstance(stack_signals, dict):
+        if bool(stack_signals.get("has_typescript_files")):
+            languages.add("typescript")
+        if bool(stack_signals.get("has_javascript_or_typescript_files")):
+            languages.add("javascript")
+        if bool(stack_signals.get("has_python_files")):
+            languages.add("python")
+    return languages
+
+
+def _language_ecosystems(languages: set[str]) -> set[str]:
+    ecosystems: set[str] = set()
+    if languages & {"javascript", "typescript", "tsx", "jsx"}:
+        ecosystems.add("node")
+    if "python" in languages:
+        ecosystems.add("python")
+    return ecosystems
+
+
+def _candidate_dependencies(package_manifests: Any) -> dict[str, str]:
+    dependencies: dict[str, str] = {}
+    if not isinstance(package_manifests, dict):
+        return dependencies
+    for manifest in package_manifests.values():
+        if not isinstance(manifest, dict):
+            continue
+        for section in ("dependencies", "devDependencies"):
+            values = manifest.get(section)
+            if not isinstance(values, dict):
+                continue
+            for name, constraint in values.items():
+                dependencies.setdefault(str(name).strip().lower(), str(constraint).strip())
+    return dependencies
+
+
+def _candidate_stack_frameworks(stack_signals: Any) -> set[str]:
+    if not isinstance(stack_signals, dict):
+        return set()
+    signals: set[str] = set()
+    if bool(stack_signals.get("has_next_dependency")):
+        signals.add("nextjs")
+    if bool(stack_signals.get("has_react_dependency")):
+        signals.add("react")
+    return signals
+
+
+def _bm25_terms(value: str) -> list[str]:
+    return [
+        term
+        for term in re.findall(r"[a-z0-9]+", value.lower())
+        if len(term) > 2 and term not in _BM25_STOP_WORDS
+    ]
+
+
+def _role_card_terms(data: dict[str, Any]) -> list[str]:
+    capability = str(data.get("capability", ""))
+    entry_paths = _json_load(data.get("entry_paths"), [])
+    dependency_paths = _json_load(data.get("dependency_paths"), [])
+    external_dependencies = _json_load(data.get("external_dependencies"), [])
+    evidence_paths = _json_load(data.get("evidence_paths"), [])
+    role_terms = {
+        capability,
+        *CAPABILITY_INTENT_HINTS.get(capability, set()),
+        *_CAPABILITY_ROLE_TERMS.get(capability, set()),
+        *[str(path) for path in entry_paths],
+        *[str(path) for path in dependency_paths],
+        *[str(path) for path in evidence_paths],
+        *[str(dependency) for dependency in external_dependencies],
+    }
+    return _bm25_terms(" ".join(sorted(role_terms)))
+
+
+def _bm25_role_scores(task: str, rows: list[dict[str, Any]]) -> dict[str, float]:
+    query_terms = set(_bm25_terms(task))
+    if not query_terms or not rows:
+        return {}
+    documents = [_role_card_terms(data) for data in rows]
+    average_length = sum(len(document) for document in documents) / len(documents)
+    if average_length <= 0:
+        return {}
+    document_frequency = {
+        term: sum(1 for document in documents if term in document)
+        for term in query_terms
+    }
+    raw_scores: dict[str, float] = {}
+    for data, document in zip(rows, documents, strict=True):
+        frequencies = Counter(document)
+        score = 0.0
+        for term in query_terms:
+            frequency = frequencies.get(term, 0)
+            if frequency <= 0:
+                continue
+            frequency_in_documents = document_frequency[term]
+            inverse_document_frequency = math.log(
+                1 + (len(documents) - frequency_in_documents + 0.5) / (frequency_in_documents + 0.5)
+            )
+            denominator = frequency + 1.2 * (
+                0.25 + 0.75 * len(document) / average_length
+            )
+            score += inverse_document_frequency * (frequency * 2.2 / denominator)
+        raw_scores[str(data["asset_id"])] = score
+    maximum = max(raw_scores.values(), default=0.0)
+    if maximum <= 0:
+        return {}
+    return {asset_id: round(score / maximum, 4) for asset_id, score in raw_scores.items()}
+
+
+def _role_overlap(task_terms: set[str], capability: str) -> int:
+    return len(task_terms & _CAPABILITY_ROLE_TERMS.get(capability, set()))
+
+
+def search_assets(
+    task: str,
+    max_repos: int,
+    *,
+    target_profile: TargetProfileV1 | None = None,
+) -> list[ReusableCandidate]:
     conn = get_connection()
     created_cutoff = _cutoff_date(MAX_REPO_AGE_DAYS)
     pushed_cutoff = _cutoff_date(MAX_STALE_DAYS)
@@ -778,7 +1077,8 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
             a.dependency_paths, a.external_dependencies, a.evidence_paths,
             a.synthesis, a.reuse_score, s.commit_sha, r.html_url,
             r.is_public, r.is_archived, r.repo_size_kb, r.repo_created_at,
-            r.pushed_at, c.gemma_profile
+            r.pushed_at, r.detected_languages, c.gemma_profile,
+            c.package_manifests, c.stack_signals
         FROM assets a
         JOIN ranked_snapshots s ON s.snapshot_id = a.snapshot_id
         JOIN repositories r ON r.repo_id = a.repo_id
@@ -798,21 +1098,32 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
         [MAX_REPOSITORY_SIZE_KB, created_cutoff, pushed_cutoff],
     ).fetchall()
     columns = [str(c[0]) for c in conn.description]
+    row_data = [dict(zip(columns, row, strict=False)) for row in rows]
     task_terms = _task_terms(task)
-    signature = task_signature(task)
+    bm25_scores = _bm25_role_scores(task, row_data)
+    signature = task_signature(
+        task,
+        target_profile.fingerprint if target_profile is not None else "",
+    )
     intent_scores = _capability_intent_scores(task)
     best_intent_score = max(intent_scores.values(), default=0.0)
     primary_intent = max(intent_scores.items(), key=lambda item: item[1], default=("", 0.0))[0]
+    has_bm25_role_intent = max(
+        (_role_overlap(task_terms, capability) for capability in _CAPABILITY_ROLE_TERMS),
+        default=0,
+    ) >= BM25_MIN_ROLE_OVERLAP
 
     scored: list[tuple[float, ReusableCandidate]] = []
-    for row in rows:
-        data = dict(zip(columns, row, strict=False))
+    for data in row_data:
         entry_paths = _json_load(data.get("entry_paths"), [])
         dependency_paths = _json_load(data.get("dependency_paths"), [])
         external_dependencies = _json_load(data.get("external_dependencies"), [])
         evidence_paths = _json_load(data.get("evidence_paths"), [])
         synthesis = _json_load(data.get("synthesis"), {})
         gemma_profile = _json_load(data.get("gemma_profile"), None)
+        detected_languages = _json_load(data.get("detected_languages"), {})
+        package_manifests = _json_load(data.get("package_manifests"), {})
+        stack_signals = _json_load(data.get("stack_signals"), {})
         searchable = " ".join(
             [
                 str(data.get("capability", "")),
@@ -975,6 +1286,30 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
         if not entry_paths:
             score -= 0.12
         sort_score = max(0.0, score)
+        bm25_score = bm25_scores.get(str(data["asset_id"]), 0.0)
+        if has_bm25_role_intent:
+            if (
+                _role_overlap(task_terms, capability) < BM25_MIN_ROLE_OVERLAP
+                or bm25_score < MIN_TASK_RELEVANCE_SIGNAL_V1
+            ):
+                continue
+            sort_score += bm25_score * BM25_MAX_BOOST
+        else:
+            task_relevance_signal = max(
+                capability_intent_score,
+                min(1.0, overlap / 3.0),
+            )
+            if best_intent_score < 0.18 or task_relevance_signal < MIN_TASK_RELEVANCE_SIGNAL_V1:
+                continue
+        if sort_score < MIN_RETRIEVAL_SCORE_V1:
+            continue
+        target_fit_score, target_fit_notes = _target_fit(
+            target_profile,
+            detected_languages=detected_languages,
+            package_manifests=package_manifests,
+            stack_signals=stack_signals,
+        )
+        sort_score = max(0.0, sort_score + target_fit_score)
         display_score = min(sort_score, 1.0)
         candidate = ReusableCandidate(
             candidate_id=str(data["asset_id"]),
@@ -989,6 +1324,8 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
             external_dependencies=[str(p) for p in external_dependencies],
             evidence_paths=[str(p) for p in evidence_paths],
             adaptation_notes=[str(p) for p in synthesis.get("adaptation_notes", [])],
+            target_fit_score=target_fit_score,
+            target_fit_notes=target_fit_notes,
         )
         scored.append((sort_score, candidate))
 
@@ -1026,8 +1363,10 @@ def record_reuse_outcome(
     return outcome_id
 
 
-def task_signature(task: str) -> str:
+def task_signature(task: str, target_profile_fingerprint: str = "") -> str:
     normalized = " ".join(task.lower().split())
+    if target_profile_fingerprint:
+        normalized = f"{normalized}\0{target_profile_fingerprint}"
     return hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
 
@@ -1187,6 +1526,8 @@ def _reuse_assessment_from_row(data: dict[str, Any]) -> ReuseAssessmentResult:
         schema_version=str(data["schema_version"]),
         analyzer_version=str(data["analyzer_version"]),
         input_fingerprint=str(data["input_fingerprint"]),
+        target_profile=_json_load(data.get("target_profile"), {}),
+        target_profile_fingerprint=str(data.get("target_profile_fingerprint") or ""),
         fastcontext_policy=str(data["fastcontext_policy"]),
         fastcontext_status=str(data["fastcontext_status"]),
         license_status=str(data["license_status"]),
@@ -1268,18 +1609,19 @@ def store_reuse_assessment(assessment: ReuseAssessmentResult) -> str:
         INSERT INTO reuse_assessments (
             assessment_id, candidate_id, repo_id, snapshot_id, commit_sha,
             task, task_signature, model_id, prompt_version, schema_version,
-            analyzer_version, input_fingerprint, fastcontext_policy,
-            fastcontext_status, license_status, recommended_verdict,
-            final_verdict, reuse_score, model_confidence, confidence,
-            evidence_coverage, requirement_count, satisfied_requirement_count,
-            evidence_requirement_count, dimensions, requirements, reasons,
-            adaptation_steps, coupling_risks, missing_evidence, evidence_ledger,
-            validation_notes, created_at
+            analyzer_version, input_fingerprint, target_profile,
+            target_profile_fingerprint, fastcontext_policy, fastcontext_status,
+            license_status, recommended_verdict, final_verdict, reuse_score,
+            model_confidence, confidence, evidence_coverage, requirement_count,
+            satisfied_requirement_count, evidence_requirement_count, dimensions,
+            requirements, reasons, adaptation_steps, coupling_risks,
+            missing_evidence, evidence_ledger, validation_notes, created_at
         )
         VALUES (
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?
         )
         """,
         [
@@ -1295,6 +1637,8 @@ def store_reuse_assessment(assessment: ReuseAssessmentResult) -> str:
             assessment.schema_version,
             assessment.analyzer_version,
             assessment.input_fingerprint,
+            _json_dump(assessment.target_profile),
+            assessment.target_profile_fingerprint,
             assessment.fastcontext_policy,
             assessment.fastcontext_status,
             assessment.license_status,

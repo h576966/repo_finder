@@ -1,9 +1,11 @@
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
-from source_scout import bundles, catalog
+from source_scout import assessor, bundles, catalog
+from source_scout.models import AdaptationStep, AssessmentDimensions, ReuseAssessmentResult
 from source_scout.rlm import (
     RlmFinalResult,
     RlmFinding,
@@ -80,6 +82,54 @@ def _create_candidate(tmp_path: Path) -> tuple[str, Path]:
         },
     )
     return asset_id, snapshot_root
+
+
+def _create_bundle(asset_id: str, task_signature: str = "task123"):
+    asset = catalog.get_asset_detail(asset_id)
+    assert asset is not None
+    helper = Path(str(asset["snapshot_path"])) / "src" / "helper.py"
+    helper_evidence = "\n".join(helper.read_text(encoding="utf-8").splitlines()[:2])
+    assessment = ReuseAssessmentResult(
+        candidate_id=asset_id,
+        repo_id=str(asset["repo_id"]),
+        snapshot_id=str(asset["snapshot_id"]),
+        commit_sha=str(asset["commit_sha"]),
+        task="Read a reusable helper",
+        task_signature=task_signature,
+        model_id="test-model",
+        prompt_version=assessor.PROMPT_VERSION,
+        schema_version=assessor.SCHEMA_VERSION,
+        analyzer_version=assessor.ANALYZER_VERSION,
+        input_fingerprint="rlm-bundle-input",
+        fastcontext_policy="never",
+        fastcontext_status="not_requested",
+        license_status="unknown",
+        recommended_verdict="select",
+        final_verdict="select",
+        reuse_score=0.9,
+        model_confidence=0.9,
+        confidence=0.9,
+        evidence_coverage=1.0,
+        requirement_count=1,
+        satisfied_requirement_count=1,
+        evidence_requirement_count=1,
+        dimensions=AssessmentDimensions(0.9, 0.9, 0.9, 0.1, 0.1),
+        adaptation_steps=[AdaptationStep("Reuse helper.", ["src/helper.py"])],
+        evidence_ledger=[
+            {
+                "path": "src/helper.py",
+                "start_line": 1,
+                "end_line": 2,
+                "commit_sha": str(asset["commit_sha"]),
+                "content_hash": (
+                    f"sha256:{hashlib.sha256(helper_evidence.encode()).hexdigest()}"
+                ),
+                "validated": True,
+            }
+        ],
+    )
+    assessment_id = catalog.store_reuse_assessment(assessment)
+    return assessment_id, bundles.create_source_bundle(assessment_id)
 
 
 def test_rlm_schema_construction() -> None:
@@ -246,17 +296,23 @@ def test_rlm_tools_read_candidate_source_safely(tmp_path: Path) -> None:
 
 def test_rlm_tools_read_bundle_source_safely(tmp_path: Path) -> None:
     asset_id, _snapshot_root = _create_candidate(tmp_path)
-    bundle = bundles.create_source_bundle(asset_id, "task123")
+    assessment_id, bundle = _create_bundle(asset_id)
     tools = RlmReadOnlyTools(tmp_path)
 
-    result = tools.read_bundle_source(asset_id, "task123", "src/helper.py", start_line=1, limit=1)
+    result = tools.read_bundle_source(
+        asset_id,
+        assessment_id,
+        "src/helper.py",
+        start_line=1,
+        limit=1,
+    )
 
     assert result["candidate_id"] == asset_id
-    assert result["task_signature"] == "task123"
+    assert result["assessment_id"] == assessment_id
     assert result["root"] == str((Path(bundle.bundle_path) / "source").resolve())
     assert result["content"] == "1|def helper():"
     with pytest.raises(RlmToolError, match="escapes"):
-        tools.read_bundle_source(asset_id, "task123", "../escape.py")
+        tools.read_bundle_source(asset_id, assessment_id, "../escape.py")
 
 
 def test_rlm_tools_load_reuse_loop_report(tmp_path: Path) -> None:
@@ -294,7 +350,7 @@ def test_rlm_tools_load_reuse_loop_report(tmp_path: Path) -> None:
 
 def test_rlm_root_sensitive_tools_reject_path_traversal(tmp_path: Path) -> None:
     asset_id, _snapshot_root = _create_candidate(tmp_path)
-    bundle = bundles.create_source_bundle(asset_id, "task123")
+    assessment_id, bundle = _create_bundle(asset_id)
     root = tmp_path / "project"
     root.mkdir()
     (root / "report.json").write_text("{}", encoding="utf-8")
@@ -315,7 +371,7 @@ def test_rlm_root_sensitive_tools_reject_path_traversal(tmp_path: Path) -> None:
     with pytest.raises(RlmToolError, match="escapes"):
         tools.read_candidate_source(asset_id, "../outside.py")
     with pytest.raises(RlmToolError, match="escapes"):
-        tools.read_bundle_source(asset_id, "task123", "../outside.py")
+        tools.read_bundle_source(asset_id, assessment_id, "../outside.py")
     with pytest.raises(RlmToolError, match="escapes"):
         tools.load_reuse_loop_report("../report.json")
     with pytest.raises(RlmToolError, match="under .source_scout"):
@@ -349,18 +405,18 @@ def test_rlm_tools_load_candidate_and_bundle_with_mocked_catalog(
             "snapshot_path": tmp_path / "snapshot",
         }
 
-    def fake_bundle_path(candidate_id: str, task_signature: str | None = None) -> Path:
+    def fake_bundle_path(candidate_id: str, assessment_id: str) -> Path:
         assert candidate_id == "candidate-1"
-        assert task_signature == "task-1"
+        assert assessment_id == "assessment-1"
         return bundle_root
 
     monkeypatch.setattr(rlm_tools.catalog, "get_asset_detail", fake_get_asset_detail)
-    monkeypatch.setattr(rlm_tools.catalog, "bundle_path", fake_bundle_path)
+    monkeypatch.setattr(rlm_tools.catalog, "assessment_bundle_path", fake_bundle_path)
 
     tools = RlmReadOnlyTools(root)
 
     asset = tools.load_candidate_asset("candidate-1")
-    manifest = tools.load_bundle_manifest("candidate-1", "task-1")
+    manifest = tools.load_bundle_manifest("candidate-1", "assessment-1")
 
     assert asset["asset"]["repo_id"] == "owner/repo"
     assert asset["asset"]["snapshot_path"] == str(tmp_path / "snapshot")

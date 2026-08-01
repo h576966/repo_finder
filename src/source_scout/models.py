@@ -23,6 +23,8 @@ class ReusableCandidate:
     external_dependencies: list[str] = field(default_factory=list)
     evidence_paths: list[str] = field(default_factory=list)
     adaptation_notes: list[str] = field(default_factory=list)
+    target_fit_score: float = 0.0
+    target_fit_notes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -33,6 +35,7 @@ class FindReusableCodeResult:
     results: list[ReusableCandidate]
     timestamp: str
     next_steps: list[str] = field(default_factory=list)
+    target_profile_fingerprint: str = ""
 
 
 @dataclass
@@ -51,6 +54,13 @@ class SourceBundleResult:
     adaptation_notes: list[str] = field(default_factory=list)
     recommended_read_order: list[str] = field(default_factory=list)
     file_hashes: dict[str, str] = field(default_factory=dict)
+    assessment_id: str = ""
+    bundle_mode: str = ""
+    required_files: list[str] = field(default_factory=list)
+    optional_files: list[str] = field(default_factory=list)
+    unresolved_local_imports: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    total_bytes: int = 0
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
@@ -163,5 +173,7 @@ class ReuseAssessmentResult:
     missing_evidence: list[MissingEvidenceRequest] = field(default_factory=list)
     evidence_ledger: list[dict[str, Any]] = field(default_factory=list)
     validation_notes: list[str] = field(default_factory=list)
+    target_profile: dict[str, Any] = field(default_factory=dict)
+    target_profile_fingerprint: str = ""
     assessment_id: str = ""
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
