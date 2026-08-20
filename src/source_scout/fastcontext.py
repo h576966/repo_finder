@@ -114,6 +114,7 @@ async def smoke_test(
         transport=transport,
         max_tokens=100,
         temperature=0.0,
+        response_format=_fastcontext_response_format(),
         tools=_fastcontext_tools(),
         tool_choice="required",
     )
@@ -721,6 +722,7 @@ async def _fastcontext_completion(
         client=client,
         max_tokens=max_tokens,
         temperature=temperature,
+        response_format=_fastcontext_response_format(),
         tools=_fastcontext_tools(),
     )
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from openai import APIError, APIStatusError, AsyncOpenAI
+from openai import APIConnectionError, APIError, APIStatusError, AsyncOpenAI
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-v4-flash"
@@ -17,6 +17,20 @@ DEFAULT_TIMEOUT_SECONDS = 120.0
 
 class ModelError(RuntimeError):
     pass
+
+
+class ModelConfigurationError(ModelError):
+    pass
+
+
+class ModelConnectionError(ModelError):
+    pass
+
+
+class ModelStatusError(ModelError):
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class ModelResponseError(ModelError):
@@ -67,7 +81,7 @@ def get_config() -> ModelConfig:
 def _api_key() -> str:
     api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
-        raise ModelError("DEEPSEEK_API_KEY is required.")
+        raise ModelConfigurationError("DEEPSEEK_API_KEY is required.")
     return api_key
 
 
@@ -113,6 +127,8 @@ class DeepSeekClient:
             response = await self._active_client().models.list()
         except APIStatusError as exc:
             raise _status_error("model listing", exc) from exc
+        except APIConnectionError as exc:
+            raise ModelConnectionError("Could not connect to the DeepSeek API.") from exc
         except APIError as exc:
             raise ModelError("DeepSeek model listing failed.") from exc
         return [str(model.id) for model in response.data if model.id]
@@ -146,6 +162,8 @@ class DeepSeekClient:
             response = await self._active_client().responses.create(**payload)
         except APIStatusError as exc:
             raise _status_error("response", exc) from exc
+        except APIConnectionError as exc:
+            raise ModelConnectionError("Could not connect to the DeepSeek API.") from exc
         except APIError as exc:
             raise ModelError("DeepSeek response failed.") from exc
         latency_ms = round((time.perf_counter() - started) * 1000)
@@ -261,10 +279,13 @@ async def response_completion(
         )
 
 
-def _status_error(operation: str, exc: APIStatusError) -> ModelError:
+def _status_error(operation: str, exc: APIStatusError) -> ModelStatusError:
     detail = exc.response.text.strip()
     suffix = f" Response: {detail[:500]}" if detail else ""
-    return ModelError(f"DeepSeek {operation} failed with HTTP {exc.status_code}.{suffix}")
+    return ModelStatusError(
+        f"DeepSeek {operation} failed with HTTP {exc.status_code}.{suffix}",
+        status_code=exc.status_code,
+    )
 
 
 def _responses_text_format(response_format: dict[str, Any]) -> dict[str, Any]:

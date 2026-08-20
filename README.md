@@ -240,8 +240,8 @@ Assessment, repository profiling, and exploration all use the hosted
 that rolling API alias is `DeepSeek-V4-Flash-0731`; requests must still use
 `deepseek-v4-flash` as the model ID.
 
-Structured assessment and final exploration turns use Responses
-`text.format` with JSON Schema. Exploration uses native function calls and
+Structured assessment calls and every exploration request use Responses
+`text.format` with JSON Schema. Exploration also uses native function calls and
 replays the complete response output with `function_call_output`, because
 DeepSeek does not support `previous_response_id`. Thinking is disabled with
 `reasoning={"effort":"none"}` for predictable tool replay, latency, and cost.
@@ -258,6 +258,13 @@ Check JSON assessment output and a native exploration tool call with:
 ```powershell
 source-scout model-status --smoke-test
 ```
+
+The status output separates local configuration, network reachability, and
+HTTP failures. `error_type` is `configuration`, `connection`,
+`authentication`, `billing`, `rate_limit`, `service`, or `http`; an HTTP error
+still reports `reachable: true` because the DeepSeek endpoint answered. If a
+Codex sandbox reports `error_type: connection`, rerun the status command once
+with approved network access before treating DeepSeek as unavailable.
 
 Set `DEEPSEEK_API_KEY` in the environment inherited by the CLI or MCP process.
 For a persistent Windows user-level variable shared by projects, run this once
@@ -311,8 +318,8 @@ This runs the lightweight safe checks:
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-`--with-local-explore-eval` runs the local FastContext eval and requires LM
-Studio/FastContext to be available:
+`--with-local-explore-eval` runs the live FastContext eval and requires the
+DeepSeek API and `DEEPSEEK_API_KEY` to be available:
 
 ```powershell
 source-scout check --with-local-explore-eval

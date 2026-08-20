@@ -56,7 +56,8 @@ Useful implementation notes for the current Source Scout product path.
 - DeepSeek V4 Flash is the only model runtime. Every model-backed role uses the
   rolling API alias `deepseek-v4-flash`.
 - Base URL: `https://api.deepseek.com`; endpoint: `/responses`.
-- Structured and final output use Responses `text.format` with JSON Schema.
+- Structured assessment calls and every exploration request use Responses
+  `text.format` with JSON Schema.
   Exploration replays response output items and `function_call_output` because
   the API is stateless and does not support `previous_response_id`.
 - Requests use `reasoning={"effort":"none"}` and temperature `0`. Non-retryable
@@ -87,6 +88,10 @@ API status and smoke tests:
 ```powershell
 source-scout model-status --smoke-test
 ```
+
+Status failures include an `error_type`. A sandbox-only `connection` failure
+must be retried once with approved network access; configuration and HTTP
+errors should be handled directly without a network escalation retry.
 
 Default test runs cover catalog, assessment, the DeepSeek Responses contract,
 and exploration:

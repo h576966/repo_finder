@@ -30,6 +30,7 @@ async def test_fastcontext_tool_loop_uses_openai_tool_calls(tmp_path: Path) -> N
         if chat_calls == 1:
             assert payload["tools"][0]["name"] == "Read"
             assert payload["reasoning"] == {"effort": "none"}
+            assert payload["text"]["format"]["type"] == "json_schema"
             return httpx.Response(
                 200,
                 json={

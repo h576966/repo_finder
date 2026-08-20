@@ -260,13 +260,28 @@ async def test_transient_response_error_uses_bounded_sdk_retries(status_code: in
 @pytest.mark.asyncio
 async def test_missing_api_key_fails_before_request(monkeypatch) -> None:
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    with pytest.raises(deepseek.ModelError, match="DEEPSEEK_API_KEY is required"):
+    with pytest.raises(deepseek.ModelConfigurationError, match="DEEPSEEK_API_KEY is required"):
         await deepseek.list_models(transport=httpx.MockTransport(lambda request: httpx.Response(500)))
 
 
 @pytest.mark.asyncio
+async def test_connection_failure_has_a_distinct_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("sandbox blocked the connection", request=request)
+
+    with pytest.raises(deepseek.ModelConnectionError, match="Could not connect"):
+        await deepseek.list_models(transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.asyncio
 async def test_fastcontext_smoke_validates_exact_read_call() -> None:
-    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=_tool_response()))
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["tools"][0]["name"] == "Read"
+        assert payload["text"]["format"]["type"] == "json_schema"
+        return httpx.Response(200, json=_tool_response())
+
+    transport = httpx.MockTransport(handler)
     result = await fastcontext.smoke_test(transport=transport)
     assert result["ok"] is True
     assert result["tool_call"]["args"] == {"path": "README.md", "offset": 1, "limit": 1}
@@ -293,10 +308,75 @@ async def test_model_status_reports_assessment_and_exploration_smokes(monkeypatc
     monkeypatch.setattr(fastcontext, "smoke_test", fake_smoke)
     result = await cli_status._api_status(smoke_test=True)
     assert result["reachable"] is True
+    assert result["configured"] is True
+    assert result["authorized"] is True
     assert result["smoke_tests"] == {
         "assessment": {"completed": True, "response": {"ok": True}},
         "exploration": {"completed": True, "response": {"ok": True}},
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (
+            deepseek.ModelConfigurationError("DEEPSEEK_API_KEY is required."),
+            {"reachable": None, "configured": False, "error_type": "configuration"},
+        ),
+        (
+            deepseek.ModelConnectionError("Could not connect to the DeepSeek API."),
+            {"reachable": False, "configured": True, "error_type": "connection"},
+        ),
+        (
+            deepseek.ModelStatusError("HTTP 401", status_code=401),
+            {
+                "reachable": True,
+                "configured": True,
+                "authorized": False,
+                "error_type": "authentication",
+                "status_code": 401,
+            },
+        ),
+        (
+            deepseek.ModelStatusError("HTTP 402", status_code=402),
+            {
+                "reachable": True,
+                "configured": True,
+                "error_type": "billing",
+                "status_code": 402,
+            },
+        ),
+        (
+            deepseek.ModelStatusError("HTTP 429", status_code=429),
+            {
+                "reachable": True,
+                "configured": True,
+                "error_type": "rate_limit",
+                "status_code": 429,
+            },
+        ),
+        (
+            deepseek.ModelStatusError("HTTP 503", status_code=503),
+            {
+                "reachable": True,
+                "configured": True,
+                "error_type": "service",
+                "status_code": 503,
+            },
+        ),
+    ],
+)
+async def test_model_status_classifies_failures(
+    monkeypatch, error: deepseek.ModelError, expected: dict[str, object]
+) -> None:
+    async def fail_validate(config: deepseek.ModelConfig) -> dict[str, object]:
+        raise error
+
+    monkeypatch.setattr(deepseek, "validate_model", fail_validate)
+    result = await cli_status._api_status(smoke_test=False)
+    for key, value in expected.items():
+        assert result[key] == value
 
 
 def _create_repository_card(tmp_path: Path) -> str:
