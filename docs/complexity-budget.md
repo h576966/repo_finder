@@ -25,7 +25,7 @@ bounded, and evidence-backed rather than hosted, autonomous, or generic search.
 - Optional structural parsing only when fixtures demonstrate a real miss and
   installation/precision/recall gates pass.
 - Better deterministic evidence extraction and path/dependency signals.
-- Gemma assessor calibration over validated evidence.
+- Assessment-model calibration over validated evidence.
 - Bounded FastContext refinement for missing or weak evidence.
 - Standalone local exploration for the current repo or personal repos.
 - Reuse outcome tracking tied to task signatures.
@@ -41,7 +41,7 @@ bounded, and evidence-backed rather than hosted, autonomous, or generic search.
 - Model reranking, outcome-based ranking, and full RLM orchestration before the
   deterministic/BM25 baseline is established.
 - Online self-adjusting ranking.
-- Cloud/frontier model routing and provider abstraction.
+- Multi-provider routing and automatic provider failover.
 - Multi-user accounts, auth, billing, or permissions.
 - Full dependency, license, or legal compliance automation.
 
@@ -73,6 +73,6 @@ Default MCP tools stay small:
   persistence.
 - Catalog search owns deterministic relevance and target-fit ranking and may
   abstain below its calibrated threshold.
-- FastContext scouts for file and line evidence only.
-- Gemma assesses validated evidence only; it does not write final scores.
+- The exploration role scouts for file and line evidence only.
+- The assessment role assesses validated evidence only; it does not write final scores.
 - Codex reads cited source, edits code, and runs tests.

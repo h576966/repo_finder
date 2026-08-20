@@ -40,8 +40,9 @@ bundle. Returning no candidate is correct when relevance evidence is weak.
 - Deterministic code remains responsible for scores, verdicts, bounded file
   access, path safety, line-range and exact-SHA validation, dependency closure,
   hashing, persistence, traces, manifests, and eval metrics.
-- Gemma interprets validated assessment evidence. FastContext scouts file and
-  line evidence only. Neither writes final scores or bypasses bundle gates.
+- The assessment role interprets validated evidence. The exploration role
+  scouts file and line evidence only. Neither writes final scores or bypasses
+  bundle gates.
 - Model reranking, outcome-based ranking, and full RLM orchestration stay
   deferred until deterministic retrieval and bundle evals establish a baseline.
 
@@ -51,9 +52,9 @@ bundle. Returning no candidate is correct when relevance evidence is weak.
   snapshots from the opinionated `personal-code` discovery domain.
 - Extract deterministic evidence from paths, manifests, dependencies, and source
   files without executing repository code.
-- Use Gemma and FastContext as local model roles inside that architecture:
-  FastContext finds file and line evidence, while Gemma assesses validated
-  evidence for a specific task.
+- Use DeepSeek V4 Flash through the native Responses API for both bounded model
+  roles: exploration finds file and line evidence, while assessment interprets
+  validated evidence for a specific task.
 - Recompute deterministic target profiles during find and assessment, and tie
   profile-aware work to the canonical fingerprint.
 - Create bundles only from current `select` or `inspect` assessments. Seed them
@@ -66,8 +67,8 @@ bundle. Returning no candidate is correct when relevance evidence is weak.
 
 - Deterministic code validates, bounds, hashes, gates, fingerprints, and
   persists.
-- FastContext scouts evidence as a read-only specialist.
-- Gemma interprets validated evidence for task-specific assessment.
+- The exploration role scouts evidence with read-only tools.
+- The assessment role interprets validated evidence for task-specific assessment.
 - Codex reads the cited source and owns edits/tests.
 
 These boundaries keep Source Scout practical as a personal developer tool while

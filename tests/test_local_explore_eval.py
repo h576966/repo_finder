@@ -156,7 +156,7 @@ async def test_evaluate_suite_scores_hits_bad_citations_and_manual_search(
         return LocalExploreResult(
             task=task,
             project_path=str(project_path),
-            model_id="fastcontext-1.0-4b-rl",
+            model_id="deepseek-v4-flash",
             prompt_version="fastcontext-refine-v2",
             schema_version="fastcontext-evidence-v1",
             analyzer_version="fastcontext-harness-v1",
@@ -304,7 +304,7 @@ async def test_evaluate_suite_does_not_pass_fallback_observations(
         return LocalExploreResult(
             task=task,
             project_path=str(project_path),
-            model_id="fastcontext-1.0-4b-rl",
+            model_id="deepseek-v4-flash",
             prompt_version="fastcontext-refine-v2",
             schema_version="fastcontext-evidence-v1",
             analyzer_version="fastcontext-harness-v1",
@@ -343,9 +343,7 @@ async def test_run_local_explore_eval_writes_report(tmp_path: Path, monkeypatch)
                     {
                         "id": "find_target",
                         "task": "Find target function",
-                        "expected_citations": [
-                            {"path": "src/foo.py", "start_line": 1, "end_line": 3}
-                        ],
+                        "expected_citations": [{"path": "src/foo.py", "start_line": 1, "end_line": 3}],
                         "manual_search_terms": ["target"],
                     }
                 ],
@@ -359,7 +357,7 @@ async def test_run_local_explore_eval_writes_report(tmp_path: Path, monkeypatch)
         return LocalExploreResult(
             task="Find target function",
             project_path=str(tmp_path),
-            model_id="fastcontext-1.0-4b-rl",
+            model_id="deepseek-v4-flash",
             prompt_version="fastcontext-refine-v2",
             schema_version="fastcontext-evidence-v1",
             analyzer_version="fastcontext-harness-v1",

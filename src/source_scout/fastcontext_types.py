@@ -28,7 +28,6 @@ class FastContextCitation:
 
 @dataclass(frozen=True)
 class ParsedFastContextResponse:
-    tool_calls: list[dict[str, Any]]
     citations: list[FastContextCitation]
     citation_ids: list[str]
     notes: list[str]

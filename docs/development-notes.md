@@ -53,13 +53,16 @@ Useful implementation notes for the current Source Scout product path.
 
 ## Model Runtime
 
-- LM Studio is the intended local OpenAI-compatible endpoint.
-- Default endpoint: `http://127.0.0.1:1234/v1`.
-- Source Scout sends model requests through the OpenAI Python SDK using LM
-  Studio's `/v1/responses` compatibility endpoint.
-- Windows CLI: `C:\Users\Nikla\.lmstudio\bin\lms.exe`.
-- Gemma is for JSON profiling/synthesis after deterministic evidence exists.
-- FastContext is for evidence refinement over read-only `READ`, `GLOB`, and
+- DeepSeek V4 Flash is the only model runtime. Every model-backed role uses the
+  rolling API alias `deepseek-v4-flash`.
+- Base URL: `https://api.deepseek.com`; endpoint: `/responses`.
+- Structured and final output use Responses `text.format` with JSON Schema.
+  Exploration replays response output items and `function_call_output` because
+  the API is stateless and does not support `previous_response_id`.
+- Requests use `reasoning={"effort":"none"}` and temperature `0`. Non-retryable
+  errors surface directly; transient retries are bounded by the SDK.
+- The assessment role handles JSON profiling/synthesis after deterministic evidence exists.
+- The exploration role handles evidence refinement over read-only `READ`, `GLOB`, and
   `GREP`-style tools, not general code generation.
 - Standalone FastContext exploration is evaluated through
   `evals/golden/local_explore_source_scout_v1.json` and
@@ -73,31 +76,29 @@ Useful implementation notes for the current Source Scout product path.
 - Bump the relevant `PROMPT_VERSION` whenever prompt behavior changes.
 - Prefer short, outcome-first prompts with explicit evidence rules, retrieval
   budgets, validation rules, and output schema expectations.
-- For tool-heavy Responses flows, preserve prior assistant output items before
-  appending function-call outputs.
+- Preserve all returned Responses output items before appending matching
+  `function_call_output` items. Every function call must receive an output,
+  including calls skipped by the local execution cap.
 - Do not add broad process instructions unless tests or evals show they improve
   retrieval or assessment quality.
 
-Local status and smoke tests:
+API status and smoke tests:
 
 ```powershell
-lms ls
-lms server status
-lms server start
-Invoke-RestMethod http://127.0.0.1:1234/v1/models
-source-scout lmstudio-status --smoke-test
+source-scout model-status --smoke-test
 ```
 
-Default test runs focus on the current catalog, assessment, LM Studio, and
-FastContext paths:
+Default test runs cover catalog, assessment, the DeepSeek Responses contract,
+and exploration:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Current local model defaults:
+Required model environment:
 
 ```text
-SOURCE_SCOUT_GEMMA_MODEL=google/gemma-4-12b-qat
-SOURCE_SCOUT_FASTCONTEXT_MODEL=fastcontext-1.0-4b-rl
+DEEPSEEK_API_KEY=<inherited by the CLI or MCP process>
+# Optional:
+SOURCE_SCOUT_MODEL_TIMEOUT=120
 ```

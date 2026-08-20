@@ -28,7 +28,7 @@ async def test_explore_local_code_tool_is_read_only_and_ephemeral(monkeypatch, t
         return LocalExploreResult(
             task=task,
             project_path=str(tmp_path),
-            model_id="fastcontext-1.0-4b-rl",
+            model_id="deepseek-v4-flash",
             prompt_version="fastcontext-refine-v2",
             schema_version="fastcontext-evidence-v1",
             analyzer_version="fastcontext-harness-v1",
@@ -276,15 +276,19 @@ async def test_reuse_tools_carry_task_signature_and_record_outcomes(tmp_path: Pa
     assert recorded.task_signature == result.task_signature
     assert recorded.recorded is True
 
-    rows = catalog.get_connection().execute(
-        """
+    rows = (
+        catalog.get_connection()
+        .execute(
+            """
         SELECT task_signature, outcome, notes
         FROM reuse_outcomes
         WHERE asset_id = ?
         ORDER BY recorded_at
         """,
-        [asset_id],
-    ).fetchall()
+            [asset_id],
+        )
+        .fetchall()
+    )
     assert (result.task_signature, "returned", None) in rows
     assert (result.task_signature, "opened_bundle", None) in rows
     assert (result.task_signature, "selected", "usable") in rows

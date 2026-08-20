@@ -65,13 +65,9 @@ def requirement_counts(
     requirements: Sequence[RequirementAssessment],
 ) -> tuple[int, int, int]:
     requirement_count = len(requirements)
-    satisfied_requirement_count = sum(
-        1 for item in requirements if _requirement_status(item) == "satisfied"
-    )
+    satisfied_requirement_count = sum(1 for item in requirements if _requirement_status(item) == "satisfied")
     evidence_requirement_count = sum(
-        1
-        for item in requirements
-        if _requirement_status(item) != "unknown" and bool(item.evidence_paths)
+        1 for item in requirements if _requirement_status(item) != "unknown" and bool(item.evidence_paths)
     )
     return requirement_count, satisfied_requirement_count, evidence_requirement_count
 
@@ -108,11 +104,7 @@ def calculate_reuse_score(
 
 def has_hard_blocker(coupling_risks: Sequence[CouplingRisk]) -> bool:
     return any(
-        risk.hard_blocker
-        or (
-            risk.severity.lower() in {"blocker", "critical"}
-            and bool(risk.evidence_paths)
-        )
+        risk.hard_blocker or (risk.severity.lower() in {"blocker", "critical"} and bool(risk.evidence_paths))
         for risk in coupling_risks
     )
 

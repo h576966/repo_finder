@@ -49,9 +49,7 @@ def clone_repo(repo_url: str) -> str:
                 pass
             if total_size > MAX_CLONE_SIZE_MB * 1024 * 1024:
                 shutil.rmtree(clone_dir, ignore_errors=True)
-                raise ToolError(
-                    f"Repository exceeds size limit ({MAX_CLONE_SIZE_MB}MB)"
-                )
+                raise ToolError(f"Repository exceeds size limit ({MAX_CLONE_SIZE_MB}MB)")
 
     return clone_dir
 

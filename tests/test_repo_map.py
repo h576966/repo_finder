@@ -45,8 +45,7 @@ def test_repo_map_discovers_python_symbols_cli_mcp_and_tests(tmp_path: Path) -> 
 
     assert any(entry.name == "ToolServer" for entry in repo_map.symbols)
     assert any(
-        entry.kind == "python_dataclass" and entry.name == "SearchResult"
-        for entry in repo_map.symbols
+        entry.kind == "python_dataclass" and entry.name == "SearchResult" for entry in repo_map.symbols
     )
     assert any(entry.name == "explore_local_code" for entry in repo_map.mcp_tools)
     assert any(entry.name == "scan" for entry in repo_map.cli_entrypoints)
@@ -62,8 +61,7 @@ def test_repo_map_discovers_ts_exports_next_routes_manifests_and_evals(tmp_path:
     )
     (root / "components").mkdir()
     (root / "components" / "ChatPanel.tsx").write_text(
-        "export const ChatPanel = () => <div />\n"
-        "describe('chat panel', () => {})\n",
+        "export const ChatPanel = () => <div />\ndescribe('chat panel', () => {})\n",
         encoding="utf-8",
     )
     (root / "evals" / "golden").mkdir(parents=True)

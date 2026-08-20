@@ -5,8 +5,13 @@ from typing import Any
 import httpx
 import pytest
 
-from source_scout import catalog, fastcontext, lmstudio
-from tests.fastcontext_helpers import _create_candidate, _payload_message_text, _response_message_json
+from source_scout import catalog, deepseek, fastcontext
+from tests.fastcontext_helpers import (
+    _create_candidate,
+    _payload_message_text,
+    _response_message_json,
+    _response_tool_call_json,
+)
 
 
 @pytest.mark.asyncio
@@ -16,32 +21,21 @@ async def test_refine_candidate_stores_fastcontext_evidence(tmp_path: Path) -> N
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal chat_calls
-        if request.url.path == "/v1/models":
+        if request.url.path == "/models":
             return httpx.Response(
                 200,
-                json={"data": [{"id": lmstudio.DEFAULT_FASTCONTEXT_MODEL}]},
+                json={"data": [{"id": deepseek.DEEPSEEK_MODEL}]},
             )
-        assert request.url.path == "/v1/responses"
+        assert request.url.path == "/responses"
         chat_calls += 1
         payload = json.loads(request.content)
-        assert payload["model"] == lmstudio.DEFAULT_FASTCONTEXT_MODEL
+        assert payload["model"] == deepseek.DEEPSEEK_MODEL
         if chat_calls == 1:
             return httpx.Response(
                 200,
-                json=_response_message_json(
-                    json.dumps(
-                        {
-                            "tool_calls": [
-                                {
-                                    "tool": "GREP",
-                                    "args": {
-                                        "pattern": "useReactTable",
-                                        "glob": "**/*.tsx",
-                                    },
-                                }
-                            ]
-                        }
-                    )
+                json=_response_tool_call_json(
+                    "Grep",
+                    {"pattern": "useReactTable", "glob": "**/*.tsx"},
                 ),
             )
 
@@ -78,24 +72,32 @@ async def test_refine_candidate_stores_fastcontext_evidence(tmp_path: Path) -> N
     assert result["evidence_paths"] == ["src/components/data-table.tsx:1-4"]
     assert result["notes"] == ["Reusable table component"]
 
-    refinements = catalog.get_connection().execute(
-        """
+    refinements = (
+        catalog.get_connection()
+        .execute(
+            """
         SELECT asset_id, task_signature, evidence_paths, notes
         FROM evidence_refinements
         """
-    ).fetchall()
+        )
+        .fetchall()
+    )
     assert len(refinements) == 1
     assert refinements[0][0] == candidate_id
     assert json.loads(refinements[0][2]) == ["src/components/data-table.tsx:1-4"]
 
-    runs = catalog.get_connection().execute(
-        """
+    runs = (
+        catalog.get_connection()
+        .execute(
+            """
         SELECT stage_name, status, model_id
         FROM analysis_runs
         WHERE stage_name = 'fastcontext-refine'
         """
-    ).fetchall()
-    assert runs == [("fastcontext-refine", "completed", lmstudio.DEFAULT_FASTCONTEXT_MODEL)]
+        )
+        .fetchall()
+    )
+    assert runs == [("fastcontext-refine", "completed", deepseek.DEEPSEEK_MODEL)]
 
 
 @pytest.mark.asyncio
@@ -106,31 +108,23 @@ async def test_refine_candidate_stores_parent_task_signature(tmp_path: Path) -> 
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal chat_calls
-        if request.url.path == "/v1/models":
+        if request.url.path == "/models":
             return httpx.Response(
                 200,
-                json={"data": [{"id": lmstudio.DEFAULT_FASTCONTEXT_MODEL}]},
+                json={"data": [{"id": deepseek.DEEPSEEK_MODEL}]},
             )
-        assert request.url.path == "/v1/responses"
+        assert request.url.path == "/responses"
         chat_calls += 1
         if chat_calls == 1:
             return httpx.Response(
                 200,
-                json=_response_message_json(
-                    json.dumps(
-                        {
-                            "tool_calls": [
-                                {
-                                    "tool": "READ",
-                                    "args": {
-                                        "path": "src/components/data-table.tsx",
-                                        "offset": 1,
-                                        "limit": 20,
-                                    },
-                                }
-                            ]
-                        }
-                    )
+                json=_response_tool_call_json(
+                    "Read",
+                    {
+                        "path": "src/components/data-table.tsx",
+                        "offset": 1,
+                        "limit": 20,
+                    },
                 ),
             )
         payload = json.loads(request.content)
@@ -163,12 +157,11 @@ async def test_refine_candidate_stores_parent_task_signature(tmp_path: Path) -> 
         task_signature_override=parent_signature,
     )
 
-    rows = catalog.get_connection().execute(
-        "SELECT task_signature FROM evidence_refinements"
-    ).fetchall()
+    rows = catalog.get_connection().execute("SELECT task_signature FROM evidence_refinements").fetchall()
     assert result["task_signature"] == parent_signature
     assert result["query_signature"] == catalog.task_signature("Focused FastContext query text")
     assert rows == [(parent_signature,)]
+
 
 @pytest.mark.asyncio
 async def test_refine_suite_writes_comparison_report(tmp_path: Path, monkeypatch) -> None:
@@ -218,7 +211,7 @@ async def test_refine_suite_writes_comparison_report(tmp_path: Path, monkeypatch
             "repo_id": "owner/repo",
             "snapshot_id": "snapshot",
             "capability": "data-table",
-            "model_id": lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+            "model_id": deepseek.DEEPSEEK_MODEL,
             "prompt_version": fastcontext.PROMPT_VERSION,
             "schema_version": fastcontext.SCHEMA_VERSION,
             "refinement_id": "refined",
@@ -252,11 +245,15 @@ async def test_refine_suite_writes_comparison_report(tmp_path: Path, monkeypatch
         "src/components/data-table.tsx:1-4"
     ]
 
-    runs = catalog.get_connection().execute(
-        """
+    runs = (
+        catalog.get_connection()
+        .execute(
+            """
         SELECT stage_name, status, model_id
         FROM analysis_runs
         WHERE stage_name = 'fastcontext-batch-refine'
         """
-    ).fetchall()
-    assert runs == [("fastcontext-batch-refine", "completed", lmstudio.DEFAULT_FASTCONTEXT_MODEL)]
+        )
+        .fetchall()
+    )
+    assert runs == [("fastcontext-batch-refine", "completed", deepseek.DEEPSEEK_MODEL)]

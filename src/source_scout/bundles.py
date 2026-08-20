@@ -99,18 +99,13 @@ def create_source_bundle(assessment_id: str) -> SourceBundleResult:
         raise ToolError(str(exc)) from exc
 
     bundle_mode = (
-        "assessment"
-        if assessment.final_verdict == assessment_rules.VERDICT_SELECT
-        else "inspection"
+        "assessment" if assessment.final_verdict == assessment_rules.VERDICT_SELECT else "inspection"
     )
     unresolved = [
-        f"{item.importer} -> {item.specifier} ({item.reason})"
-        for item in closure.unresolved_local_imports
+        f"{item.importer} -> {item.specifier} ({item.reason})" for item in closure.unresolved_local_imports
     ]
     blocking_unresolved = [
-        item
-        for item in closure.unresolved_local_imports
-        if item.reason != "path_alias_not_supported"
+        item for item in closure.unresolved_local_imports if item.reason != "path_alias_not_supported"
     ]
     warnings = list(closure.warnings)
     if len(blocking_unresolved) != len(closure.unresolved_local_imports):
@@ -119,8 +114,7 @@ def create_source_bundle(assessment_id: str) -> SourceBundleResult:
         warnings.insert(0, "Inspection bundle: assessment requires review before reuse.")
     elif blocking_unresolved or closure.truncated or closure.warnings:
         blocking_details = [
-            f"{item.importer} -> {item.specifier} ({item.reason})"
-            for item in blocking_unresolved
+            f"{item.importer} -> {item.specifier} ({item.reason})" for item in blocking_unresolved
         ]
         details = "; ".join([*blocking_details, *closure.warnings])
         raise ToolError(f"Select bundle dependency closure is incomplete: {details}")
@@ -177,8 +171,7 @@ def create_source_bundle(assessment_id: str) -> SourceBundleResult:
         }
         recommended_read_order = [path for path in files if path in copied]
         source_permalinks = {
-            path: _source_permalink(str(asset["html_url"]), assessment.commit_sha, path)
-            for path in copied
+            path: _source_permalink(str(asset["html_url"]), assessment.commit_sha, path) for path in copied
         }
         adaptation_notes = [step.summary for step in assessment.adaptation_steps if step.summary]
         manifest: dict[str, Any] = {
@@ -296,9 +289,7 @@ def _validate_assessment_asset(assessment: ReuseAssessmentResult, asset: dict[st
         )
     latest = catalog.get_latest_snapshot_identity(assessment.repo_id)
     if latest != (assessment.snapshot_id, assessment.commit_sha):
-        raise ToolError(
-            "Assessment references a superseded catalog snapshot; reassess before bundling."
-        )
+        raise ToolError("Assessment references a superseded catalog snapshot; reassess before bundling.")
 
 
 def _assessment_source_paths(assessment: ReuseAssessmentResult) -> list[str]:
@@ -413,9 +404,7 @@ def _nearest_dependency_paths(required_files: Iterable[str], dependency_paths: A
         required_parent = Path(required).parent
         ancestors = [required_parent, *required_parent.parents]
         governing = [
-            path
-            for path in available
-            if Path(path).parent == Path(".") or Path(path).parent in ancestors
+            path for path in available if Path(path).parent == Path(".") or Path(path).parent in ancestors
         ]
         if governing:
             closest = max(governing, key=lambda path: len(Path(path).parent.parts))

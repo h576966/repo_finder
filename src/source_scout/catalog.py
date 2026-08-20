@@ -225,7 +225,7 @@ def initialize_catalog(conn: duckdb.DuckDBPyConnection | None = None) -> None:
             readme_excerpt TEXT,
             stack_signals TEXT NOT NULL,
             deterministic_features TEXT NOT NULL,
-            gemma_profile TEXT,
+            repository_profile TEXT,
             created_at TEXT NOT NULL,
             UNIQUE (snapshot_id, card_version)
         )
@@ -329,6 +329,12 @@ def initialize_catalog(conn: duckdb.DuckDBPyConnection | None = None) -> None:
             created_at TEXT NOT NULL
         )
     """)
+    _migrate_column_name(
+        active,
+        "repository_cards",
+        old_name="gemma_profile",
+        new_name="repository_profile",
+    )
     _ensure_column(active, "reuse_assessments", "target_profile", "TEXT")
     _ensure_column(active, "reuse_assessments", "target_profile_fingerprint", "TEXT")
 
@@ -369,6 +375,29 @@ def _ensure_column(
     ).fetchone()
     if exists is None:
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+
+def _migrate_column_name(
+    conn: duckdb.DuckDBPyConnection,
+    table_name: str,
+    *,
+    old_name: str,
+    new_name: str,
+) -> None:
+    rows = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = ? AND column_name IN (?, ?)
+        """,
+        [table_name, old_name, new_name],
+    ).fetchall()
+    columns = {str(row[0]) for row in rows}
+    if old_name in columns and new_name not in columns:
+        conn.execute(f"ALTER TABLE {table_name} RENAME COLUMN {old_name} TO {new_name}")
+    elif old_name in columns and new_name in columns:
+        conn.execute(f"UPDATE {table_name} SET {new_name} = COALESCE({new_name}, {old_name})")
+        conn.execute(f"ALTER TABLE {table_name} DROP COLUMN {old_name}")
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -534,7 +563,7 @@ def upsert_repository_card(snapshot_id: str, card: dict[str, Any]) -> str:
         INSERT INTO repository_cards (
             card_id, snapshot_id, card_version, package_manifests,
             tree_summary, readme_excerpt, stack_signals,
-            deterministic_features, gemma_profile, created_at
+            deterministic_features, repository_profile, created_at
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (card_id) DO UPDATE SET
@@ -545,7 +574,7 @@ def upsert_repository_card(snapshot_id: str, card: dict[str, Any]) -> str:
             readme_excerpt = excluded.readme_excerpt,
             stack_signals = excluded.stack_signals,
             deterministic_features = excluded.deterministic_features,
-            gemma_profile = excluded.gemma_profile,
+            repository_profile = excluded.repository_profile,
             created_at = excluded.created_at
         """,
         [
@@ -557,7 +586,7 @@ def upsert_repository_card(snapshot_id: str, card: dict[str, Any]) -> str:
             card.get("readme_excerpt"),
             _json_dump(card.get("stack_signals", {})),
             _json_dump(card.get("deterministic_features", {})),
-            _json_dump(card.get("gemma_profile")) if card.get("gemma_profile") else None,
+            _json_dump(card.get("repository_profile")) if card.get("repository_profile") else None,
             _now_iso(),
         ],
     )
@@ -577,7 +606,7 @@ def get_repository_card_for_snapshot(snapshot_id: str) -> dict[str, Any] | None:
             c.readme_excerpt,
             c.stack_signals,
             c.deterministic_features,
-            c.gemma_profile,
+            c.repository_profile,
             c.created_at,
             s.repo_id,
             s.commit_sha,
@@ -600,7 +629,7 @@ def get_repository_card_for_snapshot(snapshot_id: str) -> dict[str, Any] | None:
         ("tree_summary", {}),
         ("stack_signals", {}),
         ("deterministic_features", {}),
-        ("gemma_profile", None),
+        ("repository_profile", None),
     ):
         data[key] = _json_load(data.get(key), default)
     return data
@@ -617,13 +646,13 @@ def list_repository_cards_for_profile(
     if not force:
         if profile_schema_version:
             where = """
-        WHERE c.gemma_profile IS NULL
-            OR json_extract_string(c.gemma_profile, '$.schema_version') IS NULL
-            OR json_extract_string(c.gemma_profile, '$.schema_version') != ?
+        WHERE c.repository_profile IS NULL
+            OR json_extract_string(c.repository_profile, '$.schema_version') IS NULL
+            OR json_extract_string(c.repository_profile, '$.schema_version') != ?
             """
             params = [profile_schema_version, limit]
         else:
-            where = "WHERE c.gemma_profile IS NULL"
+            where = "WHERE c.repository_profile IS NULL"
     rows = conn.execute(
         f"""
         SELECT
@@ -635,7 +664,7 @@ def list_repository_cards_for_profile(
             c.readme_excerpt,
             c.stack_signals,
             c.deterministic_features,
-            c.gemma_profile,
+            c.repository_profile,
             s.repo_id,
             s.commit_sha,
             r.html_url
@@ -657,16 +686,16 @@ def list_repository_cards_for_profile(
             ("tree_summary", {}),
             ("stack_signals", {}),
             ("deterministic_features", {}),
-            ("gemma_profile", None),
+            ("repository_profile", None),
         ):
             data[key] = _json_load(data.get(key), default)
         cards.append(data)
     return cards
 
 
-def update_repository_card_gemma_profile(card_id: str, profile: dict[str, Any]) -> None:
+def update_repository_card_profile(card_id: str, profile: dict[str, Any]) -> None:
     get_connection().execute(
-        "UPDATE repository_cards SET gemma_profile = ? WHERE card_id = ?",
+        "UPDATE repository_cards SET repository_profile = ? WHERE card_id = ?",
         [_json_dump(profile), card_id],
     )
 
@@ -795,16 +824,20 @@ def get_asset_detail(asset_id: str) -> dict[str, Any] | None:
 
 
 def get_latest_snapshot_identity(repo_id: str) -> tuple[str, str] | None:
-    row = get_connection().execute(
-        """
+    row = (
+        get_connection()
+        .execute(
+            """
         SELECT snapshot_id, commit_sha
         FROM snapshots
         WHERE repo_id = ?
         ORDER BY indexed_at DESC, snapshot_id DESC
         LIMIT 1
         """,
-        [repo_id],
-    ).fetchone()
+            [repo_id],
+        )
+        .fetchone()
+    )
     if row is None:
         return None
     return str(row[0]), str(row[1])
@@ -908,9 +941,7 @@ def _target_fit(
 
     major_conflicts: list[str] = []
     unknown_major_constraints: list[str] = []
-    for dependency in sorted(
-        _NPM_MAJOR_FRAMEWORK_DEPENDENCIES & set(target_npm_dependencies)
-    ):
+    for dependency in sorted(_NPM_MAJOR_FRAMEWORK_DEPENDENCIES & set(target_npm_dependencies)):
         candidate_constraint = candidate_dependencies.get(dependency, "")
         if dependency not in candidate_dependencies:
             continue
@@ -926,8 +957,7 @@ def _target_fit(
         notes.append(f"Known npm major-version conflict: {', '.join(major_conflicts)}.")
     if unknown_major_constraints:
         notes.append(
-            "npm major-version compatibility is unknown for: "
-            f"{', '.join(unknown_major_constraints)}."
+            f"npm major-version compatibility is unknown for: {', '.join(unknown_major_constraints)}."
         )
 
     if not notes:
@@ -1021,10 +1051,7 @@ def _bm25_role_scores(task: str, rows: list[dict[str, Any]]) -> dict[str, float]
     average_length = sum(len(document) for document in documents) / len(documents)
     if average_length <= 0:
         return {}
-    document_frequency = {
-        term: sum(1 for document in documents if term in document)
-        for term in query_terms
-    }
+    document_frequency = {term: sum(1 for document in documents if term in document) for term in query_terms}
     raw_scores: dict[str, float] = {}
     for data, document in zip(rows, documents, strict=True):
         frequencies = Counter(document)
@@ -1037,9 +1064,7 @@ def _bm25_role_scores(task: str, rows: list[dict[str, Any]]) -> dict[str, float]
             inverse_document_frequency = math.log(
                 1 + (len(documents) - frequency_in_documents + 0.5) / (frequency_in_documents + 0.5)
             )
-            denominator = frequency + 1.2 * (
-                0.25 + 0.75 * len(document) / average_length
-            )
+            denominator = frequency + 1.2 * (0.25 + 0.75 * len(document) / average_length)
             score += inverse_document_frequency * (frequency * 2.2 / denominator)
         raw_scores[str(data["asset_id"])] = score
     maximum = max(raw_scores.values(), default=0.0)
@@ -1077,7 +1102,7 @@ def search_assets(
             a.dependency_paths, a.external_dependencies, a.evidence_paths,
             a.synthesis, a.reuse_score, s.commit_sha, r.html_url,
             r.is_public, r.is_archived, r.repo_size_kb, r.repo_created_at,
-            r.pushed_at, r.detected_languages, c.gemma_profile,
+            r.pushed_at, r.detected_languages, c.repository_profile,
             c.package_manifests, c.stack_signals
         FROM assets a
         JOIN ranked_snapshots s ON s.snapshot_id = a.snapshot_id
@@ -1108,10 +1133,13 @@ def search_assets(
     intent_scores = _capability_intent_scores(task)
     best_intent_score = max(intent_scores.values(), default=0.0)
     primary_intent = max(intent_scores.items(), key=lambda item: item[1], default=("", 0.0))[0]
-    has_bm25_role_intent = max(
-        (_role_overlap(task_terms, capability) for capability in _CAPABILITY_ROLE_TERMS),
-        default=0,
-    ) >= BM25_MIN_ROLE_OVERLAP
+    has_bm25_role_intent = (
+        max(
+            (_role_overlap(task_terms, capability) for capability in _CAPABILITY_ROLE_TERMS),
+            default=0,
+        )
+        >= BM25_MIN_ROLE_OVERLAP
+    )
 
     scored: list[tuple[float, ReusableCandidate]] = []
     for data in row_data:
@@ -1120,7 +1148,7 @@ def search_assets(
         external_dependencies = _json_load(data.get("external_dependencies"), [])
         evidence_paths = _json_load(data.get("evidence_paths"), [])
         synthesis = _json_load(data.get("synthesis"), {})
-        gemma_profile = _json_load(data.get("gemma_profile"), None)
+        repository_profile = _json_load(data.get("repository_profile"), None)
         detected_languages = _json_load(data.get("detected_languages"), {})
         package_manifests = _json_load(data.get("package_manifests"), {})
         stack_signals = _json_load(data.get("stack_signals"), {})
@@ -1135,8 +1163,8 @@ def search_assets(
         ).lower()
         overlap = sum(1 for term in task_terms if term in searchable)
         capability = str(data["capability"])
-        profile_has_signal = _has_profile_signal(gemma_profile)
-        profile_score = _profile_match_score(gemma_profile) if profile_has_signal else 0.0
+        profile_has_signal = _has_profile_signal(repository_profile)
+        profile_score = _profile_match_score(repository_profile) if profile_has_signal else 0.0
         ui_path_score = _synthesis_score(synthesis, "ui_path_score")
         noise_penalty = _synthesis_score(synthesis, "noise_penalty")
         capability_path_score = _synthesis_score(synthesis, "capability_path_score")

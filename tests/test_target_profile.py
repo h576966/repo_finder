@@ -169,9 +169,7 @@ def test_build_target_profile_parses_requirements_and_lock_fallbacks(tmp_path: P
     runtime = _constraints(profile.runtime_dependencies)
     dev = _constraints(profile.dev_dependencies)
     assert profile.package_managers == ("npm", "pip")
-    assert runtime[("pypi", "requests", "requirements.txt")] == (
-        "[socks]>=2.31; python_version >= '3.11'"
-    )
+    assert runtime[("pypi", "requests", "requirements.txt")] == ("[socks]>=2.31; python_version >= '3.11'")
     assert runtime[("npm", "hono", "package-lock.json")] == "4.7.0"
     assert dev[("pypi", "pytest", "requirements-dev.txt")] == "~=9.1"
     assert dev[("npm", "jest", "package-lock.json")] == "30.0.0"

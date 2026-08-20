@@ -270,7 +270,7 @@ def _task_family_routing(terms: list[str]) -> dict[str, Any]:
             "priority_paths": [],
             "priority_prefixes": ["src/", "app/", "lib/", "tests/"],
         }
-    if {"gemma", "profile", "profiles", "profiler", "gemma_profile"} & term_set and (
+    if {"profile", "profiles", "profiler", "repository_profile"} & term_set and (
         {"strict", "json", "card", "cards", "repository"} & term_set
     ):
         return {
@@ -312,7 +312,6 @@ def _task_family_routing(terms: list[str]) -> dict[str, Any]:
             "searched",
             "capability",
             "intent",
-            "gemma",
             "profile",
             "signals",
         }
@@ -450,9 +449,7 @@ def _source_task_bias(rel_path: str, term_set: set[str]) -> int:
         term_set & {"eval", "evals", "evaluation", "fixture", "fixtures", "golden"}
     ):
         return -24
-    if normalized.startswith("docs/") and not (
-        term_set & {"docs", "documentation", "readme", "usage"}
-    ):
+    if normalized.startswith("docs/") and not (term_set & {"docs", "documentation", "readme", "usage"}):
         return -24
     if "/fixtures/" in normalized and not (term_set & {"fixture", "fixtures", "golden"}):
         return -24

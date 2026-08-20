@@ -221,9 +221,7 @@ def _validate_task(task: dict[str, Any], index: int) -> dict[str, Any]:
         or not isinstance(max_unresolved_local_imports, int)
         or max_unresolved_local_imports < 0
     ):
-        raise ValueError(
-            f"Task {task_id} max_unresolved_local_imports must be a non-negative integer."
-        )
+        raise ValueError(f"Task {task_id} max_unresolved_local_imports must be a non-negative integer.")
     return {
         "id": task_id,
         "task": task_text,
@@ -301,8 +299,10 @@ def _evaluate_task(task: dict[str, Any], top_k: int) -> dict[str, Any]:
             source_path_ok=source_path_ok,
             avoid_violation=avoid_violation,
         )
-        if label_match and rank <= max_rank and not all(
-            (capability_ok, path_ok, dependency_ok, evidence_ok, commit_ok, source_path_ok)
+        if (
+            label_match
+            and rank <= max_rank
+            and not all((capability_ok, path_ok, dependency_ok, evidence_ok, commit_ok, source_path_ok))
         ):
             blocked_label_match = True
         if (
@@ -364,8 +364,7 @@ def _evaluate_task(task: dict[str, Any], top_k: int) -> dict[str, Any]:
         "top_1_hit": first_hit_rank == 1,
         "top_3_hit": first_hit_rank is not None and first_hit_rank <= 3,
         "top_5_hit": first_hit_rank is not None and first_hit_rank <= 5,
-        "top_1_capability_correct": bool(results)
-        and results[0].capability == task["capability"],
+        "top_1_capability_correct": bool(results) and results[0].capability == task["capability"],
         "avoid_violations": avoid_violations,
         "constraint_failures": constraint_failures,
         "no_match_correct": no_match_correct,
@@ -453,11 +452,10 @@ async def _evaluate_reuse_loop_task(
             assessment_runtime=assessment_runtime,
             project_path=str(task["project_path"]) or None,
         )
-        if (
-            assessment_fields["assessment_id"]
-            and assessment_fields["assessment_final_verdict"]
-            in {assessment_rules.VERDICT_SELECT, assessment_rules.VERDICT_INSPECT}
-        ):
+        if assessment_fields["assessment_id"] and assessment_fields["assessment_final_verdict"] in {
+            assessment_rules.VERDICT_SELECT,
+            assessment_rules.VERDICT_INSPECT,
+        }:
             bundle_attempted = True
             bundle_fields = _reuse_loop_bundle_fields(
                 str(assessment_fields["assessment_id"]),
@@ -625,9 +623,7 @@ def _reuse_loop_bundle_fields(
     required_files = list(task["required_bundle_files_all"])
     required_normalized = {_normalize_path(path) for path in required_files}
     copied_normalized = {_normalize_path(path) for path in copied_files}
-    missing_required = [
-        path for path in required_files if _normalize_path(path) not in copied_normalized
-    ]
+    missing_required = [path for path in required_files if _normalize_path(path) not in copied_normalized]
     allowed_files = list(task["allowed_bundle_files"])
     allowed_normalized = required_normalized | {_normalize_path(path) for path in allowed_files}
     unexpected_files = (
@@ -712,9 +708,7 @@ def _metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
     top_1 = sum(1 for task in positive_tasks if task["top_1_hit"])
     top_3 = sum(1 for task in positive_tasks if task["top_3_hit"])
     top_5 = sum(1 for task in positive_tasks if task["top_5_hit"])
-    reciprocal_sum = sum(
-        1 / task["first_hit_rank"] for task in positive_tasks if task["first_hit_rank"]
-    )
+    reciprocal_sum = sum(1 / task["first_hit_rank"] for task in positive_tasks if task["first_hit_rank"])
     positive_correct = sum(1 for task in positive_tasks if task["retrieval_correct"])
     capability_correct = sum(1 for task in positive_tasks if task["top_1_capability_correct"])
     target_profile_tasks = [task for task in positive_tasks if task["project_path"]]
@@ -757,47 +751,29 @@ def _reuse_loop_metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
     no_match_tasks = [task for task in task_reports if task["expect_no_match"]]
     positive_total = len(positive_tasks)
     no_match_total = len(no_match_tasks)
-    top_k_hits = sum(
-        1 for task in positive_tasks if task["expected_or_acceptable_repo_in_top_k"]
-    )
-    top_1_hits = sum(
-        1 for task in positive_tasks if task["selected_is_expected_or_acceptable"]
-    )
+    top_k_hits = sum(1 for task in positive_tasks if task["expected_or_acceptable_repo_in_top_k"])
+    top_1_hits = sum(1 for task in positive_tasks if task["selected_is_expected_or_acceptable"])
     positive_correct = sum(1 for task in positive_tasks if task["retrieval_correct"])
-    capability_correct = sum(
-        1 for task in positive_tasks if task["selected_capability_correct"]
-    )
+    capability_correct = sum(1 for task in positive_tasks if task["selected_capability_correct"])
     target_profile_tasks = [task for task in positive_tasks if task["project_path"]]
-    target_fit_top_1 = sum(
-        1 for task in target_profile_tasks if task["selected_meets_expectations"]
-    )
+    target_fit_top_1 = sum(1 for task in target_profile_tasks if task["selected_meets_expectations"])
     correct_no_match = sum(1 for task in no_match_tasks if task["no_match_correct"])
     retrieval_correct = positive_correct + correct_no_match
     assessed = sum(1 for task in task_reports if task["assessment_final_verdict"] is not None)
     bundled = sum(1 for task in task_reports if task["bundle_path"])
     quality_tasks = [task for task in task_reports if task["bundle_quality_expected"]]
     required_file_count = sum(len(task["required_bundle_files_all"]) for task in quality_tasks)
-    missing_required_count = sum(
-        len(task["missing_required_bundle_files"]) for task in quality_tasks
-    )
+    missing_required_count = sum(len(task["missing_required_bundle_files"]) for task in quality_tasks)
     allowed_tasks = [task for task in quality_tasks if task["allowed_bundle_files"]]
     allowed_copied_count = sum(int(task["copied_file_count"]) for task in allowed_tasks)
     unexpected_file_count = sum(len(task["unexpected_bundle_files"]) for task in quality_tasks)
     bundle_failure_buckets = [
-        str(bucket)
-        for task in task_reports
-        for bucket in task["bundle_failure_buckets"]
+        str(bucket) for task in task_reports for bucket in task["bundle_failure_buckets"]
     ]
-    accepted_assessments = sum(
-        1 for task in positive_tasks if task["assessment_accepted"]
-    )
+    accepted_assessments = sum(1 for task in positive_tasks if task["assessment_accepted"])
     positive_bundles = sum(1 for task in positive_tasks if task["bundle_created"])
-    positive_loop_successes = sum(
-        1 for task in positive_tasks if task["reuse_loop_success"]
-    )
-    no_match_loop_successes = sum(
-        1 for task in no_match_tasks if task["reuse_loop_success"]
-    )
+    positive_loop_successes = sum(1 for task in positive_tasks if task["reuse_loop_success"])
+    no_match_loop_successes = sum(1 for task in no_match_tasks if task["reuse_loop_success"])
     loop_successes = positive_loop_successes + no_match_loop_successes
     return {
         "task_count": total,
@@ -833,8 +809,7 @@ def _reuse_loop_metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
         "unacceptable_assessment_count": sum(
             1
             for task in positive_tasks
-            if task["assessment_final_verdict"] is not None
-            and not task["assessment_accepted"]
+            if task["assessment_final_verdict"] is not None and not task["assessment_accepted"]
         ),
         "bundle_count": bundled,
         "positive_bundle_count": positive_bundles,
@@ -996,10 +971,7 @@ def _source_path_constraint_ok(candidate: Any, expected_paths: list[str]) -> boo
         _normalize_path(path)
         for path in [
             *_string_values(getattr(candidate, "entry_paths", [])),
-            *[
-                _evidence_file_path(path)
-                for path in _string_values(getattr(candidate, "evidence_paths", []))
-            ],
+            *[_evidence_file_path(path) for path in _string_values(getattr(candidate, "evidence_paths", []))],
         ]
     }
     return any(_normalize_path(path) in available for path in expected_paths)
@@ -1122,9 +1094,7 @@ def _retrieval_failure_buckets(
         buckets.append("unexpected_candidate_on_no_match")
     elif not expect_no_match and hit_rank is None:
         buckets.append(
-            "expected_candidate_failed_constraints"
-            if constraint_failures
-            else "expected_candidate_not_found"
+            "expected_candidate_failed_constraints" if constraint_failures else "expected_candidate_not_found"
         )
     if avoid_violations:
         buckets.append("avoid_repo_in_top3")

@@ -72,8 +72,7 @@ def audit_catalog(
     }
     recommendations = {
         name: [
-            _summarize_item(item)
-            for item in _sort_recommendation(items, name)[: max(0, limit_per_bucket)]
+            _summarize_item(item) for item in _sort_recommendation(items, name)[: max(0, limit_per_bucket)]
         ]
         for name in RECOMMENDATIONS
     }
@@ -120,8 +119,7 @@ def list_profile_cards_by_audit_priority(
     targets = [
         item
         for item in _sort_profile_targets(items)
-        if item["card_id"]
-        and (force or item["profile_status"] in PROFILE_TARGET_STATUSES)
+        if item["card_id"] and (force or item["profile_status"] in PROFILE_TARGET_STATUSES)
     ]
     card_ids = [str(item["card_id"]) for item in targets[: max(0, limit)]]
     cards_by_id = _repository_cards_by_id(card_ids)
@@ -191,15 +189,13 @@ def _audit_repo(
     profile_status = _profile_status(latest_card, profile, profile_runs)
     best_asset_score = max((_float_value(asset.get("reuse_score")) for asset in assets), default=0.0)
     avg_asset_score = (
-        sum(_float_value(asset.get("reuse_score")) for asset in assets) / len(assets)
-        if assets
-        else 0.0
+        sum(_float_value(asset.get("reuse_score")) for asset in assets) / len(assets) if assets else 0.0
     )
     capability_tiers = _capability_tiers(assets)
     capability_counts = {tier: len(values) for tier, values in capability_tiers.items()}
     capability_counts["total"] = sum(capability_counts.values())
-    capability_counts["actionable"] = (
-        capability_counts.get("strong", 0) + capability_counts.get("possible", 0)
+    capability_counts["actionable"] = capability_counts.get("strong", 0) + capability_counts.get(
+        "possible", 0
     )
     quality_score = _quality_score(profile_quality, best_asset_score, len(assets))
     pushed_at = _parse_datetime(repo.get("pushed_at"))
@@ -229,13 +225,13 @@ def _audit_repo(
         reasons.extend(noisy_reasons)
     if profile_status == "unprofiled":
         buckets.append("unprofiled")
-        reasons.append("no Gemma profile is stored")
+        reasons.append("no assessment-model profile is stored")
     elif profile_status == "failed_profile":
         buckets.append("failed_profile")
-        reasons.append("latest Gemma profile attempt failed")
+        reasons.append("latest assessment-model profile attempt failed")
     elif profile_status == "outdated_profile":
         buckets.append("outdated_profile")
-        reasons.append("Gemma profile schema is older than current")
+        reasons.append("assessment-model profile schema is older than current")
     if low_signal_reasons:
         buckets.append("low_signal")
         reasons.extend(low_signal_reasons)
@@ -253,7 +249,7 @@ def _audit_repo(
     )
     if high_quality:
         buckets.insert(0, "high_quality")
-        reasons.insert(0, "strong repo with deterministic assets and current Gemma profile")
+        reasons.insert(0, "strong repo with deterministic assets and a current model profile")
 
     discard_candidate = _is_discard_candidate(buckets, reasons)
     if discard_candidate:
@@ -348,7 +344,7 @@ def _repository_cards_by_id(card_ids: list[str]) -> dict[str, dict[str, Any]]:
             c.readme_excerpt,
             c.stack_signals,
             c.deterministic_features,
-            c.gemma_profile,
+            c.repository_profile,
             s.repo_id,
             s.commit_sha,
             r.html_url
@@ -368,7 +364,7 @@ def _repository_cards_by_id(card_ids: list[str]) -> dict[str, dict[str, Any]]:
             ("tree_summary", {}),
             ("stack_signals", {}),
             ("deterministic_features", {}),
-            ("gemma_profile", None),
+            ("repository_profile", None),
         ):
             data[key] = _json_load(data.get(key), default)
         cards[str(data["card_id"])] = data
@@ -414,7 +410,7 @@ def _latest_profile_runs_by_card() -> dict[str, dict[str, Any]]:
 def _load_profile(card: dict[str, Any] | None) -> dict[str, Any] | None:
     if card is None:
         return None
-    profile = _json_load(card.get("gemma_profile"), None)
+    profile = _json_load(card.get("repository_profile"), None)
     return profile if isinstance(profile, dict) else None
 
 
@@ -498,7 +494,7 @@ def _noisy_reasons(
     if profile:
         concerns = [str(concern).lower() for concern in profile.get("concerns", [])]
         if any(term in concern for concern in concerns for term in NOISY_CONCERN_TERMS):
-            reasons.append("Gemma profile concerns suggest noise or tight coupling")
+            reasons.append("model profile concerns suggest noise or tight coupling")
     if _has_capability_explosion(capability_counts):
         reasons.append(
             "capability explosion: "
@@ -524,7 +520,7 @@ def _low_signal_reasons(
     if profile_status in {"missing_card", "invalid_profile"}:
         reasons.append(f"profile status is {profile_status}")
     if profile_quality is not None and profile_quality < LOW_SIGNAL_SCORE:
-        reasons.append(f"Gemma profile quality {profile_quality:.2f} is low")
+        reasons.append(f"model profile quality {profile_quality:.2f} is low")
     if quality_score < LOW_SIGNAL_SCORE and (asset_count <= 0 or profile_quality is not None):
         reasons.append(f"combined quality score {quality_score:.2f} is low")
     return reasons
@@ -667,11 +663,7 @@ def _sort_bucket(items: list[dict[str, Any]], bucket: str) -> list[dict[str, Any
 
 def _sort_recommendation(items: list[dict[str, Any]], recommendation: str) -> list[dict[str, Any]]:
     if recommendation == "keep":
-        keep_items = [
-            item
-            for item in items
-            if item["recommended_action"] in {"keep", "keep_review_labels"}
-        ]
+        keep_items = [item for item in items if item["recommended_action"] in {"keep", "keep_review_labels"}]
         return sorted(
             keep_items,
             key=lambda item: (float(item["quality_score"]), int(item["stars"] or 0)),
@@ -679,11 +671,7 @@ def _sort_recommendation(items: list[dict[str, Any]], recommendation: str) -> li
         )
     if recommendation == "reprofile":
         return _sort_profile_targets(
-            [
-                item
-                for item in items
-                if item["card_id"] and item["profile_status"] in PROFILE_TARGET_STATUSES
-            ]
+            [item for item in items if item["card_id"] and item["profile_status"] in PROFILE_TARGET_STATUSES]
         )
     if recommendation == "discard":
         return _sort_bucket(items, "discard_candidates")

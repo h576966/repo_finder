@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from . import assessment_rules, assessor, catalog, eval_support, evidence_ledger, fastcontext, lmstudio
+from . import assessment_rules, assessor, catalog, deepseek, eval_support, evidence_ledger, fastcontext
 
 SUITE_ALIASES = {
     "assessment-smoke": "assessment_smoke_v1.json",
@@ -112,7 +112,7 @@ async def _evaluate_task(task: dict[str, Any], *, deterministic_only: bool) -> d
     candidate_id = _build_candidate(task)
     _store_prior_fastcontext_refinement(candidate_id, task)
     evidence_ids = _evidence_ids(candidate_id, str(task["task"]))
-    gemma_sequence = _gemma_sequence(task, evidence_ids)
+    assessment_sequence = _assessment_sequence(task, evidence_ids)
     fastcontext_config = task.get("fastcontext")
     if not isinstance(fastcontext_config, dict):
         fastcontext_config = {}
@@ -120,11 +120,11 @@ async def _evaluate_task(task: dict[str, Any], *, deterministic_only: bool) -> d
     model_calls = 0
     fastcontext_calls = 0
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         nonlocal model_calls
         model_calls += 1
-        if gemma_sequence:
-            return gemma_sequence.pop(0)
+        if assessment_sequence:
+            return assessment_sequence.pop(0)
         return _response("clear_reusable", evidence_ids)
 
     async def fake_refine_candidate(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -143,7 +143,7 @@ async def _evaluate_task(task: dict[str, Any], *, deterministic_only: bool) -> d
         )
 
     runtime = assessor.AssessmentRuntime(
-        chat_json=fake_chat_json,
+        response_json=fake_response_json,
         refine_candidate=fake_refine_candidate,
     )
     error: str | None = None
@@ -271,8 +271,8 @@ def _repository_card(candidate: Mapping[str, Any]) -> dict[str, Any]:
             "has_typescript_files": True,
         },
         "deterministic_features": {"capabilities": [capability]},
-        "gemma_profile": {
-            "schema_version": "gemma-profile-v2",
+        "repository_profile": {
+            "schema_version": "repository-profile-v3",
             "repository_type": "reference_application",
             "capabilities": [{"name": capability, "confidence": 0.8}],
             "likely_usefulness": 0.8,
@@ -327,7 +327,7 @@ def _store_prior_fastcontext_refinement(candidate_id: str, task: Mapping[str, An
         snapshot_id=str(asset["snapshot_id"]),
         task_signature=catalog.task_signature(str(prior.get("task", "other task"))),
         capability=str(asset["capability"]),
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        model_id=deepseek.DEEPSEEK_MODEL,
         prompt_version=fastcontext.PROMPT_VERSION,
         schema_version=fastcontext.SCHEMA_VERSION,
         query=str(prior.get("query", "prior unrelated query")),
@@ -355,7 +355,7 @@ def _store_mock_refinement(
         task_signature=catalog.task_signature(query),
         parent_task_signature=str(task_signature_override) if task_signature_override else None,
         capability=str(asset["capability"]),
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        model_id=deepseek.DEEPSEEK_MODEL,
         prompt_version=fastcontext.PROMPT_VERSION,
         schema_version=fastcontext.SCHEMA_VERSION,
         query=query,
@@ -369,7 +369,7 @@ def _store_mock_refinement(
         {"candidate_id": candidate_id, "refinement_id": refinement_id},
         repo_id=str(asset["repo_id"]),
         snapshot_id=str(asset["snapshot_id"]),
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        model_id=deepseek.DEEPSEEK_MODEL,
         prompt_version=fastcontext.PROMPT_VERSION,
         analyzer_version=fastcontext.ANALYZER_VERSION,
     )
@@ -389,8 +389,8 @@ def _evidence_ids(candidate_id: str, task: str) -> list[str]:
     return [str(item["evidence_id"]) for item in ledger.items]
 
 
-def _gemma_sequence(task: Mapping[str, Any], evidence_ids: Sequence[str]) -> list[dict[str, Any]]:
-    kinds = _string_list(task.get("gemma_sequence"))
+def _assessment_sequence(task: Mapping[str, Any], evidence_ids: Sequence[str]) -> list[dict[str, Any]]:
+    kinds = _string_list(task.get("assessment_sequence"))
     if not kinds:
         kinds = ["clear_reusable"]
     return [_response(kind, evidence_ids) for kind in kinds]
@@ -570,7 +570,7 @@ def _failure_examples(task_reports: Sequence[Mapping[str, Any]]) -> list[dict[st
 
 def _threshold_notes(metrics: Mapping[str, Any]) -> list[str]:
     notes = [
-        "This suite uses mocked Gemma/FastContext responses; use it for deterministic assessor calibration.",
+        "This suite uses mocked assessment/exploration responses for deterministic calibration.",
     ]
     if int(metrics["fastcontext_error_count"]):
         notes.append(
@@ -596,15 +596,19 @@ def _failure_reasons(
 
 
 def _latest_assessment_run_status() -> str:
-    row = catalog.get_connection().execute(
-        """
+    row = (
+        catalog.get_connection()
+        .execute(
+            """
         SELECT status
         FROM analysis_runs
         WHERE stage_name = 'reuse-assess'
         ORDER BY created_at DESC
         LIMIT 1
         """
-    ).fetchone()
+        )
+        .fetchone()
+    )
     return str(row[0]) if row else ""
 
 
@@ -651,7 +655,7 @@ def _validate_task(raw: Any, index: int) -> dict[str, Any]:
         "task": task_text,
         "expected_final_verdicts": expected,
         "candidate": raw.get("candidate") if isinstance(raw.get("candidate"), dict) else {},
-        "gemma_sequence": _string_list(raw.get("gemma_sequence")) or ["clear_reusable"],
+        "assessment_sequence": _string_list(raw.get("assessment_sequence")) or ["clear_reusable"],
         "fastcontext": raw.get("fastcontext") if isinstance(raw.get("fastcontext"), dict) else {},
         "fastcontext_policy": str(raw.get("fastcontext_policy", "never")),
         "max_evidence_rounds": int(raw.get("max_evidence_rounds", 1)),

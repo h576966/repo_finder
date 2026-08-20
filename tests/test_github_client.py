@@ -1,4 +1,3 @@
-
 import pytest
 
 from source_scout.github_client import GitHubClient

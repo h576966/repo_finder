@@ -106,7 +106,7 @@ def _asset(
         snapshot_id,
         {
             "card_version": "repo-card-v1",
-            "gemma_profile": {
+            "repository_profile": {
                 "repository_type": "reference_application",
                 "capabilities": [
                     {
@@ -294,12 +294,8 @@ def test_evaluate_suite_reports_unexpected_candidate_for_no_match(tmp_path: Path
     assert report["metrics"]["correct_no_match_count"] == 0
     assert report["metrics"]["unexpected_candidate_on_no_match_count"] == 1
     assert report["tasks"][0]["unexpected_candidate_on_no_match"] is True
-    assert report["tasks"][0]["failure_buckets"] == [
-        "unexpected_candidate_on_no_match"
-    ]
-    assert report["tasks"][0]["candidates"][0]["failure_reasons"] == [
-        "unexpected_candidate_on_no_match"
-    ]
+    assert report["tasks"][0]["failure_buckets"] == ["unexpected_candidate_on_no_match"]
+    assert report["tasks"][0]["candidates"][0]["failure_reasons"] == ["unexpected_candidate_on_no_match"]
 
 
 def test_evaluate_suite_enforces_commit_and_source_path_contract(tmp_path: Path) -> None:
@@ -351,9 +347,7 @@ def test_evaluate_suite_rejects_expected_repo_with_wrong_capability(
         "search_assets",
         lambda *_args, **_kwargs: [candidate],
     )
-    suite = eval_runner.validate_suite(
-        {"suite_id": "capability", "tasks": [_task(capability="data-table")]}
-    )
+    suite = eval_runner.validate_suite({"suite_id": "capability", "tasks": [_task(capability="data-table")]})
 
     report = eval_runner.evaluate_suite(suite, top_k=3)
 
@@ -613,9 +607,7 @@ async def test_reuse_loop_reject_verdict_fails_without_calling_bundle(
         capability="data-table",
         entry_paths=["components/data-table/data-table.tsx"],
     )
-    suite = eval_runner.validate_suite(
-        {"suite_id": "reject", "tasks": [_task()]}
-    )
+    suite = eval_runner.validate_suite({"suite_id": "reject", "tasks": [_task()]})
 
     class FakeAssessment:
         assessment_id = "assessment-reject"
@@ -661,9 +653,7 @@ async def test_reuse_loop_inspect_verdict_can_publish_bundle(
         capability="data-table",
         entry_paths=["components/data-table/data-table.tsx"],
     )
-    suite = eval_runner.validate_suite(
-        {"suite_id": "inspect", "tasks": [_task()]}
-    )
+    suite = eval_runner.validate_suite({"suite_id": "inspect", "tasks": [_task()]})
 
     class FakeAssessment:
         assessment_id = "assessment-inspect"
@@ -699,9 +689,7 @@ async def test_reuse_loop_fails_when_only_a_lower_rank_candidate_matches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    suite = eval_runner.validate_suite(
-        {"suite_id": "wrong-top-one", "tasks": [_task()]}
-    )
+    suite = eval_runner.validate_suite({"suite_id": "wrong-top-one", "tasks": [_task()]})
     wrong = SimpleNamespace(
         candidate_id="wrong-candidate",
         repo_id="wrong/repo",

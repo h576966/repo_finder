@@ -80,9 +80,7 @@ def source_from_bundle_manifest(
         try:
             manifest_snapshot = Path(str(manifest["source_snapshot"])).resolve()
             if manifest_snapshot != snapshot_root.resolve():
-                return None, [
-                    f"Skipped source bundle manifest for different snapshot: {manifest_path}"
-                ]
+                return None, [f"Skipped source bundle manifest for different snapshot: {manifest_path}"]
         except OSError as exc:
             return None, [f"Skipped source bundle manifest with invalid snapshot path: {exc}"]
 
@@ -239,11 +237,10 @@ def _materialize_item(
         return None, [f"Skipped unreadable evidence file: {safe_rel} ({exc})"]
     if start_line > len(lines) or end_line > len(lines):
         return None, [
-            f"Skipped evidence beyond EOF: {safe_rel}:{start_line}-{end_line} "
-            f"(file has {len(lines)} lines)"
+            f"Skipped evidence beyond EOF: {safe_rel}:{start_line}-{end_line} (file has {len(lines)} lines)"
         ]
 
-    selected_lines = lines[start_line - 1:end_line]
+    selected_lines = lines[start_line - 1 : end_line]
     raw_content = "\n".join(selected_lines)
     content_hash = f"sha256:{hashlib.sha256(raw_content.encode()).hexdigest()}"
     snippet, capped = _numbered_snippet(

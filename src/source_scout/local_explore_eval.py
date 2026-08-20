@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import eval_support, fastcontext, lmstudio
+from . import deepseek, eval_support, fastcontext
 
 REPO_ROOT = eval_support.REPO_ROOT
 SUITE_ALIASES = {
@@ -151,7 +151,7 @@ async def evaluate_suite(
         "label": label,
         "max_turns": max_turns,
         "task_timeout_seconds": task_timeout_seconds,
-        "model_id": lmstudio.get_config().fastcontext_model,
+        "model_id": deepseek.get_config().model_id,
         "prompt_version": PROMPT_VERSION,
         "analyzer_version": ANALYZER_VERSION,
         "timestamp": datetime.now(UTC).isoformat(),
@@ -257,10 +257,7 @@ def _target_family(task: dict[str, Any], task_text: str) -> str:
 
 
 def _words(text: str) -> list[str]:
-    return [
-        raw.lower().replace("-", "_")
-        for raw in re.findall(r"[A-Za-z_][A-Za-z0-9_-]{1,}", text)
-    ]
+    return [raw.lower().replace("-", "_") for raw in re.findall(r"[A-Za-z_][A-Za-z0-9_-]{1,}", text)]
 
 
 async def _evaluate_task(
@@ -296,16 +293,8 @@ async def _evaluate_task(
 
     returned_paths = list(getattr(result, "evidence_paths", [])) if result else []
     returned_citations = [_parse_returned_citation(path) for path in returned_paths]
-    expected = [
-        _expected_from_dict(raw)
-        for raw in task["expected_citations"]
-        if isinstance(raw, dict)
-    ]
-    acceptable = [
-        _expected_from_dict(raw)
-        for raw in task["acceptable_citations"]
-        if isinstance(raw, dict)
-    ]
+    expected = [_expected_from_dict(raw) for raw in task["expected_citations"] if isinstance(raw, dict)]
+    acceptable = [_expected_from_dict(raw) for raw in task["acceptable_citations"] if isinstance(raw, dict)]
     manual = _manual_search_proxy(
         project_root,
         _manual_terms(task),
@@ -406,15 +395,9 @@ def _score_citations(
     returned_paths = {citation.path for citation in returned}
     accepted_for_precision = accepted_paths or returned_paths
     missing_expected_paths = sorted(expected_paths - returned_paths)
-    unexpected_citations = [
-        citation.raw
-        for citation in returned
-        if citation.path not in accepted_paths
-    ]
+    unexpected_citations = [citation.raw for citation in returned if citation.path not in accepted_paths]
     invalid_citations = [
-        citation.raw
-        for citation in returned
-        if _invalid_citation_reason(project_root, citation) is not None
+        citation.raw for citation in returned if _invalid_citation_reason(project_root, citation) is not None
     ]
     invalid_details = [
         {
@@ -424,16 +407,8 @@ def _score_citations(
         for citation in returned
         if _invalid_citation_reason(project_root, citation) is not None
     ]
-    path_hits = [
-        citation.path
-        for citation in expected
-        if citation.path in returned_paths
-    ]
-    line_hits = [
-        citation.path
-        for citation in expected
-        if _has_line_overlap(citation, returned)
-    ]
+    path_hits = [citation.path for citation in expected if citation.path in returned_paths]
+    line_hits = [citation.path for citation in expected if _has_line_overlap(citation, returned)]
     required_expected = [citation for citation in expected if citation.required]
     all_required_paths_hit = all(citation.path in returned_paths for citation in required_expected)
     file_true_positive = len(returned_paths & accepted_for_precision)
@@ -448,8 +423,7 @@ def _score_citations(
     line_recall = _ratio(len(returned_lines & expected_lines), len(expected_lines))
     citation_count = len(returned)
     over_budget = (
-        citation_count > fastcontext.MAX_FINAL_CITATIONS
-        or len(returned_paths) > fastcontext.MAX_FINAL_FILES
+        citation_count > fastcontext.MAX_FINAL_CITATIONS or len(returned_paths) > fastcontext.MAX_FINAL_FILES
     )
     budget_violation_count = max(0, citation_count - fastcontext.MAX_FINAL_CITATIONS) + max(
         0,
@@ -634,8 +608,7 @@ def _metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
     bad_citations = sum(int(task["bad_citation_count"]) for task in task_reports)
     invalid_citations = sum(int(task["invalid_citation_count"]) for task in task_reports)
     citation_budget_violations = sum(
-        int(task.get("citation_budget_violation_count", 0))
-        for task in task_reports
+        int(task.get("citation_budget_violation_count", 0)) for task in task_reports
     )
     over_budget_tasks = sum(1 for task in task_reports if bool(task.get("over_budget", False)))
     unsupported_citations = sum(_unsupported_citation_count(task) for task in task_reports)
@@ -681,9 +654,7 @@ def _metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
         "average_manual_search_files": round(sum(manual_files) / len(manual_files), 4)
         if manual_files
         else 0.0,
-        "average_file_reduction": round(sum(reductions) / len(reductions), 4)
-        if reductions
-        else 0.0,
+        "average_file_reduction": round(sum(reductions) / len(reductions), 4) if reductions else 0.0,
         "failure_bucket_counts": failure_bucket_counts,
         "by_task_type": _group_metrics(task_reports, "task_type"),
         "by_target_family": _group_metrics(task_reports, "target_family"),
@@ -718,9 +689,7 @@ def _group_metrics(task_reports: list[dict[str, Any]], key: str) -> dict[str, di
             if total
             else 0.0,
             "wrong_file_count": sum(
-                1
-                for task in tasks
-                if bool(task.get("failure_buckets", {}).get("wrong_file", False))
+                1 for task in tasks if bool(task.get("failure_buckets", {}).get("wrong_file", False))
             ),
             "average_duration_seconds": round(duration / total, 4) if total else 0.0,
         }
@@ -755,11 +724,7 @@ def _unsupported_citation_count(task: dict[str, Any]) -> int:
         notes = turn.get("validation_notes", [])
         if not isinstance(notes, list):
             continue
-        count += sum(
-            1
-            for note in notes
-            if isinstance(note, str) and "unsupported" in note.lower()
-        )
+        count += sum(1 for note in notes if isinstance(note, str) and "unsupported" in note.lower())
     return count
 
 

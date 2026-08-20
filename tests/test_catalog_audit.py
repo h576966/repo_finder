@@ -17,7 +17,7 @@ def _profile(
     concerns: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": "gemma-profile-v2",
+        "schema_version": "repository-profile-v3",
         "repository_type": "reference_application",
         "capabilities": [],
         "likely_usefulness": usefulness,
@@ -75,7 +75,7 @@ def _store_repo(
         "deterministic_features": {},
     }
     if profile is not None:
-        card["gemma_profile"] = profile
+        card["repository_profile"] = profile
     card_id = catalog.upsert_repository_card(snapshot_id, card)
     if asset_score is not None:
         catalog.upsert_asset(
@@ -129,10 +129,14 @@ def _store_raw_repo(owner: str) -> str:
 
 
 def _snapshot_id(repo_id: str) -> str:
-    row = catalog.get_connection().execute(
-        "SELECT snapshot_id FROM snapshots WHERE repo_id = ?",
-        [repo_id],
-    ).fetchone()
+    row = (
+        catalog.get_connection()
+        .execute(
+            "SELECT snapshot_id FROM snapshots WHERE repo_id = ?",
+            [repo_id],
+        )
+        .fetchone()
+    )
     assert row is not None
     return str(row[0])
 

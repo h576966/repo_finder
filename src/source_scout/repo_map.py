@@ -145,9 +145,7 @@ def repo_map_seed_text(repo_map: RepoMap, task: str, *, limit: int = 80) -> str:
     entries = repo_map_relevant_entries(repo_map, task, limit=limit)
     if not entries:
         return "Generated repo map: no relevant hints found."
-    lines = [
-        "Generated repo map hints. These are likely files/categories to consider, not final evidence:"
-    ]
+    lines = ["Generated repo map hints. These are likely files/categories to consider, not final evidence:"]
     for entry in entries:
         location = f":{entry.line}" if entry.line else ""
         detail = f" - {entry.detail}" if entry.detail else ""
@@ -249,9 +247,7 @@ def _python_entries(path: Path, rel_path: str) -> dict[str, list[RepoMapEntry]]:
                     )
         elif isinstance(ast_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             kind = (
-                "python_async_function"
-                if isinstance(ast_node, ast.AsyncFunctionDef)
-                else "python_function"
+                "python_async_function" if isinstance(ast_node, ast.AsyncFunctionDef) else "python_function"
             )
             symbols.append(
                 RepoMapEntry(kind, rel_path, ast_node.name, ast_node.lineno, _node_keyword_detail(ast_node))

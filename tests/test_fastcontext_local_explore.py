@@ -4,8 +4,13 @@ from pathlib import Path
 import httpx
 import pytest
 
-from source_scout import catalog, fastcontext, lmstudio
-from tests.fastcontext_helpers import _payload_message_text, _response_message_json, _write_snapshot
+from source_scout import catalog, deepseek, fastcontext
+from tests.fastcontext_helpers import (
+    _payload_message_text,
+    _response_message_json,
+    _response_tool_call_json,
+    _write_snapshot,
+)
 
 
 @pytest.mark.asyncio
@@ -17,34 +22,23 @@ async def test_explore_local_project_returns_ephemeral_citations(tmp_path: Path)
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal chat_calls
-        if request.url.path == "/v1/models":
+        if request.url.path == "/models":
             return httpx.Response(
                 200,
-                json={"data": [{"id": lmstudio.DEFAULT_FASTCONTEXT_MODEL}]},
+                json={"data": [{"id": deepseek.DEEPSEEK_MODEL}]},
             )
-        assert request.url.path == "/v1/responses"
+        assert request.url.path == "/responses"
         chat_calls += 1
         payload = json.loads(request.content)
-        assert payload["model"] == lmstudio.DEFAULT_FASTCONTEXT_MODEL
+        assert payload["model"] == deepseek.DEEPSEEK_MODEL
         if chat_calls == 1:
             assert "local-project-exploration" in payload["input"][-1]["content"]
             assert "Find the data table" in payload["input"][-1]["content"]
             return httpx.Response(
                 200,
-                json=_response_message_json(
-                    json.dumps(
-                        {
-                            "tool_calls": [
-                                {
-                                    "tool": "GREP",
-                                    "args": {
-                                        "pattern": "useReactTable",
-                                        "glob": "**/*.tsx",
-                                    },
-                                }
-                            ]
-                        }
-                    )
+                json=_response_tool_call_json(
+                    "Grep",
+                    {"pattern": "useReactTable", "glob": "**/*.tsx"},
                 ),
             )
         assert "src/components/data-table.tsx" in _payload_message_text(payload)
@@ -104,10 +98,10 @@ async def test_explore_local_project_recovers_from_invalid_citation(tmp_path: Pa
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal chat_calls
-        if request.url.path == "/v1/models":
+        if request.url.path == "/models":
             return httpx.Response(
                 200,
-                json={"data": [{"id": lmstudio.DEFAULT_FASTCONTEXT_MODEL}]},
+                json={"data": [{"id": deepseek.DEEPSEEK_MODEL}]},
             )
         chat_calls += 1
         payload = json.loads(request.content)
@@ -135,20 +129,9 @@ async def test_explore_local_project_recovers_from_invalid_citation(tmp_path: Pa
             assert "did not validate" in payload["input"][-1]["content"]
             return httpx.Response(
                 200,
-                json=_response_message_json(
-                    json.dumps(
-                        {
-                            "tool_calls": [
-                                {
-                                    "tool": "GREP",
-                                    "args": {
-                                        "pattern": "useReactTable",
-                                        "glob": "**/*.tsx",
-                                    },
-                                }
-                            ]
-                        }
-                    )
+                json=_response_tool_call_json(
+                    "Grep",
+                    {"pattern": "useReactTable", "glob": "**/*.tsx"},
                 ),
             )
         assert "src/components/data-table.tsx" in _payload_message_text(payload)
@@ -194,10 +177,10 @@ async def test_explore_local_project_writes_trace_file(tmp_path: Path) -> None:
     trace_path = ".source_scout/fastcontext_traces/unit.json"
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/v1/models":
+        if request.url.path == "/models":
             return httpx.Response(
                 200,
-                json={"data": [{"id": lmstudio.DEFAULT_FASTCONTEXT_MODEL}]},
+                json={"data": [{"id": deepseek.DEEPSEEK_MODEL}]},
             )
         return httpx.Response(
             200,
@@ -228,6 +211,4 @@ async def test_explore_local_project_writes_trace_file(tmp_path: Path) -> None:
 
     stored_trace = json.loads((root / trace_path).read_text(encoding="utf-8"))
     assert stored_trace["task"] == "Find the data table"
-    assert stored_trace["trajectory"][0]["final_citations"] == [
-        "src/components/data-table.tsx:1-1"
-    ]
+    assert stored_trace["trajectory"][0]["final_citations"] == ["src/components/data-table.tsx:1-1"]

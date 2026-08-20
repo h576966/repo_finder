@@ -332,8 +332,7 @@ class RlmReadOnlyTools:
             "end_line": bounded_end,
             "line_count": len(lines),
             "content": "\n".join(
-                f"{line_number}|{line}"
-                for line_number, line in enumerate(selected, start=bounded_start)
+                f"{line_number}|{line}" for line_number, line in enumerate(selected, start=bounded_start)
             ),
             "truncated": bounded_end < requested_end,
         }
@@ -606,7 +605,7 @@ def _compact_card(card: dict[str, Any]) -> dict[str, Any]:
             "readme_excerpt",
             "stack_signals",
             "deterministic_features",
-            "gemma_profile",
+            "repository_profile",
         ],
     )
 

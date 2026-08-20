@@ -1,5 +1,4 @@
 import json
-import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -7,14 +6,11 @@ from typing import Any
 
 import httpx
 
-from . import catalog, fastcontext_prompts, fastcontext_routing, lmstudio
+from . import catalog, deepseek, fastcontext_prompts, fastcontext_routing
 from . import fastcontext_tools as fastcontext_tooling
 from .fastcontext_constants import (
     ANALYZER_VERSION,
-    DEFAULT_FASTCONTEXT_SEED,
     DEFAULT_MAX_TURNS,
-    FASTCONTEXT_SEED_ENV,
-    FASTCONTEXT_STRUCTURED_OUTPUT_ENV,
     FOCUSED_FINAL_CITATION_LINES,
     MAX_CITATION_LINES,
     MAX_FALLBACK_CITATIONS,
@@ -45,19 +41,16 @@ read_file = fastcontext_tooling.read_file
 _canonical_tool_name = fastcontext_tooling._canonical_tool_name
 _evidence_path_sort_key = fastcontext_tooling._evidence_path_sort_key
 _fastcontext_tools = fastcontext_prompts.fastcontext_tool_schemas
-_first_quoted = fastcontext_tooling._first_quoted
 _has_glob_meta = fastcontext_tooling._has_glob_meta
 _is_noisy_evidence_path = fastcontext_tooling._is_noisy_evidence_path
 _is_primary_source_path = fastcontext_tooling._is_primary_source_path
 _iter_files = fastcontext_tooling._iter_files
 _match_sort_key = fastcontext_tooling._match_sort_key
 _optional_int = fastcontext_tooling._optional_int
-_parse_call_args = fastcontext_tooling._parse_call_args
 _relative_path = fastcontext_tooling._relative_path
 _resolve_under_root = fastcontext_tooling._resolve_under_root
 _rg_skip_globs = fastcontext_tooling._rg_skip_globs
 _safe_label = fastcontext_tooling._safe_label
-_tool_args = fastcontext_tooling._tool_args
 _tool_name = fastcontext_tooling._tool_name
 _generic_local_task_file_bonus = fastcontext_routing._generic_local_task_file_bonus
 _likely_source_files = fastcontext_routing._likely_source_files
@@ -92,41 +85,45 @@ __all__ = [
 
 
 async def ensure_fastcontext_available(
-    config: lmstudio.LMStudioConfig | None = None,
+    config: deepseek.ModelConfig | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> None:
-    active = config or lmstudio.get_config()
-    status = await lmstudio.validate_models(active, transport=transport)
-    if not status["fastcontext_available"]:
-        raise lmstudio.LMStudioError(
-            f"Configured FastContext model '{active.fastcontext_model}' is not available in LM Studio."
-        )
+    active = config or deepseek.get_config()
+    status = await deepseek.validate_model(active, transport=transport)
+    if not status["model_available"]:
+        raise deepseek.ModelError(f"Configured DeepSeek model '{active.model_id}' is not available.")
 
 
 async def smoke_test(
-    config: lmstudio.LMStudioConfig | None = None,
+    config: deepseek.ModelConfig | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict[str, Any]:
-    active = config or lmstudio.get_config()
-    await ensure_fastcontext_available(active, transport=transport)
-    content = await _chat_fastcontext(
-        model_id=active.fastcontext_model,
+    active = config or deepseek.get_config()
+    completion = await deepseek.response_completion(
         messages=[
             {
                 "role": "system",
-                "content": "Return only valid JSON.",
+                "content": "Call the Read tool exactly once with the requested arguments.",
             },
             {
                 "role": "user",
-                "content": 'Return exactly {"ok": true}.',
+                "content": "Read README.md from offset 1 with limit 1.",
             },
         ],
         config=active,
         transport=transport,
         max_tokens=100,
         temperature=0.0,
+        tools=_fastcontext_tools(),
+        tool_choice="required",
     )
-    return lmstudio.parse_json_content(content)
+    calls = _tool_calls_from_completion(completion)
+    expected_args = {"path": "README.md", "offset": 1, "limit": 1}
+    if len(calls) != 1 or calls[0]["tool"] != "Read" or calls[0]["args"] != expected_args:
+        raise FastContextError(
+            "The exploration model did not return exactly the requested native Read tool call."
+        )
+    return {"ok": True, "tool_call": calls[0]}
 
 
 async def refine_candidate(
@@ -144,7 +141,7 @@ async def refine_candidate(
     if asset is None:
         raise FastContextError(f"Unknown candidate_id: {candidate_id}")
 
-    config = lmstudio.get_config()
+    config = deepseek.get_config()
     snapshot_root = Path(str(asset["snapshot_path"]))
     if not snapshot_root.exists() or not snapshot_root.is_dir():
         raise FastContextError(f"Snapshot path does not exist: {snapshot_root}")
@@ -159,7 +156,7 @@ async def refine_candidate(
         loop_result = await _run_tool_loop(
             root=snapshot_root,
             messages=_messages(asset, query),
-            model_id=config.fastcontext_model,
+            model_id=config.model_id,
             config=config,
             max_turns=max_turns,
             transport=transport,
@@ -170,7 +167,7 @@ async def refine_candidate(
             candidate_id=candidate_id,
             task_signature=task_sig,
             query_signature=query_sig,
-            model_id=config.fastcontext_model,
+            model_id=config.model_id,
             query=query,
             evidence_paths=loop_result.evidence_paths,
             notes=loop_result.notes,
@@ -188,7 +185,7 @@ async def refine_candidate(
             },
             repo_id=str(asset["repo_id"]),
             snapshot_id=str(asset["snapshot_id"]),
-            model_id=config.fastcontext_model,
+            model_id=config.model_id,
             prompt_version=PROMPT_VERSION,
             analyzer_version=ANALYZER_VERSION,
         )
@@ -210,7 +207,7 @@ async def explore_local_project(
     if not root.exists() or not root.is_dir():
         raise FastContextError(f"project_path must be an existing directory: {project_path}")
 
-    config = lmstudio.get_config()
+    config = deepseek.get_config()
     if validate_model:
         await ensure_fastcontext_available(config, transport=transport)
 
@@ -220,7 +217,7 @@ async def explore_local_project(
         loop_result = await _run_tool_loop(
             root=root,
             messages=_local_messages(root, task, seed_context=seed_context),
-            model_id=config.fastcontext_model,
+            model_id=config.model_id,
             config=config,
             max_turns=max_turns,
             transport=transport,
@@ -236,7 +233,7 @@ async def explore_local_project(
     return LocalExploreResult(
         task=task.strip(),
         project_path=str(root),
-        model_id=config.fastcontext_model,
+        model_id=config.model_id,
         prompt_version=PROMPT_VERSION,
         schema_version=SCHEMA_VERSION,
         analyzer_version=ANALYZER_VERSION,
@@ -265,7 +262,7 @@ async def refine_suite(
 
     loaded_suite = eval_runner.load_suite(suite)
     suite_id = str(loaded_suite["suite_id"])
-    config = lmstudio.get_config()
+    config = deepseek.get_config()
     await ensure_fastcontext_available(config, transport=transport)
 
     tasks = list(loaded_suite["tasks"])
@@ -291,7 +288,7 @@ async def refine_suite(
         "label": label,
         "top_k": top_k,
         "max_turns": max_turns,
-        "model_id": config.fastcontext_model,
+        "model_id": config.model_id,
         "prompt_version": PROMPT_VERSION,
         "schema_version": SCHEMA_VERSION,
         "timestamp": datetime.now(UTC).isoformat(),
@@ -313,7 +310,7 @@ async def refine_suite(
             "metrics": metrics,
             "report_path": str(report_path),
         },
-        model_id=config.fastcontext_model,
+        model_id=config.model_id,
         prompt_version=PROMPT_VERSION,
         analyzer_version=ANALYZER_VERSION,
     )
@@ -341,7 +338,7 @@ def write_trace(
     payload = {
         "task": task.strip(),
         "project_path": str(root),
-        "model_id": lmstudio.get_config().fastcontext_model,
+        "model_id": deepseek.get_config().model_id,
         "prompt_version": PROMPT_VERSION,
         "schema_version": SCHEMA_VERSION,
         "analyzer_version": ANALYZER_VERSION,
@@ -357,9 +354,33 @@ async def _run_tool_loop(
     root: Path,
     messages: list[dict[str, Any]],
     model_id: str,
-    config: lmstudio.LMStudioConfig,
+    config: deepseek.ModelConfig,
     max_turns: int,
     transport: httpx.AsyncBaseTransport | None,
+    allow_observation_fallback: bool = False,
+    priority_paths: list[str] | None = None,
+) -> FastContextLoopResult:
+    async with deepseek.DeepSeekClient(config, transport) as client:
+        return await _run_tool_loop_with_client(
+            root=root,
+            messages=messages,
+            model_id=model_id,
+            config=config,
+            client=client,
+            max_turns=max_turns,
+            allow_observation_fallback=allow_observation_fallback,
+            priority_paths=priority_paths,
+        )
+
+
+async def _run_tool_loop_with_client(
+    *,
+    root: Path,
+    messages: list[dict[str, Any]],
+    model_id: str,
+    config: deepseek.ModelConfig,
+    client: deepseek.DeepSeekClient,
+    max_turns: int,
     allow_observation_fallback: bool = False,
     priority_paths: list[str] | None = None,
 ) -> FastContextLoopResult:
@@ -374,22 +395,23 @@ async def _run_tool_loop(
     no_tool_nudge_used = False
     for turn in range(1, max(1, max_turns) + 1):
         allow_tools = not final_answer_only_next
-        completion = await _chat_fastcontext_completion(
-            model_id=model_id,
+        completion = await _fastcontext_completion(
             messages=active_messages,
-            config=config,
-            transport=transport,
+            client=client,
             max_tokens=3000,
             temperature=0.0,
             allow_tools=allow_tools,
         )
         content = completion.content
         parsed = parse_fastcontext_response(content)
-        tool_calls = _tool_calls_from_completion(completion) or parsed.tool_calls
-        tool_mode_response = bool(completion.tool_calls)
+        tool_calls = _tool_calls_from_completion(completion)
         turn_record: dict[str, Any] = {
             "turn": turn,
             "model_response": content,
+            "response_model": completion.response_model,
+            "response_id": completion.response_id,
+            "usage": completion.usage,
+            "latency_ms": completion.latency_ms,
             "finish_reason": completion.finish_reason,
             "tools_enabled": allow_tools,
             "tool_calls": tool_calls,
@@ -471,16 +493,25 @@ async def _run_tool_loop(
                 )
 
         if tool_calls and allow_tools:
-            observations = [execute_tool(root, call) for call in tool_calls[:MAX_TOOL_CALLS_PER_TURN]]
+            executed_calls = tool_calls[:MAX_TOOL_CALLS_PER_TURN]
+            observations = [execute_tool(root, call) for call in executed_calls]
             observation_support = _merge_observation_support(
                 observation_support,
                 _observation_support(observations),
             )
-            turn_record["tool_observations"] = observations
-            if tool_mode_response:
-                active_messages.extend(_tool_observation_messages(completion, observations))
-            else:
-                active_messages.extend(_fallback_observation_messages(content, observations))
+            skipped_observations = [
+                {
+                    "tool_call_id": call.get("id"),
+                    "tool": call.get("tool"),
+                    "args": call.get("args"),
+                    "ok": False,
+                    "error": (f"Skipped because the per-turn limit is {MAX_TOOL_CALLS_PER_TURN} tool calls."),
+                }
+                for call in tool_calls[MAX_TOOL_CALLS_PER_TURN:]
+            ]
+            replay_observations = [*observations, *skipped_observations]
+            turn_record["tool_observations"] = replay_observations
+            active_messages.extend(_tool_observation_messages(completion, replay_observations))
             finalization_reason = _finalization_reason(
                 turn,
                 max_turns,
@@ -496,7 +527,7 @@ async def _run_tool_loop(
                         priority_paths=active_priority_paths,
                     )
                 )
-            elif tool_mode_response:
+            else:
                 active_messages.append(
                     _continue_exploration_message(
                         observation_support,
@@ -668,94 +699,34 @@ async def _run_tool_loop(
     )
 
 
-async def _chat_fastcontext_completion(
+async def _fastcontext_completion(
     *,
-    model_id: str,
     messages: list[dict[str, Any]],
-    config: lmstudio.LMStudioConfig,
-    transport: httpx.AsyncBaseTransport | None,
+    client: deepseek.DeepSeekClient,
     max_tokens: int,
     temperature: float,
     allow_tools: bool = True,
-) -> lmstudio.LMStudioChatCompletion:
+) -> deepseek.ModelResponse:
     if not allow_tools:
-        return await lmstudio.chat_completion(
-            model_id=model_id,
+        return await deepseek.response_completion(
             messages=messages,
-            config=config,
-            transport=transport,
+            client=client,
             max_tokens=max_tokens,
             temperature=temperature,
-            seed=_fastcontext_seed(),
+            response_format=_fastcontext_response_format(),
+            tool_choice="none",
         )
-    try:
-        return await lmstudio.chat_completion(
-            model_id=model_id,
-            messages=messages,
-            config=config,
-            transport=transport,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tools=_fastcontext_tools(),
-            tool_choice="auto",
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-            seed=_fastcontext_seed(),
-        )
-    except lmstudio.LMStudioError:
-        content = await _chat_fastcontext(
-            model_id=model_id,
-            messages=messages,
-            config=config,
-            transport=transport,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-        return lmstudio.LMStudioChatCompletion(
-            content=content,
-            tool_calls=[],
-            finish_reason="fallback_content",
-            message={"role": "assistant", "content": content},
-            raw={},
-        )
-
-
-async def _chat_fastcontext(
-    *,
-    model_id: str,
-    messages: list[dict[str, Any]],
-    config: lmstudio.LMStudioConfig,
-    transport: httpx.AsyncBaseTransport | None,
-    max_tokens: int,
-    temperature: float,
-) -> str:
-    response_format = _fastcontext_response_format() if _structured_output_enabled() else None
-    try:
-        return await lmstudio.chat_text(
-            model_id=model_id,
-            messages=messages,
-            config=config,
-            transport=transport,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            response_format=response_format,
-            seed=_fastcontext_seed(),
-        )
-    except lmstudio.LMStudioError:
-        if response_format is None:
-            raise
-        return await lmstudio.chat_text(
-            model_id=model_id,
-            messages=messages,
-            config=config,
-            transport=transport,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            seed=_fastcontext_seed(),
-        )
+    return await deepseek.response_completion(
+        messages=messages,
+        client=client,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        tools=_fastcontext_tools(),
+    )
 
 
 def _tool_calls_from_completion(
-    completion: lmstudio.LMStudioChatCompletion,
+    completion: deepseek.ModelResponse,
 ) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
     for tool_call in completion.tool_calls:
@@ -772,53 +743,20 @@ def _tool_calls_from_completion(
 
 
 def _tool_observation_messages(
-    completion: lmstudio.LMStudioChatCompletion,
-    observations: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    if completion.output_items:
-        return [
-            *completion.output_items,
-            *[
-                {
-                    "type": "function_call_output",
-                    "call_id": str(observation.get("tool_call_id") or ""),
-                    "output": _tool_observation_content(observation),
-                }
-                for observation in observations
-                if observation.get("tool_call_id")
-            ],
-        ]
-    assistant_message: dict[str, Any] = {
-        "role": "assistant",
-        "content": completion.content or None,
-        "tool_calls": [call.raw for call in completion.tool_calls],
-    }
-    tool_messages = [
-        {
-            "role": "tool",
-            "tool_call_id": str(observation.get("tool_call_id") or ""),
-            "content": _tool_observation_content(observation),
-        }
-        for observation in observations
-        if observation.get("tool_call_id")
-    ]
-    return [assistant_message, *tool_messages]
-
-
-def _fallback_observation_messages(
-    content: str,
+    completion: deepseek.ModelResponse,
     observations: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     return [
-        {"role": "assistant", "content": content},
-        {
-            "role": "user",
-            "content": (
-                "Tool observations JSON:\n"
-                f"{json.dumps(observations, sort_keys=True)}\n\n"
-                "Continue. Return either more tool_calls JSON or final_answer JSON."
-            ),
-        },
+        *completion.output_items,
+        *[
+            {
+                "type": "function_call_output",
+                "call_id": str(observation.get("tool_call_id") or ""),
+                "output": _tool_observation_content(observation),
+            }
+            for observation in observations
+            if observation.get("tool_call_id")
+        ],
     ]
 
 
@@ -1414,24 +1352,6 @@ def _tool_observation_content(observation: dict[str, Any]) -> str:
     return json.dumps(observation, sort_keys=True)
 
 
-def _structured_output_enabled() -> bool:
-    raw = os.environ.get(FASTCONTEXT_STRUCTURED_OUTPUT_ENV, "1").strip().lower()
-    return raw not in {"0", "false", "no", "off"}
-
-
-def _fastcontext_seed() -> int | None:
-    raw = os.environ.get(FASTCONTEXT_SEED_ENV)
-    if raw is None or not raw.strip():
-        return DEFAULT_FASTCONTEXT_SEED
-    normalized = raw.strip().lower()
-    if normalized in {"none", "off", "false", "random"}:
-        return None
-    try:
-        return int(normalized)
-    except ValueError:
-        return DEFAULT_FASTCONTEXT_SEED
-
-
 def _fastcontext_response_format() -> dict[str, Any]:
     citation_schema = {
         "type": "object",
@@ -1444,15 +1364,6 @@ def _fastcontext_response_format() -> dict[str, Any]:
         "required": ["path"],
         "additionalProperties": True,
     }
-    tool_call_schema = {
-        "type": "object",
-        "properties": {
-            "tool": {"type": "string", "enum": ["READ", "GLOB", "GREP"]},
-            "args": {"type": "object", "additionalProperties": True},
-        },
-        "required": ["tool", "args"],
-        "additionalProperties": True,
-    }
     return {
         "type": "json_schema",
         "json_schema": {
@@ -1460,10 +1371,6 @@ def _fastcontext_response_format() -> dict[str, Any]:
             "schema": {
                 "type": "object",
                 "properties": {
-                    "tool_calls": {
-                        "type": "array",
-                        "items": tool_call_schema,
-                    },
                     "final_answer": {
                         "type": "object",
                         "properties": {
@@ -1492,17 +1399,15 @@ def _fastcontext_response_format() -> dict[str, Any]:
 
 def parse_fastcontext_response(content: str) -> ParsedFastContextResponse:
     try:
-        parsed = lmstudio.parse_json_content(content)
-    except lmstudio.LMStudioError:
+        parsed = deepseek.parse_json_content(content)
+    except deepseek.ModelError:
         return ParsedFastContextResponse(
-            tool_calls=_parse_function_style_tool_calls(content),
             citations=_parse_final_answer_citations(content),
             citation_ids=_parse_final_answer_citation_ids(content),
             notes=[],
         )
 
     return ParsedFastContextResponse(
-        tool_calls=_extract_tool_calls(parsed),
         citations=_extract_citations(parsed),
         citation_ids=_extract_citation_ids(parsed),
         notes=_extract_notes(parsed),
@@ -1733,9 +1638,7 @@ def _messages(asset: dict[str, Any], query: str) -> list[dict[str, str]]:
                 "the task asks for those. Use relative paths like src/source_scout/server.py or exact "
                 "paths under the workspace root; never shorten paths or use pseudo-absolute paths "
                 "like /source_scout/src/source_scout/server.py. Cite only exact line ranges from "
-                "successful tool observations. If native tool calling is unavailable, request tools "
-                "as JSON like "
-                '{"tool_calls":[{"tool":"Grep","args":{"pattern":"symbol","glob":"**/*.ts"}}]}. '
+                "successful tool observations. Use native tool calls whenever more evidence is needed. "
                 "After enough evidence is observed, stop calling tools and return final_answer. "
                 f"Return the smallest useful evidence set: 1-{MAX_FINAL_CITATIONS} citations, "
                 f"ideally {TARGET_FINAL_CITATIONS}. Avoid background/supporting ranges unless "
@@ -1806,9 +1709,8 @@ def _local_messages(
                 "If the task names a file, inspect that exact file first. Use relative paths like "
                 "src/source_scout/server.py or exact paths under the workspace root; never shorten paths "
                 "or use pseudo-absolute paths like /source_scout/src/source_scout/server.py. Cite only "
-                "exact line ranges from successful tool observations. If native tool calling is "
-                "unavailable, request tools as JSON like "
-                '{"tool_calls":[{"tool":"Grep","args":{"pattern":"symbol","glob":"**/*.ts"}}]}. '
+                "exact line ranges from successful tool observations. Use native tool calls whenever "
+                "more evidence is needed. "
                 "After enough evidence is observed, stop calling tools and return final_answer. "
                 f"Return the smallest useful evidence set: 1-{MAX_FINAL_CITATIONS} citations, "
                 f"ideally {TARGET_FINAL_CITATIONS}. Avoid background/supporting ranges unless "
@@ -2226,22 +2128,6 @@ def _range_sort_key(path_range: tuple[int, int]) -> tuple[int, int, int]:
     return broad_penalty, start, end
 
 
-def _extract_tool_calls(parsed: dict[str, Any]) -> list[dict[str, Any]]:
-    raw_calls = parsed.get("tool_calls") or parsed.get("tools") or parsed.get("actions") or []
-    if isinstance(raw_calls, dict):
-        raw_calls = [raw_calls]
-    if not isinstance(raw_calls, list):
-        return []
-    calls: list[dict[str, Any]] = []
-    for raw_call in raw_calls:
-        if not isinstance(raw_call, dict):
-            continue
-        tool = _tool_name(raw_call)
-        if tool in {"READ", "GLOB", "GREP"}:
-            calls.append({"tool": tool, "args": _tool_args(raw_call)})
-    return calls
-
-
 def _extract_citations(parsed: dict[str, Any]) -> list[FastContextCitation]:
     final_answer = parsed.get("final_answer") or parsed.get("evidence") or parsed.get("citations")
     evidence: Any
@@ -2369,29 +2255,3 @@ def _parse_citation_lines(text: str) -> list[FastContextCitation]:
             )
         )
     return citations
-
-
-def _parse_function_style_tool_calls(content: str) -> list[dict[str, Any]]:
-    calls: list[dict[str, Any]] = []
-    for match in re.finditer(
-        r"\b(?P<tool>READ|GLOB|GREP)\s*\((?P<body>.*?)\)",
-        content,
-        flags=re.IGNORECASE | re.DOTALL,
-    ):
-        tool = match.group("tool").upper()
-        body = match.group("body")
-        args = _parse_call_args(body)
-        if tool == "READ" and "path" not in args:
-            quoted = _first_quoted(body)
-            if quoted:
-                args["path"] = quoted
-        if tool == "GLOB" and "pattern" not in args:
-            quoted = _first_quoted(body)
-            if quoted:
-                args["pattern"] = quoted
-        if tool == "GREP" and "pattern" not in args:
-            quoted = _first_quoted(body)
-            if quoted:
-                args["pattern"] = quoted
-        calls.append({"tool": tool, "args": args})
-    return calls

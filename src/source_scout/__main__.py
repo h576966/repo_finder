@@ -8,7 +8,7 @@ from dataclasses import asdict
 from . import cli_checks as _cli_checks
 from . import fastcontext
 from .cli_output import _format_local_explore_text
-from .cli_status import _fastcontext_status, _lmstudio_status
+from .cli_status import _api_status
 
 _check_commands = _cli_checks._check_commands
 _run_check_commands = _cli_checks._run_check_commands
@@ -36,9 +36,7 @@ def _run_mcp(transport: str, port: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description=(
-            "Source Scout - catalog-first local reuse layer for TS/JS/Python source."
-        ),
+        description=("Source Scout - catalog-first local reuse layer for TS/JS/Python source."),
     )
     parser.add_argument(
         "--transport",
@@ -115,7 +113,7 @@ def main() -> None:
 
     profile_parser = subparsers.add_parser(
         "profile",
-        help="Profile repository cards with Gemma via LM Studio",
+        help="Profile repository cards with the configured assessment model",
     )
     profile_parser.add_argument("--limit", type=int, default=30)
     profile_parser.add_argument("--force", action="store_true")
@@ -149,22 +147,11 @@ def main() -> None:
     assess_parser.add_argument("--max-evidence-rounds", type=int, default=1)
     assess_parser.add_argument("--force", action="store_true")
 
-    lmstudio_parser = subparsers.add_parser("lmstudio-status", help="Check local LM Studio connectivity")
-    lmstudio_parser.add_argument("--start-server", action="store_true")
-    lmstudio_parser.add_argument("--smoke-test", action="store_true")
-    lmstudio_parser.add_argument("--load-gemma", action="store_true")
-    lmstudio_parser.add_argument("--gemma-context-length", type=int, default=32_768)
-    lmstudio_parser.add_argument("--gemma-gpu", default="max")
-
-    fastcontext_parser = subparsers.add_parser(
-        "fastcontext-status",
-        help="Check local FastContext model connectivity through LM Studio",
+    api_parser = subparsers.add_parser(
+        "model-status",
+        help="Check the configured model API",
     )
-    fastcontext_parser.add_argument("--start-server", action="store_true")
-    fastcontext_parser.add_argument("--smoke-test", action="store_true")
-    fastcontext_parser.add_argument("--load-model", action="store_true")
-    fastcontext_parser.add_argument("--context-length", type=int, default=65_536)
-    fastcontext_parser.add_argument("--gpu", default="max")
+    api_parser.add_argument("--smoke-test", action="store_true")
 
     refine_parser = subparsers.add_parser(
         "refine-evidence",
@@ -366,7 +353,7 @@ def main() -> None:
         if args.max_evidence_rounds < 0 or args.max_evidence_rounds > 2:
             assess_parser.error("--max-evidence-rounds must be between 0 and 2.")
         from .assessor import AssessorError, assess_candidate, assessment_to_jsonable
-        from .lmstudio import LMStudioError
+        from .deepseek import ModelError
 
         try:
             assessment_result = asyncio.run(
@@ -379,35 +366,14 @@ def main() -> None:
                     force=args.force,
                 )
             )
-        except (AssessorError, LMStudioError, OSError, ValueError) as exc:
+        except (AssessorError, ModelError, OSError, ValueError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
         print(json.dumps(assessment_to_jsonable(assessment_result), sort_keys=True))
         return
 
-    if args.command == "lmstudio-status":
-        status_result = asyncio.run(
-            _lmstudio_status(
-                args.start_server,
-                args.smoke_test,
-                load_gemma=args.load_gemma,
-                gemma_context_length=args.gemma_context_length,
-                gemma_gpu=args.gemma_gpu,
-            )
-        )
-        print(json.dumps(status_result, indent=2, sort_keys=True))
-        return
-
-    if args.command == "fastcontext-status":
-        status_result = asyncio.run(
-            _fastcontext_status(
-                args.start_server,
-                args.smoke_test,
-                load_model=args.load_model,
-                context_length=args.context_length,
-                gpu=args.gpu,
-            )
-        )
+    if args.command == "model-status":
+        status_result = asyncio.run(_api_status(args.smoke_test))
         print(json.dumps(status_result, indent=2, sort_keys=True))
         return
 

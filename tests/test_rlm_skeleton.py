@@ -65,7 +65,7 @@ def _create_candidate(tmp_path: Path) -> tuple[str, Path]:
             "tree_summary": {"total_files": 3, "source_files": ["src/app.py", "src/helper.py"]},
             "stack_signals": {"has_python_files": True},
             "deterministic_features": {"source_file_count": 2},
-            "gemma_profile": {"capabilities": [{"name": "route handler", "confidence": 0.8}]},
+            "repository_profile": {"capabilities": [{"name": "route handler", "confidence": 0.8}]},
         },
     )
     asset_id = catalog.upsert_asset(
@@ -121,9 +121,7 @@ def _create_bundle(asset_id: str, task_signature: str = "task123"):
                 "start_line": 1,
                 "end_line": 2,
                 "commit_sha": str(asset["commit_sha"]),
-                "content_hash": (
-                    f"sha256:{hashlib.sha256(helper_evidence.encode()).hexdigest()}"
-                ),
+                "content_hash": (f"sha256:{hashlib.sha256(helper_evidence.encode()).hexdigest()}"),
                 "validated": True,
             }
         ],

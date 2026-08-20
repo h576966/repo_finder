@@ -5,8 +5,8 @@ from typing import Any
 import httpx
 import pytest
 
-from source_scout import fastcontext, fastcontext_tools, lmstudio
-from tests.fastcontext_helpers import _response_message_json, _write_snapshot
+from source_scout import deepseek, fastcontext, fastcontext_tools
+from tests.fastcontext_helpers import _write_snapshot
 
 
 def test_fastcontext_tools_are_sandboxed_and_read_only(tmp_path: Path) -> None:
@@ -226,22 +226,30 @@ def test_unrelated_absolute_paths_still_fail_closed(tmp_path: Path) -> None:
         fastcontext.read_file(root, str(outside))
 
 
-def test_parse_fastcontext_json_and_final_answer_formats() -> None:
-    tool_response = fastcontext.parse_fastcontext_response(
+def test_parse_fastcontext_response_ignores_content_tool_calls_and_reads_final_json() -> None:
+    content_tool_response = fastcontext.parse_fastcontext_response(
         json.dumps(
-            {
-                "tool_calls": [
-                    {"tool": "GREP", "args": {"pattern": "useReactTable", "glob": "**/*.tsx"}}
-                ]
-            }
+            {"tool_calls": [{"tool": "GREP", "args": {"pattern": "useReactTable", "glob": "**/*.tsx"}}]}
         )
     )
-    assert tool_response.tool_calls == [
-        {"tool": "GREP", "args": {"pattern": "useReactTable", "glob": "**/*.tsx"}}
-    ]
+    assert content_tool_response.citations == []
+    assert content_tool_response.citation_ids == []
+    assert content_tool_response.notes == []
 
     final_response = fastcontext.parse_fastcontext_response(
-        "<final_answer>\nsrc/components/data-table.tsx:1-4\n</final_answer>"
+        json.dumps(
+            {
+                "final_answer": {
+                    "evidence": [
+                        {
+                            "path": "src/components/data-table.tsx",
+                            "start_line": 1,
+                            "end_line": 4,
+                        }
+                    ]
+                }
+            }
+        )
     )
     assert final_response.citations[0].evidence_path() == "src/components/data-table.tsx:1-4"
 
@@ -258,14 +266,14 @@ def test_citation_validation_rejects_bad_ranges_and_unsupported_observations(tmp
 
     evidence, notes = fastcontext._validated_evidence_paths(
         root,
-            [
-                fastcontext.FastContextCitation("src/components/data-table.tsx", 5, 1),
-                fastcontext.FastContextCitation("src/components/data-table.tsx", 1, 999),
-                fastcontext.FastContextCitation("src/components/data-table.tsx", 6, 6),
-                fastcontext.FastContextCitation("src/components/data-table.tsx", 1, 2),
-                fastcontext.FastContextCitation("source_scout/src/**/*.tsx", 1, 2),
-                fastcontext.FastContextCitation("src/components/data-table.tsx"),
-            ],
+        [
+            fastcontext.FastContextCitation("src/components/data-table.tsx", 5, 1),
+            fastcontext.FastContextCitation("src/components/data-table.tsx", 1, 999),
+            fastcontext.FastContextCitation("src/components/data-table.tsx", 6, 6),
+            fastcontext.FastContextCitation("src/components/data-table.tsx", 1, 2),
+            fastcontext.FastContextCitation("source_scout/src/**/*.tsx", 1, 2),
+            fastcontext.FastContextCitation("src/components/data-table.tsx"),
+        ],
         observation_support=fastcontext.ObservationSupport(
             files={"src/components/data-table.tsx"},
             ranges={"src/components/data-table.tsx": [(4, 4)]},
@@ -289,7 +297,6 @@ def test_citation_id_validation_rejects_unknown_ids(tmp_path: Path) -> None:
     evidence, notes = fastcontext._validated_response_evidence_paths(
         root,
         fastcontext.ParsedFastContextResponse(
-            tool_calls=[],
             citations=[],
             citation_ids=["C99"],
             notes=[],
@@ -432,95 +439,73 @@ def test_finalization_waits_for_priority_observation() -> None:
         },
     )
 
-    assert fastcontext._finalization_reason(
-        1,
-        6,
-        support,
-        priority_paths=["src/source_scout/pipeline.py"],
-    ) is None
-    assert fastcontext._finalization_reason(
-        5,
-        6,
-        support,
-        priority_paths=["src/source_scout/pipeline.py"],
-    ) is not None
-    assert fastcontext._finalization_reason(
-        1,
-        6,
-        support,
-        priority_paths=["src/source_scout/evidence.py"],
-    ) == "enough_primary_source_ranges"
-
-
-def test_fastcontext_seed_defaults_and_env_override(monkeypatch) -> None:
-    monkeypatch.delenv("SOURCE_SCOUT_FASTCONTEXT_SEED", raising=False)
-    assert fastcontext._fastcontext_seed() == fastcontext.DEFAULT_FASTCONTEXT_SEED
-
-    monkeypatch.setenv("SOURCE_SCOUT_FASTCONTEXT_SEED", "123")
-    assert fastcontext._fastcontext_seed() == 123
-
-    monkeypatch.setenv("SOURCE_SCOUT_FASTCONTEXT_SEED", "none")
-    assert fastcontext._fastcontext_seed() is None
+    assert (
+        fastcontext._finalization_reason(
+            1,
+            6,
+            support,
+            priority_paths=["src/source_scout/pipeline.py"],
+        )
+        is None
+    )
+    assert (
+        fastcontext._finalization_reason(
+            5,
+            6,
+            support,
+            priority_paths=["src/source_scout/pipeline.py"],
+        )
+        is not None
+    )
+    assert (
+        fastcontext._finalization_reason(
+            1,
+            6,
+            support,
+            priority_paths=["src/source_scout/evidence.py"],
+        )
+        == "enough_primary_source_ranges"
+    )
 
 
 def test_local_seed_context_includes_likely_source_files(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     (root / "src" / "source_scout").mkdir(parents=True)
-    (root / "src" / "source_scout" / "lmstudio.py").write_text("def status(): pass\n", encoding="utf-8")
+    (root / "src" / "source_scout" / "deepseek.py").write_text("def status(): pass\n", encoding="utf-8")
     (root / "src" / "source_scout" / "__main__.py").write_text("def cli(): pass\n", encoding="utf-8")
     (root / "tests").mkdir()
-    (root / "tests" / "test_lmstudio.py").write_text("def test_status(): pass\n", encoding="utf-8")
+    (root / "tests" / "test_deepseek.py").write_text("def test_status(): pass\n", encoding="utf-8")
     monkeypatch.setattr(fastcontext_tools.shutil, "which", lambda name: None)
 
-    seed = fastcontext._local_seed_context(root, "Find the LM Studio status CLI command")
+    seed = fastcontext._local_seed_context(root, "Find the DeepSeek status CLI command")
 
     likely = seed["likely_source_files"]
     assert "src/source_scout/__main__.py" in likely
-    assert "src/source_scout/lmstudio.py" in likely
-    assert likely.index("src/source_scout/lmstudio.py") < likely.index("tests/test_lmstudio.py")
+    assert "src/source_scout/deepseek.py" in likely
+    assert likely.index("src/source_scout/deepseek.py") < likely.index("tests/test_deepseek.py")
+
 
 @pytest.mark.asyncio
-async def test_fastcontext_uses_structured_output_and_retries_without_schema() -> None:
-    chat_calls = 0
+async def test_fastcontext_structured_output_failure_is_not_retried() -> None:
+    response_calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal chat_calls
-        assert request.url.path == "/v1/responses"
-        chat_calls += 1
+        nonlocal response_calls
+        assert request.url.path == "/responses"
+        response_calls += 1
         payload = json.loads(request.content)
-        if chat_calls == 1:
-            assert payload["text"]["format"]["type"] == "json_schema"
-            return httpx.Response(400, json={"error": "structured output unsupported"})
-        assert "text" not in payload
-        return httpx.Response(
-            200,
-            json=_response_message_json(
-                json.dumps(
-                    {
-                        "final_answer": {
-                            "evidence": [
-                                {
-                                    "path": "src/components/data-table.tsx",
-                                    "start_line": 1,
-                                    "end_line": 4,
-                                }
-                            ],
-                            "notes": ["Schema-free retry still works."],
-                        }
-                    }
-                )
-            ),
+        assert payload["text"]["format"]["type"] == "json_schema"
+        return httpx.Response(400, json={"error": "structured output unsupported"})
+
+    with pytest.raises(deepseek.ModelError, match="HTTP 400"):
+        await deepseek.response_json(
+            messages=[{"role": "user", "content": "Find the data table"}],
+            transport=httpx.MockTransport(handler),
+            max_tokens=3000,
+            temperature=0.0,
+            attempts=1,
+            response_format=fastcontext._fastcontext_response_format(),
         )
 
-    content = await fastcontext._chat_fastcontext(
-        messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
-        transport=httpx.MockTransport(handler),
-        max_tokens=3000,
-        temperature=0.0,
-    )
-
-    assert chat_calls == 2
-    assert json.loads(content)["final_answer"]["notes"] == ["Schema-free retry still works."]
+    assert response_calls == 1

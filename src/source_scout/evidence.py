@@ -213,11 +213,11 @@ CAPABILITY_STRONG_CONTENT: dict[str, set[str]] = {
     "file-upload": {
         "datatransfer",
         "formdata",
-        "input type=\"file\"",
+        'input type="file"',
         "ondrop",
         "react-dropzone",
         "setprogress",
-        "type=\"file\"",
+        'type="file"',
         "usedropzone",
     },
     "charts": {"recharts", "responsivecontainer", "chartcontainer"},
@@ -739,8 +739,8 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
             searchable,
         ):
             continue
-        score = float(term_hits) + (ui_score * 4) + (source_strong_hits * 3) + (
-            capability_dependency_hits * 2
+        score = (
+            float(term_hits) + (ui_score * 4) + (source_strong_hits * 3) + (capability_dependency_hits * 2)
         )
         if path.name == "package.json":
             score += capability_dependency_hits * 2
@@ -797,9 +797,7 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
         strong_hits for _, _, _, _, _, _, strong_hits, _, is_manifest in top_files if not is_manifest
     )
     source_dependency_hit_count = sum(
-        dependency_hits
-        for _, _, _, _, _, _, _, dependency_hits, is_manifest in top_files
-        if not is_manifest
+        dependency_hits for _, _, _, _, _, _, _, dependency_hits, is_manifest in top_files if not is_manifest
     )
     capability_dependency_hit_count = max(len(capability_dependencies), source_dependency_hit_count)
     manifest_only = bool(top_files) and all(is_manifest for _, _, _, _, _, _, _, _, is_manifest in top_files)
@@ -821,9 +819,7 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
     if "react-hook-form" in relevant_dependencies or "zod" in relevant_dependencies:
         adaptation_notes.append("Keep form schema, resolver, and validation messages together.")
     if any("cmdk" == dep for dep in relevant_dependencies):
-        adaptation_notes.append(
-            "Command palettes usually depend on cmdk plus dialog/popover primitives."
-        )
+        adaptation_notes.append("Command palettes usually depend on cmdk plus dialog/popover primitives.")
     if "@base-ui/react" in relevant_dependencies and normalized == "command-palette":
         adaptation_notes.append(
             "Base UI combobox primitives can be reused as command-style quick search controls."

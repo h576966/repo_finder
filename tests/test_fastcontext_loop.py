@@ -4,7 +4,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from source_scout import fastcontext, lmstudio
+from source_scout import deepseek, fastcontext
+from source_scout.fastcontext_constants import MAX_TOOL_CALLS_PER_TURN
 from tests.fastcontext_helpers import (
     _response_message_json,
     _response_tool_call_json,
@@ -23,19 +24,19 @@ async def test_fastcontext_tool_loop_uses_openai_tool_calls(tmp_path: Path) -> N
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal chat_calls
-        assert request.url.path == "/v1/responses"
+        assert request.url.path == "/responses"
         chat_calls += 1
         payload = json.loads(request.content)
         if chat_calls == 1:
             assert payload["tools"][0]["name"] == "Read"
-            assert payload["chat_template_kwargs"]["enable_thinking"] is False
+            assert payload["reasoning"] == {"effort": "none"}
             return httpx.Response(
                 200,
                 json={
                     "id": "resp-read",
                     "object": "response",
                     "created_at": 0,
-                    "model": lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+                    "model": deepseek.DEEPSEEK_MODEL,
                     "output": [
                         {
                             "id": "fc-read-1",
@@ -99,8 +100,8 @@ async def test_fastcontext_tool_loop_uses_openai_tool_calls(tmp_path: Path) -> N
     result = await fastcontext._run_tool_loop(
         root=root,
         messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
+        model_id=deepseek.DEEPSEEK_MODEL,
+        config=deepseek.get_config(),
         max_turns=2,
         transport=httpx.MockTransport(handler),
     )
@@ -113,6 +114,72 @@ async def test_fastcontext_tool_loop_uses_openai_tool_calls(tmp_path: Path) -> N
     assert result.trajectory[1]["selected_citation_ids"] == ["C1"]
     assert result.trajectory[0]["tool_calls"][0]["tool"] == "Read"
     assert result.trajectory[0]["tool_observations"][0]["tool_call_id"] == "call-read-1"
+
+
+@pytest.mark.asyncio
+async def test_fastcontext_answers_every_capped_deepseek_tool_call(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write_snapshot(root)
+    chat_calls = 0
+    tool_calls = [
+        (
+            "Read",
+            {"path": "src/components/data-table.tsx", "offset": 1, "limit": 1},
+            f"call-read-{index}",
+        )
+        for index in range(1, MAX_TOOL_CALLS_PER_TURN + 2)
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal chat_calls
+        chat_calls += 1
+        payload = json.loads(request.content)
+        if chat_calls == 1:
+            return httpx.Response(
+                200,
+                json=_response_tool_calls_json(tool_calls),
+            )
+
+        tool_messages = [
+            message for message in payload["input"] if message.get("type") == "function_call_output"
+        ]
+        assert len(tool_messages) == len(tool_calls)
+        skipped = next(
+            message
+            for message in tool_messages
+            if message["call_id"] == f"call-read-{MAX_TOOL_CALLS_PER_TURN + 1}"
+        )
+        assert "per-turn limit" in skipped["output"]
+        return httpx.Response(
+            200,
+            json=_response_message_json(
+                json.dumps(
+                    {
+                        "final_answer": {
+                            "citation_ids": ["C1"],
+                            "notes": [],
+                        }
+                    }
+                )
+            ),
+        )
+
+    result = await fastcontext._run_tool_loop(
+        root=root,
+        messages=[{"role": "user", "content": "Find the data table"}],
+        model_id="deepseek-v4-flash",
+        config=deepseek.get_config(),
+        max_turns=2,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert chat_calls == 2
+    assert result.status == "completed"
+    assert len(result.trajectory[0]["tool_observations"]) == len(tool_calls)
+    assert result.trajectory[0]["tool_observations"][-1]["ok"] is False
 
 
 @pytest.mark.asyncio
@@ -168,8 +235,8 @@ async def test_fastcontext_tool_loop_nudges_no_tool_turn_to_priority_path(tmp_pa
     result = await fastcontext._run_tool_loop(
         root=root,
         messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
+        model_id=deepseek.DEEPSEEK_MODEL,
+        config=deepseek.get_config(),
         max_turns=3,
         transport=httpx.MockTransport(handler),
         priority_paths=["src/components/data-table.tsx"],
@@ -185,7 +252,9 @@ async def test_fastcontext_tool_loop_nudges_no_tool_turn_to_priority_path(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_fastcontext_tool_loop_falls_back_when_lmstudio_rejects_tools(tmp_path: Path) -> None:
+async def test_fastcontext_tool_loop_surfaces_deepseek_401_without_content_fallback(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "snapshot"
     root.mkdir()
     _write_snapshot(root)
@@ -194,47 +263,26 @@ async def test_fastcontext_tool_loop_falls_back_when_lmstudio_rejects_tools(tmp_
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal chat_calls
         chat_calls += 1
+        assert request.url.path == "/responses"
         payload = json.loads(request.content)
-        if "tools" in payload:
-            return httpx.Response(
-                400,
-                json={"error": "Cannot combine structured output constraints with lazy grammar"},
-            )
-        assert payload["text"]["format"]["type"] == "json_schema"
+        assert payload["tools"][0]["name"] == "Read"
+        assert payload["reasoning"] == {"effort": "none"}
         return httpx.Response(
-            200,
-            json=_response_message_json(
-                json.dumps(
-                    {
-                        "final_answer": {
-                            "evidence": [
-                                {
-                                    "path": "src/components/data-table.tsx",
-                                    "start_line": 1,
-                                    "end_line": 1,
-                                }
-                            ],
-                            "notes": ["Fallback content mode."],
-                        }
-                    }
-                )
-            ),
+            401,
+            json={"error": {"message": "Invalid API key"}},
         )
 
-    result = await fastcontext._run_tool_loop(
-        root=root,
-        messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
-        max_turns=1,
-        transport=httpx.MockTransport(handler),
-    )
+    with pytest.raises(deepseek.ModelError, match="HTTP 401"):
+        await fastcontext._run_tool_loop(
+            root=root,
+            messages=[{"role": "user", "content": "Find the data table"}],
+            model_id="deepseek-v4-flash",
+            config=deepseek.get_config(),
+            max_turns=1,
+            transport=httpx.MockTransport(handler),
+        )
 
-    assert chat_calls == 2
-    assert result.status == "completed"
-    assert result.evidence_paths == ["src/components/data-table.tsx:1-1"]
-    assert result.notes == ["Fallback content mode."]
-    assert result.trajectory[0]["finish_reason"] == "fallback_content"
+    assert chat_calls == 1
 
 
 @pytest.mark.asyncio
@@ -264,8 +312,8 @@ async def test_fastcontext_tool_loop_downgrades_max_turn_observation_fallback(
     result = await fastcontext._run_tool_loop(
         root=root,
         messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
+        model_id=deepseek.DEEPSEEK_MODEL,
+        config=deepseek.get_config(),
         max_turns=1,
         transport=httpx.MockTransport(handler),
         allow_observation_fallback=True,
@@ -349,8 +397,8 @@ async def test_fastcontext_tool_loop_keeps_tools_enabled_after_insufficient_evid
     result = await fastcontext._run_tool_loop(
         root=root,
         messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
+        model_id=deepseek.DEEPSEEK_MODEL,
+        config=deepseek.get_config(),
         max_turns=4,
         transport=httpx.MockTransport(handler),
     )
@@ -438,8 +486,8 @@ async def test_fastcontext_tool_loop_keeps_tools_enabled_for_noisy_ranges(
     result = await fastcontext._run_tool_loop(
         root=root,
         messages=[{"role": "user", "content": "Find FastContext implementation"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
+        model_id=deepseek.DEEPSEEK_MODEL,
+        config=deepseek.get_config(),
         max_turns=6,
         transport=httpx.MockTransport(handler),
     )
@@ -530,8 +578,8 @@ async def test_fastcontext_tool_loop_retries_glob_style_final_answer_without_too
     result = await fastcontext._run_tool_loop(
         root=root,
         messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
+        model_id=deepseek.DEEPSEEK_MODEL,
+        config=deepseek.get_config(),
         max_turns=3,
         transport=httpx.MockTransport(handler),
     )
@@ -539,9 +587,7 @@ async def test_fastcontext_tool_loop_retries_glob_style_final_answer_without_too
     assert result.status == "completed"
     assert result.evidence_paths == ["src/components/data-table.tsx:1-1"]
     assert result.trajectory[0]["finalization_reason"] == "enough_primary_source_ranges"
-    assert result.trajectory[1]["validation_notes"] == [
-        "Skipped wildcard or glob citation: src/**/*.tsx:1-4"
-    ]
+    assert result.trajectory[1]["validation_notes"] == ["Skipped wildcard or glob citation: src/**/*.tsx:1-4"]
     assert result.trajectory[2]["tools_enabled"] is False
     assert result.trajectory[2]["selected_citation_ids"] == ["C1"]
 
@@ -635,8 +681,8 @@ async def test_fastcontext_tool_loop_retries_over_budget_citation_ids(
     result = await fastcontext._run_tool_loop(
         root=root,
         messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
+        model_id=deepseek.DEEPSEEK_MODEL,
+        config=deepseek.get_config(),
         max_turns=4,
         transport=httpx.MockTransport(handler),
     )
@@ -722,8 +768,8 @@ async def test_fastcontext_tool_loop_accepts_truncated_budget_on_final_turn(
     result = await fastcontext._run_tool_loop(
         root=root,
         messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
+        model_id=deepseek.DEEPSEEK_MODEL,
+        config=deepseek.get_config(),
         max_turns=2,
         transport=httpx.MockTransport(handler),
     )
@@ -797,8 +843,8 @@ async def test_fastcontext_tool_loop_truncates_over_budget_retry_source_first(
     result = await fastcontext._run_tool_loop(
         root=root,
         messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
+        model_id=deepseek.DEEPSEEK_MODEL,
+        config=deepseek.get_config(),
         max_turns=3,
         transport=httpx.MockTransport(handler),
     )
@@ -902,8 +948,8 @@ async def test_fastcontext_tool_loop_uses_local_fallback_after_failed_final_retr
     result = await fastcontext._run_tool_loop(
         root=root,
         messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
+        model_id=deepseek.DEEPSEEK_MODEL,
+        config=deepseek.get_config(),
         max_turns=4,
         transport=httpx.MockTransport(handler),
         allow_observation_fallback=True,
@@ -968,8 +1014,8 @@ async def test_fastcontext_tool_loop_accepts_repaired_final_answer_path(
     result = await fastcontext._run_tool_loop(
         root=root,
         messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
+        model_id=deepseek.DEEPSEEK_MODEL,
+        config=deepseek.get_config(),
         max_turns=2,
         transport=httpx.MockTransport(handler),
     )
@@ -1054,8 +1100,8 @@ async def test_fastcontext_tool_loop_retries_priority_path_omission(
     result = await fastcontext._run_tool_loop(
         root=root,
         messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
+        model_id=deepseek.DEEPSEEK_MODEL,
+        config=deepseek.get_config(),
         max_turns=3,
         transport=httpx.MockTransport(handler),
         priority_paths=["src/components/data-table.tsx"],
@@ -1127,8 +1173,8 @@ async def test_fastcontext_tool_loop_uses_priority_observation_after_retry_omiss
     result = await fastcontext._run_tool_loop(
         root=root,
         messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
+        model_id=deepseek.DEEPSEEK_MODEL,
+        config=deepseek.get_config(),
         max_turns=3,
         transport=httpx.MockTransport(handler),
         allow_observation_fallback=True,
@@ -1174,8 +1220,8 @@ async def test_fastcontext_tool_loop_completes_with_priority_observation_after_e
     result = await fastcontext._run_tool_loop(
         root=root,
         messages=[{"role": "user", "content": "Find the data table"}],
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-        config=lmstudio.get_config(),
+        model_id=deepseek.DEEPSEEK_MODEL,
+        config=deepseek.get_config(),
         max_turns=3,
         transport=httpx.MockTransport(handler),
         allow_observation_fallback=True,
@@ -1214,8 +1260,8 @@ async def test_fastcontext_tool_loop_fails_max_turn_observation_fallback_for_cat
         await fastcontext._run_tool_loop(
             root=root,
             messages=[{"role": "user", "content": "Find the data table"}],
-            model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
-            config=lmstudio.get_config(),
+            model_id=deepseek.DEEPSEEK_MODEL,
+            config=deepseek.get_config(),
             max_turns=1,
             transport=httpx.MockTransport(handler),
             allow_observation_fallback=False,

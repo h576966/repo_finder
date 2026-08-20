@@ -33,12 +33,7 @@ def test_reuse_score_uses_exact_formula_without_confidence_multiplier() -> None:
     ]
 
     assert assessment_rules.calculate_reuse_score(dimensions, requirements) == pytest.approx(
-        0.30 * 0.8
-        + 0.20 * 0.7
-        + 0.15 * 0.6
-        + 0.15 * (1 - 0.2)
-        + 0.10 * (1 - 0.3)
-        + 0.10 * 0.5
+        0.30 * 0.8 + 0.20 * 0.7 + 0.15 * 0.6 + 0.15 * (1 - 0.2) + 0.10 * (1 - 0.3) + 0.10 * 0.5
     )
 
 

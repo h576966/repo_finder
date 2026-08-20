@@ -35,8 +35,8 @@ external/hosted PR review service.
 
 - Deterministic code validates paths, line ranges, commit SHA, evidence hashes,
   scores, verdicts, and persistence.
-- FastContext scouts file and line evidence only.
-- Gemma assesses validated evidence only; it does not write final scores.
+- The exploration model scouts file and line evidence only.
+- The assessment model assesses validated evidence only; it does not write final scores.
 - Codex reads cited source, edits code, and runs tests.
 
 ## FastContext Local Exploration

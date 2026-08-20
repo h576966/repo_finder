@@ -8,8 +8,8 @@ from . import (
     assessor,
     bundles,
     catalog,
+    deepseek,
     fastcontext,
-    lmstudio,
 )
 from .constants import _now_iso
 from .models import (
@@ -62,7 +62,7 @@ async def explore_local_code(
             project_path=project_path,
             max_turns=max_turns,
         )
-    except (fastcontext.FastContextError, lmstudio.LMStudioError, OSError) as exc:
+    except (fastcontext.FastContextError, deepseek.ModelError, OSError) as exc:
         raise ToolError(str(exc))
 
 
@@ -117,7 +117,7 @@ async def assess_reusable_code(
             force=force,
             project_path=project_path,
         )
-    except (assessor.AssessorError, lmstudio.LMStudioError, OSError, ValueError) as exc:
+    except (assessor.AssessorError, deepseek.ModelError, OSError, ValueError) as exc:
         raise ToolError(str(exc))
     return assessor.assessment_to_jsonable(result)
 

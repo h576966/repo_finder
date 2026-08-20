@@ -197,9 +197,7 @@ def _capability_intent_scores(task: str) -> dict[str, float]:
     for capability, hints in CAPABILITY_INTENT_HINTS.items():
         score = 0.0
         for hint in hints:
-            normalized_hint = " ".join(
-                hint.lower().replace("-", " ").replace("_", " ").split()
-            )
+            normalized_hint = " ".join(hint.lower().replace("-", " ").replace("_", " ").split())
             pattern = rf"(?<![a-z0-9]){re.escape(normalized_hint)}(?![a-z0-9])"
             if re.search(pattern, lowered):
                 score += 0.35 if " " in hint else 0.18

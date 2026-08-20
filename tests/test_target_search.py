@@ -132,12 +132,8 @@ def _role_candidate(
 def test_target_profile_reorders_equally_relevant_candidates(tmp_path: Path) -> None:
     next_14 = _candidate(tmp_path, "next14", next_major=14, react_major=18)
     next_15 = _candidate(tmp_path, "next15", next_major=15, react_major=19)
-    target_14 = build_target_profile(
-        _target(tmp_path, "target14", next_major=14, react_major=18)
-    )
-    target_15 = build_target_profile(
-        _target(tmp_path, "target15", next_major=15, react_major=19)
-    )
+    target_14 = build_target_profile(_target(tmp_path, "target14", next_major=14, react_major=18))
+    target_15 = build_target_profile(_target(tmp_path, "target15", next_major=15, react_major=19))
 
     results_14 = catalog.search_assets(
         "Find a reusable data table",
@@ -212,9 +208,7 @@ def test_bm25_role_cards_recover_keyword_ablated_tasks(tmp_path: Path) -> None:
 
 
 def test_capability_intent_hints_do_not_match_word_substrings() -> None:
-    scores = _capability_intent_scores(
-        "Find a no_std Rust I2C sensor driver for an STM32 microcontroller"
-    )
+    scores = _capability_intent_scores("Find a no_std Rust I2C sensor driver for an STM32 microcontroller")
 
     assert scores["file-storage"] == 0.0
 
@@ -227,9 +221,7 @@ def test_target_fit_keeps_unknown_npm_major_neutral(tmp_path: Path) -> None:
         react_major=19,
         next_constraint="workspace:^15.0.0",
     )
-    profile = build_target_profile(
-        _target(tmp_path, "target", next_major=15, react_major=19)
-    )
+    profile = build_target_profile(_target(tmp_path, "target", next_major=15, react_major=19))
 
     result = catalog.search_assets(
         "Find a reusable data table",

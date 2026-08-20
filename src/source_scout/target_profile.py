@@ -128,12 +128,8 @@ class TargetProfileV1:
             "test_roots": sorted(set(self.test_roots)),
             "package_managers": sorted(set(self.package_managers)),
             "manifest_paths": sorted(set(self.manifest_paths)),
-            "runtime_dependencies": [
-                item.to_jsonable() for item in sorted(set(self.runtime_dependencies))
-            ],
-            "dev_dependencies": [
-                item.to_jsonable() for item in sorted(set(self.dev_dependencies))
-            ],
+            "runtime_dependencies": [item.to_jsonable() for item in sorted(set(self.runtime_dependencies))],
+            "dev_dependencies": [item.to_jsonable() for item in sorted(set(self.dev_dependencies))],
             "framework_signals": sorted(set(self.framework_signals)),
             "test_signals": sorted(set(self.test_signals)),
             "node_module_format": self.node_module_format,
@@ -223,9 +219,7 @@ def build_target_profile(project_path: str | Path) -> TargetProfileV1:
     if accumulator.has_node_manifest and not accumulator.package_managers & node_managers:
         accumulator.package_managers.add("npm")
 
-    dependency_names = {
-        item.name for item in accumulator.runtime_dependencies | accumulator.dev_dependencies
-    }
+    dependency_names = {item.name for item in accumulator.runtime_dependencies | accumulator.dev_dependencies}
     accumulator.framework_signals.update(
         signal for name, signal in FRAMEWORK_DEPENDENCIES.items() if name in dependency_names
     )
@@ -342,10 +336,7 @@ def _is_test_source_path(rel_path: str) -> bool:
     lower_parts = {part.lower() for part in pure_path.parts[:-1]}
     name = pure_path.name.lower()
     return bool(lower_parts & TEST_ROOT_NAMES) or (
-        name.startswith("test_")
-        or name.endswith("_test.py")
-        or ".test." in name
-        or ".spec." in name
+        name.startswith("test_") or name.endswith("_test.py") or ".test." in name or ".spec." in name
     )
 
 
@@ -369,9 +360,9 @@ def _is_requirements_path(rel_path: str) -> bool:
     path = PurePosixPath(rel_path)
     name = path.name.lower()
     suffix = path.suffix.lower()
-    return (
-        name.startswith("requirements") and suffix in {".in", ".lock", ".txt"}
-    ) or ("requirements" in {part.lower() for part in path.parts[:-1]} and suffix in {".in", ".txt"})
+    return (name.startswith("requirements") and suffix in {".in", ".lock", ".txt"}) or (
+        "requirements" in {part.lower() for part in path.parts[:-1]} and suffix in {".in", ".txt"}
+    )
 
 
 def _read_manifest_text(path: Path) -> str | None:

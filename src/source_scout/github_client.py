@@ -107,16 +107,12 @@ class GitHubClient:
                 return None
         return str(content) if content else None
 
-    async def get_commits(
-        self, owner: str, repo: str, per_page: int = 20
-    ) -> list[dict[str, Any]]:
+    async def get_commits(self, owner: str, repo: str, per_page: int = 20) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"per_page": per_page}
         url = f"{API_BASE}/repos/{owner}/{repo}/commits"
         return await self._get(url, params=params)  # type: ignore[no-any-return]
 
-    async def get_default_branch_commit(
-        self, owner: str, repo: str, branch: str
-    ) -> str:
+    async def get_default_branch_commit(self, owner: str, repo: str, branch: str) -> str:
         enc_branch = quote(branch, safe="")
         url = f"{API_BASE}/repos/{owner}/{repo}/branches/{enc_branch}"
         data = await self._get(url)
@@ -139,9 +135,7 @@ class GitHubClient:
             url = f"{url}/{enc_path}"
         return await self._get(url)  # type: ignore[no-any-return]
 
-    async def get_file_content(
-        self, owner: str, repo: str, path: str, max_lines: int = 30
-    ) -> str | None:
+    async def get_file_content(self, owner: str, repo: str, path: str, max_lines: int = 30) -> str | None:
         enc_path = quote(path, safe="")
         url = f"{API_BASE}/repos/{owner}/{repo}/contents/{enc_path}"
         try:

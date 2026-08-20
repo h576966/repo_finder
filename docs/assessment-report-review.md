@@ -10,7 +10,7 @@ Use this guide when reading `source-scout assess` output or
 - `target_profile_fingerprint`: Canonical fingerprint of the optional read-only
   target-project profile. Reusing the same target facts produces the same
   profile-aware task signature and assessment cache key.
-- `recommended_verdict`: Gemma's recommendation from the validated evidence.
+- `recommended_verdict`: The assessment model's recommendation from validated evidence.
   Treat it as model judgment, not the final decision.
 - `final_verdict`: Source Scout's deterministic verdict after applying evidence
   coverage, score, confidence, and blocker rules. This is the field to use for

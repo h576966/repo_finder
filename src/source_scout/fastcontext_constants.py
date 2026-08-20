@@ -1,6 +1,6 @@
-PROMPT_VERSION = "fastcontext-refine-v2"
+PROMPT_VERSION = "fastcontext-refine-v3"
 SCHEMA_VERSION = "fastcontext-evidence-v1"
-ANALYZER_VERSION = "fastcontext-harness-v1"
+ANALYZER_VERSION = "fastcontext-harness-v2"
 
 DEFAULT_MAX_TURNS = 7
 MAX_TOOL_CALLS_PER_TURN = 5
@@ -27,9 +27,6 @@ LOCAL_SKIP_FILE_NAMES = {
     "tsconfig.tsbuildinfo",
     "yarn.lock",
 }
-FASTCONTEXT_STRUCTURED_OUTPUT_ENV = "SOURCE_SCOUT_FASTCONTEXT_STRUCTURED_OUTPUT"
-FASTCONTEXT_SEED_ENV = "SOURCE_SCOUT_FASTCONTEXT_SEED"
-DEFAULT_FASTCONTEXT_SEED = 20260624
 PRIMARY_SOURCE_PREFIXES = ("src/source_scout/", "src/", "app/", "components/", "lib/")
 NOISY_EVIDENCE_PREFIXES = (
     ".agents/",

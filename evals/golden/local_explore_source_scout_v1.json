@@ -30,25 +30,25 @@
       "manual_search_terms": ["eval-local-explore", "run_local_explore_eval", "local_explore_eval"]
     },
     {
-      "id": "lmstudio_status_cli",
+      "id": "deepseek_model_status_cli",
       "task_type": "cli_navigation",
       "target_family": "cli",
-      "task": "Find where LM Studio status and FastContext status commands are registered and implemented.",
+      "task": "Find where the DeepSeek model status command and its smoke tests are registered and implemented.",
       "expected_citations": [
         {
           "path": "src/source_scout/__main__.py",
-          "start_line": 116,
-          "end_line": 321,
-          "reason": "Status subcommands are registered and dispatched in the CLI module."
+          "start_line": 145,
+          "end_line": 385,
+          "reason": "The model-status command is registered and dispatched in the CLI module."
         },
         {
           "path": "src/source_scout/cli_status.py",
           "start_line": 1,
-          "end_line": 160,
-          "reason": "LM Studio and FastContext status command implementations live here."
+          "end_line": 45,
+          "reason": "DeepSeek connectivity plus assessment and exploration smoke tests live here."
         }
       ],
-      "manual_search_terms": ["lmstudio-status", "fastcontext-status", "_lmstudio_status", "_fastcontext_status"]
+      "manual_search_terms": ["model-status", "_api_status", "smoke_test"]
     },
     {
       "id": "fastcontext_local_explorer",
@@ -102,28 +102,28 @@
       "id": "fastcontext_structured_output",
       "task_type": "source_navigation",
       "target_family": "src",
-      "task": "Find where FastContext sends LM Studio structured output schema and falls back to robust parsing.",
+      "task": "Find where FastContext requests DeepSeek Responses JSON Schema output and parses the result.",
       "expected_citations": [
         {
           "path": "src/source_scout/fastcontext.py",
-          "start_line": 721,
-          "end_line": 737,
-          "reason": "The FastContext text chat helper attaches response_format and retries without it on failure."
+          "start_line": 700,
+          "end_line": 730,
+          "reason": "The FastContext completion helper requests JSON Schema on no-tools final turns."
         },
         {
           "path": "src/source_scout/fastcontext.py",
-          "start_line": 1375,
-          "end_line": 1455,
-          "reason": "FastContext structured-output schema and robust response parsing live here."
+          "start_line": 1350,
+          "end_line": 1425,
+          "reason": "FastContext structured-output schema and result parsing live here."
         },
         {
-          "path": "src/source_scout/lmstudio.py",
-          "start_line": 276,
-          "end_line": 372,
-          "reason": "The generic LM Studio chat adapter accepts response_format and parses JSON responses."
+          "path": "src/source_scout/deepseek.py",
+          "start_line": 170,
+          "end_line": 290,
+          "reason": "The DeepSeek Responses client converts JSON Schema format and parses structured results."
         }
       ],
-      "manual_search_terms": ["response_format", "_chat_fastcontext", "parse_json_content"]
+      "manual_search_terms": ["response_format", "_fastcontext_completion", "parse_json_content"]
     },
     {
       "id": "fastcontext_refinement_reports",
@@ -207,7 +207,7 @@
       "id": "catalog_search_scoring",
       "task_type": "source_navigation",
       "target_family": "src",
-      "task": "Find where catalog assets are searched and scored with freshness gates, Gemma profile weighting, and capability intent.",
+      "task": "Find where catalog assets are searched and scored with freshness gates, assessment model profile weighting, and capability intent.",
       "expected_citations": [
         {
           "path": "src/source_scout/catalog.py",
@@ -222,7 +222,7 @@
           "reason": "Capability path alignment and task intent scoring helpers live here."
         }
       ],
-      "manual_search_terms": ["search_assets", "gemma_profile", "MAX_REPO_AGE_DAYS", "capability_intent"]
+      "manual_search_terms": ["search_assets", "repository_profile", "MAX_REPO_AGE_DAYS", "capability_intent"]
     },
     {
       "id": "scout_freshness_queries",
@@ -342,13 +342,13 @@
       "id": "catalog_candidate_scoring",
       "task_type": "source_navigation",
       "target_family": "src",
-      "task": "Find where reusable catalog candidates are scored with capability intent, Gemma profile, and path signals.",
+      "task": "Find where reusable catalog candidates are scored with capability intent, assessment model profile, and path signals.",
       "expected_citations": [
         {
           "path": "src/source_scout/catalog.py",
           "start_line": 725,
           "end_line": 935,
-          "reason": "Current reusable candidate scoring combines catalog assets, capability intent, Gemma profile, and path/dependency signals."
+          "reason": "Current reusable candidate scoring combines catalog assets, capability intent, repository profile, and path/dependency signals."
         },
         {
           "path": "src/source_scout/catalog_scoring.py",
@@ -360,19 +360,19 @@
       "manual_search_terms": ["search_assets", "capability_intent_score", "profile_score", "path_alignment_score"]
     },
     {
-      "id": "gemma_repository_profiler",
+      "id": "deepseek_repository_profiler",
       "task_type": "assessment_navigation",
       "target_family": "assessment",
-      "task": "Find where Gemma profiles repository cards into strict JSON and stores profile runs.",
+      "task": "Find where DeepSeek profiles repository cards into strict JSON and stores profile runs.",
       "expected_citations": [
         {
           "path": "src/source_scout/profiler.py",
           "start_line": 1,
           "end_line": 161,
-          "reason": "Gemma profiling prompt, schema normalization, and profile persistence live here."
+          "reason": "DeepSeek profiling prompt, schema normalization, and profile persistence live here."
         }
       ],
-      "manual_search_terms": ["PROFILE_SCHEMA_VERSION", "profile_repository_cards", "chat_json", "gemma_profile"]
+      "manual_search_terms": ["PROFILE_SCHEMA_VERSION", "profile_repository_cards", "response_json", "repository_profile"]
     },
     {
       "id": "local_explore_tests",
@@ -417,7 +417,7 @@
           "path": "README.md",
           "start_line": 40,
           "end_line": 180,
-          "reason": "README documents standalone local exploration, LM Studio, and eval commands."
+          "reason": "README documents standalone local exploration, DeepSeek configuration, and eval commands."
         },
         {
           "path": "AGENTS.md",

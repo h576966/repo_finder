@@ -15,8 +15,9 @@ threshold. An optional read-only target-project profile improves deterministic
 fit ranking. Assessment validates evidence at an exact commit, and only that
 assessment can authorize a bounded source bundle. Deterministic code owns
 scores, verdict gates, path and SHA validation, dependency closure, hashing,
-persistence, manifests, and eval metrics. Gemma interprets validated evidence;
-FastContext only finds file and line evidence.
+persistence, manifests, and eval metrics. The configured assessment model
+interprets validated evidence; the exploration harness only finds file and line
+evidence. DeepSeek V4 Flash is the default model for both roles.
 
 Version 0.2.0 intentionally replaces the bundle MCP contract with
 `get_source_bundle(assessment_id)`. Callers using the 0.1.x candidate/task
@@ -37,7 +38,7 @@ shim can use `SOURCE_SCOUT_ROOT` when the checkout lives elsewhere.
 
 - Python 3.11+
 - GitHub personal access token for public repository access
-- LM Studio for local Gemma/FastContext profiling
+- A DeepSeek API key
 
 ## Setup
 
@@ -45,10 +46,9 @@ shim can use `SOURCE_SCOUT_ROOT` when the checkout lives elsewhere.
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m pip install -e .
 $env:GITHUB_TOKEN = "ghp_your_token_here"
-$env:LM_STUDIO_BASE_URL = "http://127.0.0.1:1234/v1"
-$env:SOURCE_SCOUT_GEMMA_MODEL = "google/gemma-4-12b-qat"
-$env:SOURCE_SCOUT_FASTCONTEXT_MODEL = "fastcontext-1.0-4b-rl"
-$env:SOURCE_SCOUT_LMSTUDIO_TIMEOUT = "120"
+$env:DEEPSEEK_API_KEY = "your_deepseek_api_key"
+# Optional request timeout; 120 seconds is the default.
+$env:SOURCE_SCOUT_MODEL_TIMEOUT = "120"
 ```
 
 ## Catalog Workflow
@@ -56,7 +56,7 @@ $env:SOURCE_SCOUT_LMSTUDIO_TIMEOUT = "120"
 ```powershell
 source-scout scout --domain personal-code --limit 500
 source-scout qualify --limit 100
-source-scout lmstudio-status --smoke-test
+source-scout model-status --smoke-test
 source-scout profile --limit 30
 source-scout evidence --domain personal-code --limit 100
 source-scout assess --candidate-id <asset_id> --task "Find a reusable route handler" --project-path .
@@ -91,13 +91,13 @@ Responsibilities stay split:
   scoring, verdicts, bounded file access, traces, manifests, and persistence.
 - Deterministic retrieval and target-fit scoring choose which candidates clear
   the shortlist; model reranking is not part of the active baseline.
-- FastContext only scouts for additional file/line evidence. It never scores or
-  decides reusability.
-- Gemma interprets the validated evidence for the task, returns dimensions and
+- The exploration harness only scouts for additional file/line evidence. It
+  never scores or decides reusability.
+- The assessment role interprets the validated evidence for the task, returns dimensions and
   evidence-linked reasons, and a model `recommended_verdict`. It never outputs
   the final score.
 
-`recommended_verdict` is Gemma's model recommendation. `final_verdict` and
+`recommended_verdict` is the model recommendation. `final_verdict` and
 `reuse_score` are deterministic Source Scout outputs after evidence coverage
 and blocker gates are applied.
 
@@ -105,7 +105,7 @@ Policy modes:
 
 - `never`: use deterministic evidence only.
 - `auto`: assess deterministic evidence first, then run one focused FastContext
-  refinement only when Gemma asks for medium/high-priority FastContext evidence.
+  refinement only when the assessment role asks for medium/high-priority evidence.
 - `always`: attempt one FastContext refinement before the final assessment,
   unless `--max-evidence-rounds 0` is set.
 
@@ -159,7 +159,7 @@ FastContext can also explore the local project you are already working in. This
 is separate from the catalog pipeline and does not write catalog rows:
 
 ```powershell
-source-scout fastcontext-status --smoke-test
+source-scout model-status --smoke-test
 source-scout explore-local --project-path . --task "Find where MCP tools are registered" --max-turns 7
 source-scout explore-local --project-path . --task "Find where MCP tools are registered" --trace-path .source_scout\fastcontext_traces\mcp-tools.json
 source-scout eval-local-explore --suite source-scout --max-turns 7 --label local-fastcontext-check
@@ -168,11 +168,10 @@ source-scout eval-local-explore --suite source-scout --max-turns 7 --label local
 Use this when relevant files are unknown and Codex would otherwise spend time on
 broad `grep`/read loops, when a task needs multi-file tracing, or when direct
 `rg` does not find enough context. Prefer direct `rg` for exact files, exact
-symbols, commands, test names, config keys, and tiny questions. FastContext uses
-LM Studio's OpenAI-compatible Responses endpoint with read-only `Read`, `Glob`,
-and `Grep` tools, then returns file and line citations. Codex still reads the
-cited files, edits, and runs tests. If LM Studio or FastContext is unavailable,
-fall back to `rg`.
+symbols, commands, test names, config keys, and tiny questions. The exploration
+harness uses the configured model API with read-only `Read`, `Glob`, and `Grep`
+tools, then returns file and line citations. Codex still reads the cited files,
+edits, and runs tests. If the API is unavailable, fall back to `rg`.
 
 The default local exploration budget is currently seven turns. Use `--max-turns 8`
 when a first result is incomplete or when calibrating deeper local exploration.
@@ -186,10 +185,6 @@ broad repository-wide searches for the same question. The harness prefers
 citation IDs from observed tool results, retries once when the model
 over-selects, and caps fallback observations so broad supporting ranges do not
 look like real success.
-
-FastContext requests use a fixed LM Studio seed by default to reduce local eval
-variance. Set `SOURCE_SCOUT_FASTCONTEXT_SEED` to an integer to override it, or to
-`none` to disable seeded requests.
 
 The local exploration eval suite lives at
 `evals/golden/local_explore_source_scout_v1.json`. It measures expected file/line
@@ -237,78 +232,50 @@ Default tools:
 | `record_reuse_outcome(candidate_id, task_signature, outcome, notes=None)` | Track selected, integrated, or rejected candidates against the original task. |
 | `explore_local_code(task, project_path, max_turns=7)` | Use FastContext to find relevant files and line ranges in a local project without catalog writes. |
 
-## LM Studio
+## Model API
 
-This project is optimized for local LM Studio on Windows. Useful commands:
+Assessment, repository profiling, and exploration all use the hosted
+`deepseek-v4-flash` model through DeepSeek's native, stateless Responses API at
+`https://api.deepseek.com/responses`. The current documented deployment behind
+that rolling API alias is `DeepSeek-V4-Flash-0731`; requests must still use
+`deepseek-v4-flash` as the model ID.
 
-```powershell
-lms ls
-lms ps
-lms server status
-lms server start
-Invoke-RestMethod http://127.0.0.1:1234/v1/models
-source-scout lmstudio-status --smoke-test
-source-scout lmstudio-status --load-gemma --smoke-test
-source-scout fastcontext-status --load-model --smoke-test
-```
+Structured assessment and final exploration turns use Responses
+`text.format` with JSON Schema. Exploration uses native function calls and
+replays the complete response output with `function_call_output`, because
+DeepSeek does not support `previous_response_id`. Thinking is disabled with
+`reasoning={"effort":"none"}` for predictable tool replay, latency, and cost.
+Transient failures use the OpenAI SDK's bounded retry policy; authentication and
+other non-retryable errors surface directly. Traces retain the response ID,
+returned model, token usage, and latency. DeepSeek Responses currently does not
+return a documented `system_fingerprint`.
 
-Default local model IDs:
+See the official [Responses API guide](https://api-docs.deepseek.com/guides/responses_api/)
+and [Create Response reference](https://api-docs.deepseek.com/api/create-response/).
 
-```text
-Gemma:       google/gemma-4-12b-qat
-FastContext: fastcontext-1.0-4b-rl
-```
-
-`source-scout profile` uses Gemma to store JSON profiles on repository cards.
-FastContext supports read-only local exploration and evidence refinement through
-the local LM Studio server.
-
-### Recommended LM Studio Gemma preset
-
-Use Source Scout's Gemma load helper before `profile` or `assess`:
+Check JSON assessment output and a native exploration tool call with:
 
 ```powershell
-source-scout lmstudio-status --load-gemma --gemma-context-length 32768 --gemma-gpu max --smoke-test
+source-scout model-status --smoke-test
 ```
 
-This runs `lms load google/gemma-4-12b-qat --context-length 32768 --gpu max
---identifier google/gemma-4-12b-qat` when Gemma is missing or loaded with a
-smaller context. The 32k context leaves headroom for task-specific assessment
-prompts that include repository metadata, the evidence ledger, Gemma profile
-data, and JSON responses. Source Scout's default LM Studio timeout is `120`
-seconds because local Gemma/FastContext calls can exceed 30 seconds on real
-assessment prompts.
-
-### Recommended LM Studio FastContext preset
-
-Use Source Scout's load helper as the default starting point:
+Set `DEEPSEEK_API_KEY` in the environment inherited by the CLI or MCP process.
+For a persistent Windows user-level variable shared by projects, run this once
+and then restart terminals, Codex, and MCP hosts so new processes inherit it:
 
 ```powershell
-source-scout fastcontext-status --load-model --context-length 65536 --gpu max --smoke-test
+[Environment]::SetEnvironmentVariable(
+  "DEEPSEEK_API_KEY",
+  "your_deepseek_api_key",
+  "User"
+)
 ```
 
-This runs `lms load fastcontext-1.0-4b-rl --context-length 65536 --gpu max
---identifier fastcontext-1.0-4b-rl`, then checks that the model is downloaded,
-loaded, and able to complete a smoke request.
+Do not commit API keys to the repository. Assessment prompts and exploration
+tool results can contain repository source and are sent to DeepSeek. Do not run
+model-backed commands for material that must remain offline.
 
-Recommended LM Studio UI settings for this machine:
-
-- Context length: `65536` for normal exploration. Raise it only when a task needs
-  very large context.
-- GPU offload: `max`.
-- Parallel/concurrent predictions: `1` while using Source Scout from Codex.
-- Temperature: `0.0` to `0.1`.
-- Keep model in memory: enabled.
-- Flash Attention: enabled.
-- Qwen/FastContext thinking: disabled for tool-call requests. Source Scout sends
-  `chat_template_kwargs.enable_thinking=false` because LM Studio rejects tools
-  with `Cannot combine structured output constraints with lazy grammar` when
-  thinking is active.
-- Structured Output: optional for smoke/simple JSON prompts. FastContext
-  exploration uses tool calling instead of combining tools with structured
-  output, and still keeps the robust JSON parser as fallback.
-
-Optional LM Studio MCP config:
+MCP config:
 
 ```json
 {
@@ -325,7 +292,8 @@ Optional LM Studio MCP config:
 }
 ```
 
-Replace `<repo-root>` with your local Source Scout checkout path.
+Replace `<repo-root>` with your local Source Scout checkout path and make sure
+the MCP process inherits `DEEPSEEK_API_KEY`.
 
 ## Local Checks
 
@@ -376,7 +344,7 @@ required-file recall, allowed-file precision, unresolved imports, total bytes,
 and SHA/hash failures. Correct no-match tasks must perform no assessment,
 FastContext, or bundle work. By default the
 command uses `--fastcontext-policy never --max-evidence-rounds 0` to keep the
-report focused on shortlist quality plus Gemma assessment and bundle creation.
+report focused on shortlist quality plus DeepSeek assessment and bundle creation.
 Treat failures as routing signals: missing expected repos point at
 shortlist/scoring issues, assessment errors or low evidence coverage point at
 assessment/evidence quality, and missing bundle files point at asset evidence or
@@ -397,10 +365,10 @@ src/source_scout/
   catalog.py         # Persistent DuckDB catalog
   pipeline.py        # Scout/qualify/gc workflow
   evidence.py        # Deterministic evidence extraction
-  lmstudio.py        # Local LM Studio API adapter
+  deepseek.py        # DeepSeek V4 Flash Responses API client
   fastcontext.py     # FastContext local exploration and evidence refinement
   local_explore_eval.py # FastContext local exploration eval runner
-  profiler.py        # Gemma repository-card profiling
+  profiler.py        # Model-backed repository-card profiling
   target_profile.py  # Read-only deterministic target-project profiling
   bundle_closure.py  # Bounded local import closure planning
   bundles.py         # Assessment-gated manifest-v2 bundle generation

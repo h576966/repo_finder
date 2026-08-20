@@ -1,10 +1,10 @@
 import json
 from typing import Any
 
-from . import catalog, lmstudio
+from . import catalog, deepseek
 
-PROMPT_VERSION = "gemma-repo-card-v3"
-PROFILE_SCHEMA_VERSION = "gemma-profile-v2"
+PROMPT_VERSION = "repository-profiler-v4"
+PROFILE_SCHEMA_VERSION = "repository-profile-v3"
 ALLOWED_REPOSITORY_TYPES = {
     "library",
     "design_system",
@@ -112,7 +112,7 @@ def _profile_messages(card: dict[str, Any]) -> list[dict[str, str]]:
     ]
 
 
-def validate_gemma_profile(profile: dict[str, Any]) -> dict[str, Any]:
+def validate_repository_profile(profile: dict[str, Any]) -> dict[str, Any]:
     repository_type = str(profile.get("repository_type", "examples"))
     if repository_type not in ALLOWED_REPOSITORY_TYPES:
         repository_type = "examples"
@@ -151,8 +151,7 @@ def validate_gemma_profile(profile: dict[str, Any]) -> dict[str, Any]:
     }
     if _is_uninformative_profile(normalized):
         raise ValueError(
-            "Gemma profile was uninformative: all quality scores are zero with no "
-            "capabilities or concerns."
+            "Model profile was uninformative: all quality scores are zero with no capabilities or concerns."
         )
     return normalized
 
@@ -172,8 +171,8 @@ async def profile_repository_cards(
     priority: str = "created-at",
     scope: str = "downloaded",
 ) -> dict[str, int]:
-    config = lmstudio.get_config()
-    await _ensure_gemma_available(config)
+    config = deepseek.get_config()
+    await _ensure_model_available(config)
     if priority == "created-at":
         cards = catalog.list_repository_cards_for_profile(
             limit,
@@ -191,8 +190,7 @@ async def profile_repository_cards(
 
     for card in cards:
         try:
-            raw_profile = await lmstudio.chat_json(
-                model_id=config.gemma_model,
+            raw_profile = await deepseek.response_json(
                 messages=_profile_messages(card),
                 config=config,
                 max_tokens=3000,
@@ -200,18 +198,17 @@ async def profile_repository_cards(
                 response_format=PROFILE_RESPONSE_FORMAT,
             )
             try:
-                profile = validate_gemma_profile(raw_profile)
+                profile = validate_repository_profile(raw_profile)
             except Exception as exc:
-                repair_response = await lmstudio.chat_json(
-                    model_id=config.gemma_model,
+                repair_response = await deepseek.response_json(
                     messages=_repair_messages(card, raw_profile, [f"{type(exc).__name__}: {exc}"]),
                     config=config,
                     max_tokens=3000,
                     attempts=1,
                     response_format=PROFILE_RESPONSE_FORMAT,
                 )
-                profile = validate_gemma_profile(repair_response)
-            catalog.update_repository_card_gemma_profile(str(card["card_id"]), profile)
+                profile = validate_repository_profile(repair_response)
+            catalog.update_repository_card_profile(str(card["card_id"]), profile)
             catalog.record_analysis_run(
                 "profile",
                 "completed",
@@ -222,7 +219,7 @@ async def profile_repository_cards(
                 },
                 repo_id=str(card["repo_id"]),
                 snapshot_id=str(card["snapshot_id"]),
-                model_id=config.gemma_model,
+                model_id=config.model_id,
                 prompt_version=PROMPT_VERSION,
             )
             profiled += 1
@@ -233,7 +230,7 @@ async def profile_repository_cards(
                 {"card_id": card.get("card_id"), "error": str(exc)},
                 repo_id=str(card.get("repo_id", "")),
                 snapshot_id=str(card.get("snapshot_id", "")),
-                model_id=config.gemma_model,
+                model_id=config.model_id,
                 prompt_version=PROMPT_VERSION,
             )
             failed += 1
@@ -241,12 +238,10 @@ async def profile_repository_cards(
     return {"profiled_cards": profiled, "failed_cards": failed, "available_cards": len(cards)}
 
 
-async def _ensure_gemma_available(config: lmstudio.LMStudioConfig) -> None:
-    status = await lmstudio.validate_models(config)
-    if not status["gemma_available"]:
-        raise lmstudio.LMStudioError(
-            f"Configured Gemma model '{config.gemma_model}' is not available in LM Studio."
-        )
+async def _ensure_model_available(config: deepseek.ModelConfig) -> None:
+    status = await deepseek.validate_model(config)
+    if not status["model_available"]:
+        raise deepseek.ModelError(f"Configured DeepSeek model '{config.model_id}' is not available.")
 
 
 def _repair_messages(

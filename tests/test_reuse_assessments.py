@@ -50,7 +50,7 @@ def _assessment(
         commit_sha="abc123",
         task="Find a reusable API route handler",
         task_signature="task123",
-        model_id="google/gemma-4-12b-qat",
+        model_id="google/assessment_model-4-12b-qat",
         prompt_version="reuse-assessor-v1",
         schema_version="reuse-assessment-v1",
         analyzer_version="deterministic-assessment-v1",
@@ -180,14 +180,18 @@ def test_latest_reuse_assessment_preserves_history() -> None:
         "task123",
         "input123",
     )
-    row_count = catalog.get_connection().execute(
-        """
+    row_count = (
+        catalog.get_connection()
+        .execute(
+            """
         SELECT COUNT(*)
         FROM reuse_assessments
         WHERE candidate_id = ? AND task_signature = ? AND input_fingerprint = ?
         """,
-        ["asset-route-handlers", "task123", "input123"],
-    ).fetchone()[0]
+            ["asset-route-handlers", "task123", "input123"],
+        )
+        .fetchone()[0]
+    )
 
     assert first_id != second_id
     assert row_count == 2

@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from source_scout import assessment_rules, assessor, catalog, evidence_ledger, fastcontext, lmstudio, pipeline
+from source_scout import assessment_rules, assessor, catalog, deepseek, evidence_ledger, fastcontext, pipeline
 
 
 def _write_fixture(root: Path, *, with_evidence_file: bool = True) -> None:
@@ -78,8 +78,8 @@ def _candidate(
     repo_id = catalog.upsert_repository(_repo_metadata(license_spdx=license_spdx), "test")
     snapshot_id = catalog.upsert_snapshot(repo_id, "abc123", "main", snapshot_root)
     card = pipeline.build_repository_card(snapshot_root)
-    card["gemma_profile"] = {
-        "schema_version": "gemma-profile-v2",
+    card["repository_profile"] = {
+        "schema_version": "repository-profile-v3",
         "repository_type": "reference_application",
         "capabilities": [{"name": "route-handlers", "confidence": 0.8, "evidence": ["src/app/api/route.ts"]}],
         "likely_usefulness": 0.8,
@@ -181,7 +181,7 @@ async def test_assess_candidate_normalizes_valid_response_and_records_analysis(
     candidate_id = _candidate(tmp_path)
     evidence_id = _first_evidence_id(candidate_id, task)
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         assert kwargs["response_format"] == assessor.ASSESSMENT_RESPONSE_FORMAT
         assert _allowed_ids(kwargs["messages"]) == ["E1"]
         schema = kwargs["response_format"]["json_schema"]["schema"]
@@ -191,7 +191,7 @@ async def test_assess_candidate_normalizes_valid_response_and_records_analysis(
         assert "stable_evidence_id" not in payload["evidence_ledger"][0]
         return _valid_response(evidence_id)
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
@@ -207,10 +207,12 @@ async def test_assess_candidate_normalizes_valid_response_and_records_analysis(
     assert result.evidence_ledger[0]["evidence_id"] == evidence_id
     assert result.evidence_ledger[0]["stable_evidence_id"].startswith("E_")
     assert result.license_status == assessment_rules.LICENSE_PERMISSIVE_DETECTED
-    runs = catalog.get_connection().execute(
-        "SELECT stage_name, status, model_id FROM analysis_runs WHERE stage_name = 'reuse-assess'"
-    ).fetchall()
-    assert runs == [("reuse-assess", "completed", lmstudio.DEFAULT_GEMMA_MODEL)]
+    runs = (
+        catalog.get_connection()
+        .execute("SELECT stage_name, status, model_id FROM analysis_runs WHERE stage_name = 'reuse-assess'")
+        .fetchall()
+    )
+    assert runs == [("reuse-assess", "completed", deepseek.DEEPSEEK_MODEL)]
 
 
 @pytest.mark.asyncio
@@ -229,14 +231,14 @@ async def test_assess_candidate_persists_target_profile_in_context_and_cache(
     (target / "app.tsx").write_text("export const app = true\n", encoding="utf-8")
     calls = 0
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         nonlocal calls
         calls += 1
         payload = _prompt_payload_from_messages(kwargs["messages"])
         assert payload["target_project"]["framework_signals"] == ["nextjs", "react"]
         return _valid_response("E1")
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     first = await assessor.assess_candidate(
         candidate_id,
@@ -267,12 +269,12 @@ async def test_assess_candidate_accepts_recommendation_verdict_alias(
     candidate_id = _candidate(tmp_path)
     evidence_id = _first_evidence_id(candidate_id, task)
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         response = _valid_response(evidence_id)
         response["recommendation_verdict"] = response.pop("recommended_verdict")
         return response
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
@@ -289,7 +291,7 @@ async def test_assess_candidate_clamps_numeric_scores(
     candidate_id = _candidate(tmp_path)
     evidence_id = _first_evidence_id(candidate_id, task)
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return _valid_response(
             evidence_id,
             model_confidence=2,
@@ -302,7 +304,7 @@ async def test_assess_candidate_clamps_numeric_scores(
             },
         )
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
@@ -323,14 +325,14 @@ async def test_assess_candidate_repairs_invalid_enum(
     evidence_id = _first_evidence_id(candidate_id, task)
     calls = 0
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         nonlocal calls
         calls += 1
         if calls == 1:
             return _valid_response(evidence_id, recommended_verdict="maybe")
         return _valid_response(evidence_id)
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
@@ -349,10 +351,10 @@ async def test_assess_candidate_falls_back_after_unknown_evidence_ids(
 ) -> None:
     candidate_id = _candidate(tmp_path)
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return _valid_response("E_unknown")
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(
         candidate_id,
@@ -363,25 +365,27 @@ async def test_assess_candidate_falls_back_after_unknown_evidence_ids(
     assert result.final_verdict == assessment_rules.VERDICT_INSUFFICIENT_EVIDENCE
     assert result.requirement_count == 0
     assert any("Unknown evidence_id" in note for note in result.validation_notes)
-    statuses = catalog.get_connection().execute(
-        "SELECT status FROM analysis_runs WHERE stage_name = 'reuse-assess'"
-    ).fetchall()
+    statuses = (
+        catalog.get_connection()
+        .execute("SELECT status FROM analysis_runs WHERE stage_name = 'reuse-assess'")
+        .fetchall()
+    )
     assert statuses == [("completed_fallback",)]
 
 
 @pytest.mark.asyncio
-async def test_assess_candidate_does_not_persist_when_gemma_is_unreachable(
+async def test_assess_candidate_does_not_persist_when_assessment_model_is_unreachable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     candidate_id = _candidate(tmp_path)
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        raise lmstudio.LMStudioError("local server unavailable")
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise deepseek.ModelError("local server unavailable")
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
-    with pytest.raises(lmstudio.LMStudioError, match="local server unavailable"):
+    with pytest.raises(deepseek.ModelError, match="local server unavailable"):
         await assessor.assess_candidate(
             candidate_id,
             "Assess reusable route handler",
@@ -392,7 +396,7 @@ async def test_assess_candidate_does_not_persist_when_gemma_is_unreachable(
 
 
 @pytest.mark.asyncio
-async def test_assess_candidate_score_and_verdict_are_not_controlled_by_gemma(
+async def test_assess_candidate_score_and_verdict_are_not_controlled_by_assessment_model(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -400,7 +404,7 @@ async def test_assess_candidate_score_and_verdict_are_not_controlled_by_gemma(
     candidate_id = _candidate(tmp_path)
     evidence_id = _first_evidence_id(candidate_id, task)
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return _valid_response(
             evidence_id,
             recommended_verdict="select",
@@ -413,7 +417,7 @@ async def test_assess_candidate_score_and_verdict_are_not_controlled_by_gemma(
             },
         )
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
@@ -432,10 +436,10 @@ async def test_model_verdict_is_stored_separately_from_final_verdict(
     candidate_id = _candidate(tmp_path)
     evidence_id = _first_evidence_id(candidate_id, task)
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return _valid_response(evidence_id, recommended_verdict="reject")
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
@@ -456,10 +460,10 @@ async def test_assess_candidate_license_metadata_is_passive(
     candidate_id = _candidate(tmp_path, license_spdx=None)
     evidence_id = _first_evidence_id(candidate_id, task)
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return _valid_response(evidence_id)
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
@@ -478,7 +482,7 @@ async def test_requirement_status_is_preserved_and_counts_are_separate(
     candidate_id = _candidate(tmp_path)
     evidence_id = _first_evidence_id(candidate_id, task)
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return _valid_response(
             evidence_id,
             requirement_assessments=[
@@ -495,7 +499,7 @@ async def test_requirement_status_is_preserved_and_counts_are_separate(
             ],
         )
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
@@ -514,7 +518,7 @@ async def test_license_blocker_is_passive_metadata(
     candidate_id = _candidate(tmp_path)
     evidence_id = _first_evidence_id(candidate_id, task)
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return _valid_response(
             evidence_id,
             blockers=[
@@ -527,7 +531,7 @@ async def test_license_blocker_is_passive_metadata(
             ],
         )
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
@@ -544,7 +548,7 @@ async def test_high_evidence_backed_missing_functionality_is_hard_blocker(
     candidate_id = _candidate(tmp_path)
     evidence_id = _first_evidence_id(candidate_id, task)
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return _valid_response(
             evidence_id,
             blockers=[
@@ -557,7 +561,7 @@ async def test_high_evidence_backed_missing_functionality_is_hard_blocker(
             ],
         )
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
@@ -574,7 +578,7 @@ async def test_other_blocker_without_evidence_is_not_hard_blocker(
     candidate_id = _candidate(tmp_path)
     evidence_id = _first_evidence_id(candidate_id, task)
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return _valid_response(
             evidence_id,
             blockers=[
@@ -587,7 +591,7 @@ async def test_other_blocker_without_evidence_is_not_hard_blocker(
             ],
         )
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
@@ -605,12 +609,12 @@ async def test_assess_candidate_cache_hit_and_force_bypass(
     evidence_id = _first_evidence_id(candidate_id, task)
     calls = 0
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         nonlocal calls
         calls += 1
         return _valid_response(evidence_id)
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     first = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
     cached = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
@@ -626,19 +630,19 @@ async def test_assess_candidate_cache_hit_and_force_bypass(
 
 
 @pytest.mark.asyncio
-async def test_assess_candidate_empty_evidence_skips_gemma_and_persists_safe_result(
+async def test_assess_candidate_empty_evidence_skips_assessment_model_and_persists_safe_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
     candidate_id = _candidate(tmp_path, evidence_paths=[])
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         nonlocal calls
         calls += 1
         return {}
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(
         candidate_id,
@@ -666,7 +670,7 @@ async def test_never_does_not_invoke_or_consume_fastcontext(
         snapshot_id=str(catalog.get_asset_detail(candidate_id)["snapshot_id"]),
         task_signature=catalog.task_signature(task),
         capability="route-handlers",
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        model_id=deepseek.DEEPSEEK_MODEL,
         prompt_version="fastcontext-refine-v2",
         schema_version="fastcontext-evidence-v1",
         query="prior",
@@ -678,11 +682,11 @@ async def test_never_does_not_invoke_or_consume_fastcontext(
     async def fail_refine(*args: Any, **kwargs: Any) -> dict[str, Any]:
         raise AssertionError("FastContext should not be invoked")
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return _valid_response(_allowed_ids(kwargs["messages"])[0])
 
     monkeypatch.setattr(fastcontext, "refine_candidate", fail_refine)
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
@@ -699,7 +703,7 @@ async def test_auto_only_invokes_fastcontext_for_eligible_missing_evidence(
     candidate_id = _candidate(tmp_path)
     refine_calls = 0
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return _valid_response(
             _allowed_ids(kwargs["messages"])[0],
             missing_evidence=_missing_fastcontext("low"),
@@ -711,7 +715,7 @@ async def test_auto_only_invokes_fastcontext_for_eligible_missing_evidence(
         refine_calls += 1
         return {}
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
     monkeypatch.setattr(fastcontext, "refine_candidate", fake_refine)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="auto")
@@ -730,7 +734,7 @@ async def test_auto_merges_successful_fastcontext_evidence_and_reassesses(
     chat_calls = 0
     refine_calls = 0
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         nonlocal chat_calls
         chat_calls += 1
         ids = _allowed_ids(kwargs["messages"])
@@ -755,7 +759,7 @@ async def test_auto_merges_successful_fastcontext_evidence_and_reassesses(
             "notes": ["schema found"],
         }
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
     monkeypatch.setattr(fastcontext, "refine_candidate", fake_refine)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="auto")
@@ -765,8 +769,7 @@ async def test_auto_merges_successful_fastcontext_evidence_and_reassesses(
     assert result.fastcontext_status == "completed"
     assert any(item["path"] == "src/lib/schema.ts" for item in result.evidence_ledger)
     assert any(
-        "FastContext refinement completed: refinement_id=ref-1" in note
-        for note in result.validation_notes
+        "FastContext refinement completed: refinement_id=ref-1" in note for note in result.validation_notes
     )
 
 
@@ -784,7 +787,7 @@ async def test_auto_does_not_reuse_fastcontext_evidence_from_another_task(
         snapshot_id=str(catalog.get_asset_detail(candidate_id)["snapshot_id"]),
         task_signature=catalog.task_signature(other_task),
         capability="route-handlers",
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        model_id=deepseek.DEEPSEEK_MODEL,
         prompt_version="fastcontext-refine-v2",
         schema_version="fastcontext-evidence-v1",
         query="other task focused query",
@@ -795,7 +798,7 @@ async def test_auto_does_not_reuse_fastcontext_evidence_from_another_task(
     chat_calls = 0
     refine_calls = 0
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         nonlocal chat_calls
         chat_calls += 1
         ids = _allowed_ids(kwargs["messages"])
@@ -818,7 +821,7 @@ async def test_auto_does_not_reuse_fastcontext_evidence_from_another_task(
             "notes": [],
         }
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
     monkeypatch.setattr(fastcontext, "refine_candidate", fake_refine)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="auto")
@@ -841,7 +844,7 @@ async def test_auto_reuses_existing_fastcontext_evidence_when_eligible(
         snapshot_id=str(catalog.get_asset_detail(candidate_id)["snapshot_id"]),
         task_signature=catalog.task_signature(task),
         capability="route-handlers",
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        model_id=deepseek.DEEPSEEK_MODEL,
         prompt_version="fastcontext-refine-v2",
         schema_version="fastcontext-evidence-v1",
         query="prior focused query",
@@ -852,7 +855,7 @@ async def test_auto_reuses_existing_fastcontext_evidence_when_eligible(
     chat_calls = 0
     refine_calls = 0
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         nonlocal chat_calls
         chat_calls += 1
         ids = _allowed_ids(kwargs["messages"])
@@ -869,7 +872,7 @@ async def test_auto_reuses_existing_fastcontext_evidence_when_eligible(
         refine_calls += 1
         return {}
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
     monkeypatch.setattr(fastcontext, "refine_candidate", fake_refine)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="auto")
@@ -878,10 +881,7 @@ async def test_auto_reuses_existing_fastcontext_evidence_when_eligible(
     assert refine_calls == 0
     assert result.fastcontext_status == "reused_existing"
     assert any(item["path"] == "src/lib/schema.ts" for item in result.evidence_ledger)
-    assert any(
-        "FastContext refinement reused:" in note
-        for note in result.validation_notes
-    )
+    assert any("FastContext refinement reused:" in note for note in result.validation_notes)
 
 
 @pytest.mark.asyncio
@@ -903,12 +903,12 @@ async def test_always_attempts_fastcontext_before_assessment(
             "notes": [],
         }
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         ids = _allowed_ids(kwargs["messages"])
         return _valid_response(ids[-1])
 
     monkeypatch.setattr(fastcontext, "refine_candidate", fake_refine)
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="always")
 
@@ -926,7 +926,7 @@ async def test_graceful_refinement_failure_keeps_deterministic_score(
     candidate_id = _candidate(tmp_path)
     chat_calls = 0
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         nonlocal chat_calls
         chat_calls += 1
         return _valid_response(
@@ -936,9 +936,9 @@ async def test_graceful_refinement_failure_keeps_deterministic_score(
         )
 
     async def fake_refine(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        raise RuntimeError("local model unavailable")
+        raise RuntimeError("model unavailable")
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
     monkeypatch.setattr(fastcontext, "refine_candidate", fake_refine)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="auto")
@@ -946,10 +946,7 @@ async def test_graceful_refinement_failure_keeps_deterministic_score(
     assert chat_calls == 2
     assert result.fastcontext_status == "failed"
     assert result.confidence == 0.95
-    assert any(
-        "FastContext refinement failed: local model unavailable" in note
-        for note in result.validation_notes
-    )
+    assert any("FastContext refinement failed: model unavailable" in note for note in result.validation_notes)
 
 
 @pytest.mark.asyncio
@@ -961,7 +958,7 @@ async def test_round_limit_zero_blocks_fastcontext(
     candidate_id = _candidate(tmp_path)
     refine_calls = 0
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return _valid_response(
             _allowed_ids(kwargs["messages"])[0],
             missing_evidence=_missing_fastcontext("high"),
@@ -973,7 +970,7 @@ async def test_round_limit_zero_blocks_fastcontext(
         refine_calls += 1
         return {}
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
     monkeypatch.setattr(fastcontext, "refine_candidate", fake_refine)
 
     result = await assessor.assess_candidate(
@@ -1000,7 +997,7 @@ async def test_always_zero_rounds_does_not_consume_prior_fastcontext(
         snapshot_id=str(catalog.get_asset_detail(candidate_id)["snapshot_id"]),
         task_signature=catalog.task_signature(task),
         capability="route-handlers",
-        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        model_id=deepseek.DEEPSEEK_MODEL,
         prompt_version="fastcontext-refine-v2",
         schema_version="fastcontext-evidence-v1",
         query="prior focused query",
@@ -1010,7 +1007,7 @@ async def test_always_zero_rounds_does_not_consume_prior_fastcontext(
     )
     refine_calls = 0
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return _valid_response(_allowed_ids(kwargs["messages"])[0])
 
     async def fake_refine(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -1018,7 +1015,7 @@ async def test_always_zero_rounds_does_not_consume_prior_fastcontext(
         refine_calls += 1
         return {}
 
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
     monkeypatch.setattr(fastcontext, "refine_candidate", fake_refine)
 
     result = await assessor.assess_candidate(
@@ -1049,7 +1046,7 @@ async def test_fastcontext_evidence_cannot_directly_raise_score(
             "notes": [],
         }
 
-    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_response_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         ids = _allowed_ids(kwargs["messages"])
         return _valid_response(
             ids[-1],
@@ -1063,7 +1060,7 @@ async def test_fastcontext_evidence_cannot_directly_raise_score(
         )
 
     monkeypatch.setattr(fastcontext, "refine_candidate", fake_refine)
-    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+    monkeypatch.setattr(assessor.deepseek, "response_json", fake_response_json)
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="always")
 

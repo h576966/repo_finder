@@ -85,26 +85,26 @@ NODE_AI_DEPENDENCIES = {
 NEXTJS_UI_CAPABILITIES = {
     "dashboard": "dashboard sidebar admin",
     "forms": "form validation react-hook-form zod",
-    "data-table": "\"data table\" tanstack table",
+    "data-table": '"data table" tanstack table',
     "auth-ui": "auth login sign-in",
     "settings": "settings account profile",
     "navigation": "navigation sidebar layout",
-    "command-palette": "\"command palette\" cmdk",
+    "command-palette": '"command palette" cmdk',
     "file-upload": "upload dropzone file",
     "charts": "charts recharts dashboard",
     "admin-interface": "admin dashboard interface",
 }
 PERSONAL_CODE_QUERY_PACKS = [
     ("dashboard", "dashboard admin nextjs react tailwind", "TypeScript"),
-    ("data-table", "\"data table\" tanstack table nextjs", "TypeScript"),
+    ("data-table", '"data table" tanstack table nextjs', "TypeScript"),
     ("forms", "react-hook-form zod nextjs form validation", "TypeScript"),
     ("route-handlers", "nextjs route handler api route", "TypeScript"),
-    ("server-actions", "\"use server\" \"server actions\" nextjs", "TypeScript"),
+    ("server-actions", '"use server" "server actions" nextjs', "TypeScript"),
     ("data-access", "drizzle prisma database schema nextjs", "TypeScript"),
-    ("node-ai-sdk", "\"ai sdk\" openai anthropic nextjs", "TypeScript"),
-    ("model-server-integration", "\"openai compatible\" lm studio ollama", "TypeScript"),
-    ("llm-harness", "\"llm\" harness structured output tool calling", "Python"),
-    ("local-ai-integration", "\"local ai\" ollama lmstudio llama.cpp", "Python"),
+    ("node-ai-sdk", '"ai sdk" openai anthropic nextjs', "TypeScript"),
+    ("model-server-integration", '"openai compatible" lm studio ollama', "TypeScript"),
+    ("llm-harness", '"llm" harness structured output tool calling', "Python"),
+    ("local-ai-integration", '"local ai" ollama lmstudio llama.cpp', "Python"),
     ("rag-retrieval", "rag retrieval embeddings vector search", "Python"),
     ("eval-harness", "llm eval benchmark golden tasks", "Python"),
     ("data-pipeline", "duckdb polars pandas data pipeline", "Python"),
@@ -352,9 +352,7 @@ def _python_manifests(root: Path) -> dict[str, Any]:
             except OSError:
                 continue
             dependencies = [
-                line.strip()
-                for line in lines
-                if line.strip() and not line.lstrip().startswith(("#", "-"))
+                line.strip() for line in lines if line.strip() and not line.lstrip().startswith(("#", "-"))
             ]
             manifests[rel.as_posix()] = {
                 "name": None,

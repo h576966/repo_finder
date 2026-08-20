@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 import httpx
 
-from . import assessment_rules, catalog, evidence_ledger, lmstudio
+from . import assessment_rules, catalog, deepseek, evidence_ledger
 from .assessor_response import AssessorError, _normalize_response, _validation_errors
 from .models import (
     AssessmentDimensions,
@@ -18,9 +18,9 @@ from .models import (
 )
 from .target_profile import TargetProfileV1, build_target_profile
 
-PROMPT_VERSION = "gemma-reuse-assessor-v4"
+PROMPT_VERSION = "reuse-assessor-v5"
 SCHEMA_VERSION = "reuse-assessment-v3"
-ANALYZER_VERSION = "gemma-reuse-assessor-v3"
+ANALYZER_VERSION = "reuse-assessor-v4"
 _EVIDENCE_IDS_SCHEMA = {
     "type": "array",
     "items": {"type": "string"},
@@ -188,13 +188,13 @@ PERMISSIVE_LICENSES = {
 
 __all__ = ["AssessmentRuntime", "AssessorError", "assess_candidate", "assessment_to_jsonable"]
 
-ChatJsonFn = Callable[..., Awaitable[dict[str, Any]]]
+ResponseJsonFn = Callable[..., Awaitable[dict[str, Any]]]
 FastContextRefineFn = Callable[..., Awaitable[dict[str, Any]]]
 
 
 @dataclass(frozen=True)
 class AssessmentRuntime:
-    chat_json: ChatJsonFn | None = None
+    response_json: ResponseJsonFn | None = None
     refine_candidate: FastContextRefineFn | None = None
 
 
@@ -216,9 +216,7 @@ async def assess_candidate(
     if max_evidence_rounds < 0 or max_evidence_rounds > 2:
         raise AssessorError("max_evidence_rounds must be between 0 and 2.")
     profile = (
-        build_target_profile(project_path)
-        if project_path is not None and str(project_path).strip()
-        else None
+        build_target_profile(project_path) if project_path is not None and str(project_path).strip() else None
     )
 
     if fastcontext_policy == "never":
@@ -329,7 +327,7 @@ async def _assess_context(
                 },
                 repo_id=str(context["asset"]["repo_id"]),
                 snapshot_id=str(context["asset"]["snapshot_id"]),
-                model_id=str(context["config"].gemma_model),
+                model_id=str(context["config"].model_id),
                 prompt_version=PROMPT_VERSION,
                 analyzer_version=ANALYZER_VERSION,
             )
@@ -340,17 +338,16 @@ async def _assess_context(
             context,
             status="completed_fallback",
             validation_notes=[
-                "No validated deterministic evidence was available; skipped Gemma assessment.",
+                "No validated deterministic evidence was available; skipped model assessment.",
                 *context["evidence_ledger"].validation_notes,
             ],
         )
 
     raw_response: dict[str, Any] | None = None
     validation_errors: list[str] = []
-    chat_json = _runtime_chat_json(runtime)
+    response_json = _runtime_response_json(runtime)
     try:
-        raw_response = await chat_json(
-            model_id=str(context["config"].gemma_model),
+        raw_response = await response_json(
             messages=_assessment_messages(context),
             config=context["config"],
             transport=transport,
@@ -360,13 +357,12 @@ async def _assess_context(
             response_format=ASSESSMENT_RESPONSE_FORMAT,
         )
         normalized = _normalize_response(raw_response, context["evidence_id_map"])
-    except lmstudio.LMStudioError:
+    except deepseek.ModelError:
         raise
     except Exception as exc:
         validation_errors = _validation_errors(exc)
         try:
-            repair_response = await chat_json(
-                model_id=str(context["config"].gemma_model),
+            repair_response = await response_json(
                 messages=_repair_messages(context, raw_response, validation_errors),
                 config=context["config"],
                 transport=transport,
@@ -381,18 +377,18 @@ async def _assess_context(
                 normalized,
                 status="completed_repaired",
                 validation_notes=[
-                    "Initial Gemma reuse assessment response required repair.",
+                    "Initial model reuse assessment response required repair.",
                     *validation_errors,
                 ],
             )
-        except lmstudio.LMStudioError:
+        except deepseek.ModelError:
             raise
         except Exception as repair_exc:
             return _persist_safe_assessment(
                 context,
                 status="completed_fallback",
                 validation_notes=[
-                    "Gemma reuse assessment response failed validation after one repair attempt.",
+                    "Model reuse assessment response failed validation after one repair attempt.",
                     *validation_errors,
                     *_validation_errors(repair_exc),
                 ],
@@ -534,10 +530,10 @@ async def _attempt_fastcontext_refinement(
     return evidence_paths, event
 
 
-def _runtime_chat_json(runtime: AssessmentRuntime | None) -> ChatJsonFn:
-    if runtime is not None and runtime.chat_json is not None:
-        return runtime.chat_json
-    return lmstudio.chat_json
+def _runtime_response_json(runtime: AssessmentRuntime | None) -> ResponseJsonFn:
+    if runtime is not None and runtime.response_json is not None:
+        return runtime.response_json
+    return deepseek.response_json
 
 
 def _runtime_refine_candidate(runtime: AssessmentRuntime | None) -> FastContextRefineFn:
@@ -672,7 +668,7 @@ def _load_context(
         fastcontext_evidence_paths=fastcontext_evidence_paths,
     )
     license_status = _license_status(repo)
-    config = lmstudio.get_config()
+    config = deepseek.get_config()
     bundle_manifest = _matching_bundle_manifest(
         candidate_id=candidate_id,
         task_signature=task_sig,
@@ -692,7 +688,7 @@ def _load_context(
         target_profile=target_profile,
     )
     fingerprint_payload = {
-        "model_id": config.gemma_model,
+        "model_id": config.model_id,
         "prompt_version": PROMPT_VERSION,
         "schema_version": SCHEMA_VERSION,
         "analyzer_version": ANALYZER_VERSION,
@@ -851,7 +847,7 @@ def _prompt_payload(
             "readme_excerpt": card.get("readme_excerpt"),
             "stack_signals": card["stack_signals"],
             "deterministic_features": card["deterministic_features"],
-            "gemma_profile": card.get("gemma_profile"),
+            "repository_profile": card.get("repository_profile"),
         },
         "source_bundle_manifest": bundle_manifest,
         "evidence_ledger": [_prompt_evidence_item(item) for item in evidence_items],
@@ -897,7 +893,10 @@ def _persist_assessment(
         ),
     ]
     if normalized["needs_fastcontext"]:
-        notes.append(f"Gemma requested FastContext while fastcontext_policy={context['fastcontext_policy']}.")
+        notes.append(
+            "The assessment model requested exploration while "
+            f"fastcontext_policy={context['fastcontext_policy']}."
+        )
     assessment = ReuseAssessmentResult(
         candidate_id=str(context["asset"]["asset_id"]),
         repo_id=str(context["asset"]["repo_id"]),
@@ -905,7 +904,7 @@ def _persist_assessment(
         commit_sha=str(context["asset"]["commit_sha"]),
         task=str(context["task"]),
         task_signature=str(context["task_signature"]),
-        model_id=str(context["config"].gemma_model),
+        model_id=str(context["config"].model_id),
         prompt_version=PROMPT_VERSION,
         schema_version=SCHEMA_VERSION,
         analyzer_version=ANALYZER_VERSION,
@@ -964,7 +963,7 @@ def _persist_safe_assessment(
         commit_sha=str(context["asset"]["commit_sha"]),
         task=str(context["task"]),
         task_signature=str(context["task_signature"]),
-        model_id=str(context["config"].gemma_model),
+        model_id=str(context["config"].model_id),
         prompt_version=PROMPT_VERSION,
         schema_version=SCHEMA_VERSION,
         analyzer_version=ANALYZER_VERSION,

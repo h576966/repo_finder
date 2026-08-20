@@ -288,11 +288,9 @@ def _write_generic_admin_fixture(root: Path) -> None:
 
 def _profile(capability_name: str, evidence_paths: list[str], confidence: float = 0.9) -> dict:
     return {
-        "schema_version": "gemma-profile-v2",
+        "schema_version": "repository-profile-v3",
         "repository_type": "reference_application",
-        "capabilities": [
-            {"name": capability_name, "confidence": confidence, "evidence": evidence_paths}
-        ],
+        "capabilities": [{"name": capability_name, "confidence": confidence, "evidence": evidence_paths}],
         "likely_usefulness": 0.8,
         "extractability": 0.8,
         "maintenance_quality": 0.7,
@@ -303,7 +301,7 @@ def _profile(capability_name: str, evidence_paths: list[str], confidence: float 
 
 def _all_zero_profile() -> dict:
     return {
-        "schema_version": "gemma-profile-v2",
+        "schema_version": "repository-profile-v3",
         "repository_type": "examples",
         "capabilities": [],
         "likely_usefulness": 0,
@@ -354,7 +352,7 @@ def test_search_assets_treats_all_zero_empty_profile_as_absent(tmp_path: Path) -
         snapshot_id = catalog.upsert_snapshot(repo_id, f"{owner}sha", "main", root)
         card = pipeline.build_repository_card(root)
         if profile is not None:
-            card["gemma_profile"] = profile
+            card["repository_profile"] = profile
         catalog.upsert_repository_card(snapshot_id, card)
         return catalog.upsert_asset(
             snapshot_id,
@@ -578,9 +576,10 @@ def test_metadata_gates_reject_stale_old_forks_templates_mirrors_and_large_repos
     )
     assert pipeline._passes_metadata_gates({**base, "fork": True}) == (False, "fork")
     assert pipeline._passes_metadata_gates({**base, "is_template": True}) == (False, "template")
-    assert pipeline._passes_metadata_gates(
-        {**base, "size": pipeline.MAX_REPOSITORY_SIZE_KB + 1}
-    ) == (False, "too large")
+    assert pipeline._passes_metadata_gates({**base, "size": pipeline.MAX_REPOSITORY_SIZE_KB + 1}) == (
+        False,
+        "too large",
+    )
     assert pipeline._passes_metadata_gates({**base, "created_at": None}) == (
         False,
         "missing created_at",
@@ -1237,7 +1236,7 @@ def test_bundle_rejects_superseded_snapshot_and_changed_evidence(tmp_path: Path)
     newer_snapshot_id = catalog.upsert_snapshot(repo_id, "newer-sha", "main", newer_root)
     catalog.get_connection().execute(
         "UPDATE snapshots SET indexed_at = ? WHERE snapshot_id = ?",
-        ["2026-08-02T00:00:00+00:00", newer_snapshot_id],
+        ["9999-12-31T23:59:59+00:00", newer_snapshot_id],
     )
     with pytest.raises(ToolError, match="superseded catalog snapshot"):
         bundles.create_source_bundle(assessment_id)
@@ -1283,13 +1282,11 @@ def test_select_bundle_reports_path_alias_without_guessing(tmp_path: Path) -> No
     result = bundles.create_source_bundle(assessment_id)
 
     assert result.bundle_mode == "assessment"
-    assert result.unresolved_local_imports == [
-        "src/entry.ts -> @/lib/helper (path_alias_not_supported)"
-    ]
+    assert result.unresolved_local_imports == ["src/entry.ts -> @/lib/helper (path_alias_not_supported)"]
     assert "without guessing" in result.warnings[0]
 
 
-def test_search_assets_uses_gemma_profile_and_ui_scores(tmp_path: Path) -> None:
+def test_search_assets_uses_repository_profile_and_ui_scores(tmp_path: Path) -> None:
     good_root = tmp_path / "good"
     good_root.mkdir()
     _write_nextjs_fixture(good_root)
@@ -1299,7 +1296,7 @@ def test_search_assets_uses_gemma_profile_and_ui_scores(tmp_path: Path) -> None:
     )
     good_snapshot_id = catalog.upsert_snapshot(good_repo_id, "goodsha", "main", good_root)
     good_card = pipeline.build_repository_card(good_root)
-    good_card["gemma_profile"] = _profile(
+    good_card["repository_profile"] = _profile(
         "Complex data tables",
         ["components/data-table/data-table.tsx"],
     )
@@ -1328,7 +1325,7 @@ def test_search_assets_uses_gemma_profile_and_ui_scores(tmp_path: Path) -> None:
     )
     noisy_snapshot_id = catalog.upsert_snapshot(noisy_repo_id, "noisysha", "main", noisy_root)
     noisy_card = pipeline.build_repository_card(noisy_root)
-    noisy_card["gemma_profile"] = _profile("Dashboard shell", ["app/dashboard/page.tsx"])
+    noisy_card["repository_profile"] = _profile("Dashboard shell", ["app/dashboard/page.tsx"])
     catalog.upsert_repository_card(noisy_snapshot_id, noisy_card)
     catalog.upsert_asset(
         noisy_snapshot_id,
@@ -1370,7 +1367,7 @@ def test_search_assets_skips_weak_label_even_with_good_profile(tmp_path: Path) -
     )
     weak_snapshot_id = catalog.upsert_snapshot(weak_repo_id, "weaksha", "main", weak_root)
     weak_card = pipeline.build_repository_card(weak_root)
-    weak_card["gemma_profile"] = _profile("High quality app", ["src/app/admin/page.tsx"])
+    weak_card["repository_profile"] = _profile("High quality app", ["src/app/admin/page.tsx"])
     catalog.upsert_repository_card(weak_snapshot_id, weak_card)
     catalog.upsert_asset(
         weak_snapshot_id,

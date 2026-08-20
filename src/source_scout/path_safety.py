@@ -36,7 +36,7 @@ def normalize_workspace_reference(
             return "."
         prefix = f"{root_posix}/"
         if candidate_text.lower().startswith(prefix.lower()):
-            return candidate_text[len(prefix):] or "."
+            return candidate_text[len(prefix) :] or "."
 
     if not allow_glob and not has_glob_meta(cleaned) and Path(cleaned).is_absolute():
         try:
@@ -122,12 +122,15 @@ def is_safe_relative_result(
 
 
 def safe_glob_pattern(root: Path, pattern: str) -> str:
-    cleaned = normalize_workspace_reference(
-        root.resolve(),
-        pattern,
-        strip_line=False,
-        allow_glob=True,
-    ) or "**/*"
+    cleaned = (
+        normalize_workspace_reference(
+            root.resolve(),
+            pattern,
+            strip_line=False,
+            allow_glob=True,
+        )
+        or "**/*"
+    )
     if Path(cleaned).is_absolute() or cleaned.startswith("/"):
         raise PathSafetyError(f"Glob pattern must be relative: {pattern}")
     if ".." in PurePosixPath(cleaned).parts:
@@ -149,16 +152,12 @@ def workspace_suffix_reference(
     *,
     allow_glob: bool,
 ) -> str | None:
-    parts = [
-        part
-        for part in PurePosixPath(cleaned).parts
-        if part not in {"", ".", "/"}
-    ]
+    parts = [part for part in PurePosixPath(cleaned).parts if part not in {"", ".", "/"}]
     root_name = root.name.lower()
     for index, part in enumerate(parts):
         if part.lower() != root_name:
             continue
-        suffix_parts = parts[index + 1:]
+        suffix_parts = parts[index + 1 :]
         if not suffix_parts:
             return "."
         suffix = PurePosixPath(*suffix_parts).as_posix()
