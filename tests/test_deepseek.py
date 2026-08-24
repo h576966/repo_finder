@@ -6,7 +6,7 @@ import duckdb
 import httpx
 import pytest
 
-from source_scout import catalog, cli_status, deepseek, fastcontext, pipeline, profiler
+from source_scout import catalog, cli_status, deepseek, failures, fastcontext, pipeline, profiler
 
 
 def _message_response(content: str, *, status: str = "completed") -> dict[str, Any]:
@@ -274,6 +274,35 @@ async def test_connection_failure_has_a_distinct_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_timeout_failure_has_a_distinct_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("provider was slow", request=request)
+
+    with pytest.raises(deepseek.ModelTimeoutError, match="timed out"):
+        await deepseek.list_models(transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.asyncio
+async def test_http_failure_does_not_expose_provider_body() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": {"message": "secret-provider-detail"}})
+
+    with pytest.raises(deepseek.ModelStatusError) as exc_info:
+        await deepseek.list_models(transport=httpx.MockTransport(handler))
+
+    assert "secret-provider-detail" not in str(exc_info.value)
+    failure = failures.failure_from_exception(exc_info.value, stage="model_status")
+    assert failure.to_dict() == {
+        "schema_version": failures.ERROR_SCHEMA_VERSION,
+        "error_type": "authentication",
+        "stage": "model_status",
+        "message": "DeepSeek model listing failed with HTTP 401.",
+        "retryable": False,
+        "status_code": 401,
+    }
+
+
+@pytest.mark.asyncio
 async def test_fastcontext_smoke_validates_exact_read_call() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
@@ -314,6 +343,27 @@ async def test_model_status_reports_assessment_and_exploration_smokes(monkeypatc
         "assessment": {"completed": True, "response": {"ok": True}},
         "exploration": {"completed": True, "response": {"ok": True}},
     }
+
+
+@pytest.mark.asyncio
+async def test_model_status_reports_configured_model_unavailable(monkeypatch) -> None:
+    async def fake_validate(config: deepseek.ModelConfig) -> dict[str, object]:
+        return {
+            "base_url": config.base_url,
+            "models": ["another-model"],
+            "model_id": config.model_id,
+            "model_available": False,
+        }
+
+    monkeypatch.setattr(deepseek, "validate_model", fake_validate)
+
+    result = await cli_status._api_status(smoke_test=True)
+
+    assert result["healthy"] is False
+    assert result["reachable"] is True
+    assert result["error_type"] == "configuration"
+    assert result["failure"]["stage"] == "model_status"  # type: ignore[index]
+    assert "smoke_tests" not in result
 
 
 @pytest.mark.asyncio

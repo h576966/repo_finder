@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import catalog, path_safety
+from . import catalog_assets, catalog_core, path_safety
 
 MAX_LINES_PER_ITEM = 80
 MAX_CHARS_PER_ITEM = 8_000
@@ -101,7 +101,7 @@ def build_candidate_evidence_ledger(
     fastcontext_evidence_paths: Sequence[str] = (),
     include_bundle_manifest: bool = True,
 ) -> EvidenceLedgerResult:
-    asset = catalog.get_asset_detail(candidate_id)
+    asset = catalog_assets.get_asset_detail(candidate_id)
     if asset is None:
         raise ValueError(f"Unknown candidate_id: {candidate_id}")
 
@@ -112,7 +112,7 @@ def build_candidate_evidence_ledger(
     notes: list[str] = []
     if include_bundle_manifest:
         manifest_source, manifest_notes = source_from_bundle_manifest(
-            catalog.bundle_path(candidate_id, task_signature) / "bundle.json",
+            catalog_core.bundle_path(candidate_id, task_signature) / "bundle.json",
             candidate_id=candidate_id,
             commit_sha=str(asset["commit_sha"]),
             snapshot_root=Path(str(asset["snapshot_path"])),

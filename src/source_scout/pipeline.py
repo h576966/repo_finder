@@ -7,7 +7,7 @@ from typing import Any, cast
 
 from fastmcp.exceptions import ToolError
 
-from . import catalog, snapshotter
+from . import catalog_core, catalog_repositories, snapshotter
 from .constants import MAX_REPO_AGE_DAYS, MAX_REPOSITORY_SIZE_KB, MAX_STALE_DAYS, SKIP_DIRS
 from .github_client import get_client
 
@@ -177,12 +177,12 @@ async def scout(domain: str, limit: int) -> dict[str, int]:
             if not full_name or full_name in seen:
                 continue
             seen.add(full_name)
-            catalog.upsert_repository(repo, f"scout:{domain}:{capability}")
+            catalog_repositories.upsert_repository(repo, f"scout:{domain}:{capability}")
             stored += 1
             if stored >= limit:
                 break
 
-    catalog.record_analysis_run("scout", "completed", {"domain": domain, "stored": stored})
+    catalog_core.record_analysis_run("scout", "completed", {"domain": domain, "stored": stored})
     return {"stored_repositories": stored}
 
 
@@ -517,17 +517,17 @@ async def qualify(limit: int) -> dict[str, int]:
     client = get_client()
     qualified = 0
     skipped = 0
-    for candidate in catalog.list_repositories_for_qualification(limit):
+    for candidate in catalog_repositories.list_repositories_for_qualification(limit):
         repo_id = str(candidate["repo_id"])
         owner = str(candidate["owner"])
         name = str(candidate["name"])
         try:
             metadata = await client.get_repo_metadata(owner, name)
-            catalog.upsert_repository(metadata, "qualify:metadata-refresh")
+            catalog_repositories.upsert_repository(metadata, "qualify:metadata-refresh")
             ok, reason = _passes_metadata_gates(metadata)
             if not ok:
                 skipped += 1
-                catalog.record_analysis_run(
+                catalog_core.record_analysis_run(
                     "qualify",
                     "skipped",
                     {"reason": reason},
@@ -547,16 +547,18 @@ async def qualify(limit: int) -> dict[str, int]:
             ok, reason = _passes_reuse_gates(metadata, card)
             if not ok:
                 skipped += 1
-                catalog.record_analysis_run(
+                catalog_core.record_analysis_run(
                     "qualify",
                     "skipped",
                     {"reason": reason},
                     repo_id=repo_id,
                 )
                 continue
-            snapshot_id = catalog.upsert_snapshot(repo_id, actual_sha, default_branch, local_path)
-            catalog.upsert_repository_card(snapshot_id, card)
-            catalog.record_analysis_run(
+            snapshot_id = catalog_repositories.upsert_snapshot(
+                repo_id, actual_sha, default_branch, local_path
+            )
+            catalog_repositories.upsert_repository_card(snapshot_id, card)
+            catalog_core.record_analysis_run(
                 "qualify",
                 "completed",
                 {"reason": reason},
@@ -566,7 +568,7 @@ async def qualify(limit: int) -> dict[str, int]:
             qualified += 1
         except (ToolError, ValueError, OSError) as exc:
             skipped += 1
-            catalog.record_analysis_run(
+            catalog_core.record_analysis_run(
                 "qualify",
                 "failed",
                 {"error": str(exc)},
@@ -576,4 +578,4 @@ async def qualify(limit: int) -> dict[str, int]:
 
 
 def gc(keep_per_repo: int) -> dict[str, int]:
-    return catalog.garbage_collect_snapshots(keep_per_repo)
+    return catalog_repositories.garbage_collect_snapshots(keep_per_repo)

@@ -1,5 +1,8 @@
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 from source_scout import deepseek, fastcontext
 
@@ -140,3 +143,59 @@ def test_explore_local_cli_invokes_fastcontext(monkeypatch, capsys, tmp_path: Pa
     captured = capsys.readouterr()
     assert "src/source_scout/server.py:1-20" in captured.out
     assert "MCP tools are registered here." in captured.out
+
+
+def test_explore_local_cli_failure_is_structured(monkeypatch, capsys, tmp_path: Path) -> None:
+    import source_scout.__main__ as main_module
+
+    async def failed_explore(**kwargs: object) -> object:
+        raise deepseek.ModelConnectionError("Could not connect to the DeepSeek API.")
+
+    monkeypatch.setattr(fastcontext, "explore_local_project", failed_explore)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["source_scout", "explore-local", "--task", "Find code", "--project-path", str(tmp_path)],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main_module.main()
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 1
+    assert captured.out == ""
+    failure = json.loads(captured.err)
+    assert failure["error_type"] == "connection"
+    assert failure["stage"] == "exploration"
+    assert "Traceback" not in captured.err
+
+
+def test_model_status_cli_exits_nonzero_when_unhealthy(monkeypatch, capsys) -> None:
+    import source_scout.__main__ as main_module
+
+    async def unhealthy_status(smoke_test: bool) -> dict[str, object]:
+        assert smoke_test is False
+        return {"healthy": False, "error_type": "connection"}
+
+    monkeypatch.setattr(main_module, "_api_status", unhealthy_status)
+    monkeypatch.setattr(sys, "argv", ["source_scout", "model-status"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main_module.main()
+
+    assert exc_info.value.code == 1
+    assert json.loads(capsys.readouterr().out)["error_type"] == "connection"
+
+
+def test_model_status_cli_exits_zero_when_healthy(monkeypatch, capsys) -> None:
+    import source_scout.__main__ as main_module
+
+    async def healthy_status(smoke_test: bool) -> dict[str, object]:
+        return {"healthy": True, "model_available": True}
+
+    monkeypatch.setattr(main_module, "_api_status", healthy_status)
+    monkeypatch.setattr(sys, "argv", ["source_scout", "model-status"])
+
+    main_module.main()
+
+    assert json.loads(capsys.readouterr().out)["healthy"] is True

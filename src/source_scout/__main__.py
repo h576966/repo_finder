@@ -8,7 +8,8 @@ from dataclasses import asdict
 from . import cli_checks as _cli_checks
 from . import fastcontext
 from .cli_output import _format_local_explore_text
-from .cli_status import _api_status
+from .cli_status import _api_status, status_is_healthy
+from .failures import failure_from_exception
 
 _check_commands = _cli_checks._check_commands
 _run_check_commands = _cli_checks._run_check_commands
@@ -375,6 +376,8 @@ def main() -> None:
     if args.command == "model-status":
         status_result = asyncio.run(_api_status(args.smoke_test))
         print(json.dumps(status_result, indent=2, sort_keys=True))
+        if not status_is_healthy(status_result):
+            sys.exit(1)
         return
 
     if args.command == "refine-evidence":
@@ -416,14 +419,21 @@ def main() -> None:
         return
 
     if args.command == "explore-local":
-        local_result = asyncio.run(
-            fastcontext.explore_local_project(
-                task=args.task,
-                project_path=args.project_path,
-                max_turns=args.max_turns,
-                trace_path=args.trace_path,
+        from .deepseek import ModelError
+
+        try:
+            local_result = asyncio.run(
+                fastcontext.explore_local_project(
+                    task=args.task,
+                    project_path=args.project_path,
+                    max_turns=args.max_turns,
+                    trace_path=args.trace_path,
+                )
             )
-        )
+        except (fastcontext.FastContextError, ModelError, OSError, ValueError, TimeoutError) as exc:
+            failure = failure_from_exception(exc, stage="exploration")
+            print(json.dumps(failure.to_dict(), sort_keys=True), file=sys.stderr)
+            sys.exit(1)
         if args.format == "text":
             print(_format_local_explore_text(local_result))
         else:

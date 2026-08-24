@@ -1,4 +1,7 @@
-from typing import Annotated, Any, Literal
+import asyncio
+import os
+from collections.abc import Awaitable
+from typing import Annotated, Any, Literal, TypeVar
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -7,11 +10,15 @@ from pydantic import Field
 from . import (
     assessor,
     bundles,
-    catalog,
+    catalog_assessments,
+    catalog_assets,
+    catalog_search,
     deepseek,
     fastcontext,
 )
+from .cli_status import _api_status, _error_status
 from .constants import _now_iso
+from .failures import FailureDetails, failure_from_exception
 from .models import (
     FindReusableCodeResult,
     LocalExploreResult,
@@ -21,6 +28,8 @@ from .models import (
 from .target_profile import TargetProfileError, build_target_profile
 
 mcp = FastMCP("SourceScout")
+DEFAULT_MCP_DEADLINE_SECONDS = 270.0
+_T = TypeVar("_T")
 
 DEFAULT_MCP_TOOL_NAMES = (
     "find_reusable_code",
@@ -28,7 +37,44 @@ DEFAULT_MCP_TOOL_NAMES = (
     "get_source_bundle",
     "record_reuse_outcome",
     "explore_local_code",
+    "model_status",
 )
+
+
+def _mcp_deadline_seconds() -> float:
+    raw = os.environ.get("SOURCE_SCOUT_MCP_DEADLINE_SECONDS")
+    if not raw:
+        return DEFAULT_MCP_DEADLINE_SECONDS
+    try:
+        return max(0.01, float(raw))
+    except ValueError:
+        return DEFAULT_MCP_DEADLINE_SECONDS
+
+
+async def _with_mcp_deadline(awaitable: Awaitable[_T]) -> _T:
+    async with asyncio.timeout(_mcp_deadline_seconds()):
+        return await awaitable
+
+
+def _structured_tool_error(exc: Exception, *, stage: str) -> ToolError:
+    return ToolError(failure_from_exception(exc, stage=stage).to_json())
+
+
+@mcp.tool(
+    description="Read-only health and optional smoke checks for the configured Source Scout model.",
+    annotations={"readOnlyHint": True},
+)
+async def model_status(
+    smoke_test: Annotated[
+        bool,
+        Field(description="Run assessment and exploration smoke requests in addition to model listing"),
+    ] = False,
+) -> dict[str, object]:
+    try:
+        return await _with_mcp_deadline(_api_status(smoke_test))
+    except TimeoutError as exc:
+        failure = failure_from_exception(exc, stage="model_status")
+        return _error_status(deepseek.get_config(), failure)
 
 
 @mcp.tool(
@@ -53,17 +99,19 @@ async def explore_local_code(
     ] = fastcontext.DEFAULT_MAX_TURNS,
 ) -> LocalExploreResult:
     if not task.strip():
-        raise ToolError("Task description is required.")
+        raise _structured_tool_error(ValueError("Task description is required."), stage="validation")
     if not project_path.strip():
-        raise ToolError("project_path is required.")
+        raise _structured_tool_error(ValueError("project_path is required."), stage="validation")
     try:
-        return await fastcontext.explore_local_project(
-            task=task,
-            project_path=project_path,
-            max_turns=max_turns,
+        return await _with_mcp_deadline(
+            fastcontext.explore_local_project(
+                task=task,
+                project_path=project_path,
+                max_turns=max_turns,
+            )
         )
-    except (fastcontext.FastContextError, deepseek.ModelError, OSError) as exc:
-        raise ToolError(str(exc))
+    except (fastcontext.FastContextError, deepseek.ModelError, OSError, TimeoutError) as exc:
+        raise _structured_tool_error(exc, stage="exploration") from exc
 
 
 @mcp.tool(
@@ -118,7 +166,11 @@ async def assess_reusable_code(
             project_path=project_path,
         )
     except (assessor.AssessorError, deepseek.ModelError, OSError, ValueError) as exc:
-        raise ToolError(str(exc))
+        if isinstance(exc, assessor.AssessorError):
+            raise ToolError(
+                FailureDetails("validation", "assessment", str(exc), retryable=False).to_json()
+            ) from exc
+        raise _structured_tool_error(exc, stage="assessment") from exc
     return assessor.assessment_to_jsonable(result)
 
 
@@ -150,13 +202,13 @@ async def find_reusable_code(
     except TargetProfileError as exc:
         raise ToolError(str(exc)) from exc
 
-    results = catalog.search_assets(task, max_repos, target_profile=profile)
+    results = catalog_search.search_assets(task, max_repos, target_profile=profile)
     profile_fingerprint = profile.fingerprint if profile is not None else ""
-    signature = catalog.task_signature(task, profile_fingerprint)
+    signature = catalog_assessments.task_signature(task, profile_fingerprint)
     for result in results:
         result.task_signature = signature
     for result in results:
-        catalog.record_reuse_outcome(
+        catalog_assessments.record_reuse_outcome(
             asset_id=result.candidate_id,
             repo_id=result.repo_id,
             task_signature=signature,
@@ -202,7 +254,7 @@ async def get_source_bundle(
     if not assessment_id.strip():
         raise ToolError("assessment_id is required.")
     result = bundles.create_source_bundle(assessment_id)
-    catalog.record_reuse_outcome(
+    catalog_assessments.record_reuse_outcome(
         asset_id=result.candidate_id,
         repo_id=result.repo_id,
         task_signature=result.task_signature,
@@ -240,11 +292,11 @@ async def record_reuse_outcome(
 ) -> RecordReuseOutcomeResult:
     if not task_signature.strip():
         raise ToolError("task_signature is required.")
-    asset = catalog.get_asset_detail(candidate_id)
+    asset = catalog_assets.get_asset_detail(candidate_id)
     if asset is None:
         raise ToolError(f"Unknown candidate_id: {candidate_id}")
     try:
-        catalog.record_reuse_outcome(
+        catalog_assessments.record_reuse_outcome(
             asset_id=candidate_id,
             repo_id=str(asset["repo_id"]),
             task_signature=task_signature,

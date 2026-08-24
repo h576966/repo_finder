@@ -9,7 +9,15 @@ from typing import Any, Literal
 
 import httpx
 
-from . import assessment_rules, catalog, deepseek, evidence_ledger
+from . import (
+    assessment_rules,
+    catalog_assessments,
+    catalog_assets,
+    catalog_core,
+    catalog_repositories,
+    deepseek,
+    evidence_ledger,
+)
 from .assessor_response import AssessorError, _normalize_response, _validation_errors
 from .models import (
     AssessmentDimensions,
@@ -260,7 +268,7 @@ async def assess_candidate(
     if max_evidence_rounds == 0 or not _has_eligible_fastcontext_request(initial):
         return initial
 
-    parent_task_signature = catalog.task_signature(
+    parent_task_signature = catalog_assessments.task_signature(
         task,
         profile.fingerprint if profile is not None else "",
     )
@@ -309,13 +317,13 @@ async def _assess_context(
     runtime: AssessmentRuntime | None,
 ) -> ReuseAssessmentResult:
     if not force:
-        cached = catalog.get_latest_reuse_assessment(
+        cached = catalog_assessments.get_latest_reuse_assessment(
             str(context["asset"]["asset_id"]),
             str(context["task_signature"]),
             str(context["input_fingerprint"]),
         )
         if cached is not None:
-            catalog.record_analysis_run(
+            catalog_core.record_analysis_run(
                 "reuse-assess",
                 "cached",
                 {
@@ -408,7 +416,7 @@ async def _fastcontext_evidence_for_always(
 ) -> tuple[list[str], list[dict[str, Any]], str]:
     if max_evidence_rounds == 0:
         return [], [], "not_requested"
-    parent_task_signature = catalog.task_signature(
+    parent_task_signature = catalog_assessments.task_signature(
         task,
         target_profile.fingerprint if target_profile is not None else "",
     )
@@ -550,7 +558,7 @@ def _existing_fastcontext_evidence(
 ) -> tuple[list[str], list[dict[str, Any]]]:
     evidence_paths: list[str] = []
     events: list[dict[str, Any]] = []
-    for refinement in catalog.list_evidence_refinements(
+    for refinement in catalog_assessments.list_evidence_refinements(
         candidate_id,
         task_signature=task_signature,
     ):
@@ -647,21 +655,21 @@ def _load_context(
     fastcontext_events: Sequence[Mapping[str, Any]] = (),
     fastcontext_status: str,
 ) -> dict[str, Any]:
-    asset = catalog.get_asset_detail(candidate_id)
+    asset = catalog_assets.get_asset_detail(candidate_id)
     if asset is None:
         raise AssessorError(f"Unknown candidate_id: {candidate_id}")
-    repo = catalog.get_repository(str(asset["repo_id"]))
+    repo = catalog_repositories.get_repository(str(asset["repo_id"]))
     if repo is None:
         raise AssessorError(f"Repository metadata is missing for {asset['repo_id']}")
-    snapshot = catalog.get_snapshot(str(asset["snapshot_id"]))
+    snapshot = catalog_repositories.get_snapshot(str(asset["snapshot_id"]))
     if snapshot is None:
         raise AssessorError(f"Snapshot metadata is missing for {asset['snapshot_id']}")
-    card = catalog.get_repository_card_for_snapshot(str(asset["snapshot_id"]))
+    card = catalog_repositories.get_repository_card_for_snapshot(str(asset["snapshot_id"]))
     if card is None:
         raise AssessorError(f"Repository card is missing for snapshot {asset['snapshot_id']}")
 
     target_profile_fingerprint = target_profile.fingerprint if target_profile is not None else ""
-    task_sig = catalog.task_signature(task, target_profile_fingerprint)
+    task_sig = catalog_assessments.task_signature(task, target_profile_fingerprint)
     ledger = evidence_ledger.build_candidate_evidence_ledger(
         candidate_id,
         task_signature=task_sig,
@@ -1005,11 +1013,11 @@ def _store_and_record(
     *,
     status: str,
 ) -> ReuseAssessmentResult:
-    assessment_id = catalog.store_reuse_assessment(assessment)
-    stored = catalog.get_reuse_assessment(assessment_id)
+    assessment_id = catalog_assessments.store_reuse_assessment(assessment)
+    stored = catalog_assessments.get_reuse_assessment(assessment_id)
     if stored is None:
         raise AssessorError(f"Stored assessment could not be reloaded: {assessment_id}")
-    catalog.record_analysis_run(
+    catalog_core.record_analysis_run(
         "reuse-assess",
         status,
         {
@@ -1051,7 +1059,7 @@ def _matching_bundle_manifest(
     commit_sha: str,
     snapshot_path: Path,
 ) -> dict[str, Any] | None:
-    manifest_path = catalog.bundle_path(candidate_id, task_signature) / "bundle.json"
+    manifest_path = catalog_core.bundle_path(candidate_id, task_signature) / "bundle.json"
     if not manifest_path.exists():
         return None
     try:

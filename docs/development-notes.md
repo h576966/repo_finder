@@ -2,6 +2,17 @@
 
 Useful implementation notes for the current Source Scout product path.
 
+## Product Scope
+
+- Keep the active path local-first, commit-pinned, bounded, and evidence-backed.
+- Favor eval-backed improvements to retrieval, target fit, assessment, bundles,
+  and local exploration over broad framework or repository coverage.
+- Defer hosted dashboards, semantic index layers, autonomous integration,
+  model reranking, outcome-based ranking, and multi-provider routing until the
+  deterministic baseline demonstrates a concrete need.
+- Do not turn Source Scout into generic repository ranking, license automation,
+  or an external review workflow.
+
 ## FastMCP
 
 - Define tools with `@mcp.tool()` and use `annotations={"readOnlyHint": True}`
@@ -90,8 +101,11 @@ source-scout model-status --smoke-test
 ```
 
 Status failures include an `error_type`. A sandbox-only `connection` failure
-must be retried once with approved network access; configuration and HTTP
-errors should be handled directly without a network escalation retry.
+from a CLI fallback may be retried once with approved network access. When
+Codex uses Source Scout, MCP is authoritative: diagnose an exploration failure
+once with the MCP `model_status` tool and do not repeat application or provider
+errors through the CLI. Handle configuration, authentication, billing,
+rate-limit, and service errors directly.
 
 Default test runs cover catalog, assessment, the DeepSeek Responses contract,
 and exploration:
@@ -106,4 +120,5 @@ Required model environment:
 DEEPSEEK_API_KEY=<inherited by the CLI or MCP process>
 # Optional:
 SOURCE_SCOUT_MODEL_TIMEOUT=120
+SOURCE_SCOUT_MCP_DEADLINE_SECONDS=270
 ```

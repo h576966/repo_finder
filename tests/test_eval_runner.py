@@ -343,7 +343,7 @@ def test_evaluate_suite_rejects_expected_repo_with_wrong_capability(
         external_dependencies=[],
     )
     monkeypatch.setattr(
-        eval_runner.catalog,
+        eval_runner.catalog_search,
         "search_assets",
         lambda *_args, **_kwargs: [candidate],
     )
@@ -729,7 +729,7 @@ async def test_reuse_loop_fails_when_only_a_lower_rank_candidate_matches(
     def fake_bundle(_assessment_id: str) -> SimpleNamespace:
         return SimpleNamespace(bundle_path=str(tmp_path / "wrong-bundle"))
 
-    monkeypatch.setattr(eval_runner.catalog, "search_assets", fake_search_assets)
+    monkeypatch.setattr(eval_runner.catalog_search, "search_assets", fake_search_assets)
     monkeypatch.setattr(eval_runner.assessor, "assess_candidate", fake_assess_candidate)
     monkeypatch.setattr(eval_runner.bundles, "create_source_bundle", fake_bundle)
 

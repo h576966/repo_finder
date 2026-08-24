@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from openai import APIConnectionError, APIError, APIStatusError, AsyncOpenAI
+from openai import APIConnectionError, APIError, APIStatusError, APITimeoutError, AsyncOpenAI
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-v4-flash"
@@ -24,6 +24,10 @@ class ModelConfigurationError(ModelError):
 
 
 class ModelConnectionError(ModelError):
+    pass
+
+
+class ModelTimeoutError(ModelConnectionError):
     pass
 
 
@@ -127,6 +131,8 @@ class DeepSeekClient:
             response = await self._active_client().models.list()
         except APIStatusError as exc:
             raise _status_error("model listing", exc) from exc
+        except APITimeoutError as exc:
+            raise ModelTimeoutError("The DeepSeek model listing timed out.") from exc
         except APIConnectionError as exc:
             raise ModelConnectionError("Could not connect to the DeepSeek API.") from exc
         except APIError as exc:
@@ -162,6 +168,8 @@ class DeepSeekClient:
             response = await self._active_client().responses.create(**payload)
         except APIStatusError as exc:
             raise _status_error("response", exc) from exc
+        except APITimeoutError as exc:
+            raise ModelTimeoutError("The DeepSeek response timed out.") from exc
         except APIConnectionError as exc:
             raise ModelConnectionError("Could not connect to the DeepSeek API.") from exc
         except APIError as exc:
@@ -280,10 +288,8 @@ async def response_completion(
 
 
 def _status_error(operation: str, exc: APIStatusError) -> ModelStatusError:
-    detail = exc.response.text.strip()
-    suffix = f" Response: {detail[:500]}" if detail else ""
     return ModelStatusError(
-        f"DeepSeek {operation} failed with HTTP {exc.status_code}.{suffix}",
+        f"DeepSeek {operation} failed with HTTP {exc.status_code}.",
         status_code=exc.status_code,
     )
 

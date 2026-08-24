@@ -22,10 +22,7 @@ async def test_refine_candidate_stores_fastcontext_evidence(tmp_path: Path) -> N
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal chat_calls
         if request.url.path == "/models":
-            return httpx.Response(
-                200,
-                json={"data": [{"id": deepseek.DEEPSEEK_MODEL}]},
-            )
+            pytest.fail("normal refinement must not perform a model-list preflight")
         assert request.url.path == "/responses"
         chat_calls += 1
         payload = json.loads(request.content)

@@ -14,6 +14,11 @@ find_reusable_code -> assess_reusable_code -> get_source_bundle
 Given a coding task, Source Scout should return one or a few evidence-backed
 source bundles that make Codex faster and less wasteful.
 
+Keep the product local-first, commit-pinned, bounded, and evidence-backed.
+Hosted dashboards, semantic index layers, generic repository ranking,
+autonomous integration, and multi-provider routing are outside the active
+product path unless a separate eval-backed need is established.
+
 ## Workflow
 
 1. Plan before non-trivial changes. A short written plan is enough when the

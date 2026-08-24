@@ -23,10 +23,7 @@ async def test_explore_local_project_returns_ephemeral_citations(tmp_path: Path)
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal chat_calls
         if request.url.path == "/models":
-            return httpx.Response(
-                200,
-                json={"data": [{"id": deepseek.DEEPSEEK_MODEL}]},
-            )
+            pytest.fail("normal local exploration must not perform a model-list preflight")
         assert request.url.path == "/responses"
         chat_calls += 1
         payload = json.loads(request.content)

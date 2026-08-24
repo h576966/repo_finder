@@ -11,7 +11,7 @@ def test_clone_snapshot_reuses_matching_cached_commit(tmp_path) -> None:
     existing.head.commit.hexsha = "abc123"
 
     with (
-        patch("source_scout.snapshotter.catalog.snapshot_path", return_value=target),
+        patch("source_scout.snapshotter.catalog_core.snapshot_path", return_value=target),
         patch("source_scout.snapshotter.git.Repo", return_value=existing) as repo_class,
     ):
         result = snapshotter.clone_snapshot(
@@ -39,7 +39,7 @@ def test_clone_snapshot_replaces_cached_commit_mismatch(tmp_path) -> None:
         shutil.rmtree(path)
 
     with (
-        patch("source_scout.snapshotter.catalog.snapshot_path", return_value=target),
+        patch("source_scout.snapshotter.catalog_core.snapshot_path", return_value=target),
         patch("source_scout.snapshotter.git.Repo", return_value=existing) as repo_class,
         patch("source_scout.snapshotter._remove_generated_path", side_effect=remove_cached) as remove,
     ):

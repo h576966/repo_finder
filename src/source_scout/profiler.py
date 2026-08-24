@@ -1,7 +1,7 @@
 import json
 from typing import Any
 
-from . import catalog, deepseek
+from . import catalog_core, catalog_repositories, deepseek
 
 PROMPT_VERSION = "repository-profiler-v4"
 PROFILE_SCHEMA_VERSION = "repository-profile-v3"
@@ -174,7 +174,7 @@ async def profile_repository_cards(
     config = deepseek.get_config()
     await _ensure_model_available(config)
     if priority == "created-at":
-        cards = catalog.list_repository_cards_for_profile(
+        cards = catalog_repositories.list_repository_cards_for_profile(
             limit,
             force=force,
             profile_schema_version=PROFILE_SCHEMA_VERSION,
@@ -208,8 +208,8 @@ async def profile_repository_cards(
                     response_format=PROFILE_RESPONSE_FORMAT,
                 )
                 profile = validate_repository_profile(repair_response)
-            catalog.update_repository_card_profile(str(card["card_id"]), profile)
-            catalog.record_analysis_run(
+            catalog_repositories.update_repository_card_profile(str(card["card_id"]), profile)
+            catalog_core.record_analysis_run(
                 "profile",
                 "completed",
                 {
@@ -224,7 +224,7 @@ async def profile_repository_cards(
             )
             profiled += 1
         except Exception as exc:
-            catalog.record_analysis_run(
+            catalog_core.record_analysis_run(
                 "profile",
                 "failed",
                 {"card_id": card.get("card_id"), "error": str(exc)},

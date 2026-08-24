@@ -8,7 +8,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from . import assessment_rules, assessor, catalog, deepseek, eval_support, evidence_ledger, fastcontext
+from . import (
+    assessment_rules,
+    assessor,
+    catalog_assessments,
+    catalog_assets,
+    catalog_core,
+    catalog_repositories,
+    deepseek,
+    eval_support,
+    evidence_ledger,
+    fastcontext,
+)
 
 SUITE_ALIASES = {
     "assessment-smoke": "assessment_smoke_v1.json",
@@ -49,7 +60,9 @@ async def run_assessment_eval(
 ) -> dict[str, Any]:
     loaded = load_suite(suite)
     report_path = output_path or default_report_path(str(loaded["suite_id"]), label)
-    work_home = catalog.ensure_home() / "assessment_eval_work" / _run_id(str(loaded["suite_id"]), label)
+    work_home = catalog_core.ensure_home() / "assessment_eval_work" / _run_id(
+        str(loaded["suite_id"]), label
+    )
     with _temporary_catalog_home(work_home):
         report = await evaluate_suite(
             loaded,
@@ -57,7 +70,7 @@ async def run_assessment_eval(
             deterministic_only=deterministic_only,
         )
     eval_support.write_report(report, report_path)
-    catalog.record_analysis_run(
+    catalog_core.record_analysis_run(
         "eval-assess",
         "completed" if report["passed"] else "failed",
         {
@@ -213,7 +226,7 @@ def _build_candidate(task: Mapping[str, Any]) -> str:
     candidate = task["candidate"] if isinstance(task.get("candidate"), dict) else {}
     repo_id = str(candidate.get("repo_id") or f"eval/{task['id']}")
     owner, name = repo_id.split("/", 1)
-    snapshot_root = catalog.ensure_home() / "fixtures" / _safe_label(str(task["id"]))
+    snapshot_root = catalog_core.ensure_home() / "fixtures" / _safe_label(str(task["id"]))
     snapshot_root.mkdir(parents=True, exist_ok=True)
     _write_files(snapshot_root, candidate)
     repo_metadata = {
@@ -233,16 +246,16 @@ def _build_candidate(task: Mapping[str, Any]) -> str:
         "pushed_at": "2026-06-20T12:00:00Z",
         "topics": ["nextjs"],
     }
-    repo_key = catalog.upsert_repository(repo_metadata, "assessment-eval")
-    snapshot_id = catalog.upsert_snapshot(
+    repo_key = catalog_repositories.upsert_repository(repo_metadata, "assessment-eval")
+    snapshot_id = catalog_repositories.upsert_snapshot(
         repo_key,
         str(candidate.get("commit_sha", "evalsha")),
         "main",
         snapshot_root,
     )
     card = _repository_card(candidate)
-    catalog.upsert_repository_card(snapshot_id, card)
-    return catalog.upsert_asset(
+    catalog_repositories.upsert_repository_card(snapshot_id, card)
+    return catalog_assets.upsert_asset(
         snapshot_id,
         repo_key,
         str(candidate.get("capability", "route-handlers")),
@@ -318,14 +331,14 @@ def _store_prior_fastcontext_refinement(candidate_id: str, task: Mapping[str, An
     prior = task.get("prior_fastcontext_refinement")
     if not isinstance(prior, dict):
         return
-    asset = catalog.get_asset_detail(candidate_id)
+    asset = catalog_assets.get_asset_detail(candidate_id)
     if asset is None:
         return
-    catalog.store_evidence_refinement(
+    catalog_assessments.store_evidence_refinement(
         asset_id=candidate_id,
         repo_id=str(asset["repo_id"]),
         snapshot_id=str(asset["snapshot_id"]),
-        task_signature=catalog.task_signature(str(prior.get("task", "other task"))),
+        task_signature=catalog_assessments.task_signature(str(prior.get("task", "other task"))),
         capability=str(asset["capability"]),
         model_id=deepseek.DEEPSEEK_MODEL,
         prompt_version=fastcontext.PROMPT_VERSION,
@@ -345,14 +358,14 @@ def _store_mock_refinement(
     evidence_paths: list[str],
     notes: list[str],
 ) -> dict[str, Any]:
-    asset = catalog.get_asset_detail(candidate_id)
+    asset = catalog_assets.get_asset_detail(candidate_id)
     if asset is None:
         raise fastcontext.FastContextError(f"Unknown candidate_id: {candidate_id}")
-    refinement_id = catalog.store_evidence_refinement(
+    refinement_id = catalog_assessments.store_evidence_refinement(
         asset_id=candidate_id,
         repo_id=str(asset["repo_id"]),
         snapshot_id=str(asset["snapshot_id"]),
-        task_signature=catalog.task_signature(query),
+        task_signature=catalog_assessments.task_signature(query),
         parent_task_signature=str(task_signature_override) if task_signature_override else None,
         capability=str(asset["capability"]),
         model_id=deepseek.DEEPSEEK_MODEL,
@@ -363,7 +376,7 @@ def _store_mock_refinement(
         notes=notes,
         trajectory=[],
     )
-    run_id = catalog.record_analysis_run(
+    run_id = catalog_core.record_analysis_run(
         "fastcontext-refine",
         "completed",
         {"candidate_id": candidate_id, "refinement_id": refinement_id},
@@ -384,7 +397,7 @@ def _store_mock_refinement(
 def _evidence_ids(candidate_id: str, task: str) -> list[str]:
     ledger = evidence_ledger.build_candidate_evidence_ledger(
         candidate_id,
-        task_signature=catalog.task_signature(task),
+        task_signature=catalog_assessments.task_signature(task),
     )
     return [str(item["evidence_id"]) for item in ledger.items]
 
@@ -597,7 +610,7 @@ def _failure_reasons(
 
 def _latest_assessment_run_status() -> str:
     row = (
-        catalog.get_connection()
+        catalog_core.get_connection()
         .execute(
             """
         SELECT status
@@ -701,15 +714,15 @@ def _rate(value: int, total: int) -> float:
 @contextmanager
 def _temporary_catalog_home(home: Path) -> Iterator[None]:
     old_home = os.environ.get("SOURCE_SCOUT_HOME")
-    catalog.reset_connection()
+    catalog_core.reset_connection()
     os.environ["SOURCE_SCOUT_HOME"] = str(home)
-    catalog.reset_connection()
+    catalog_core.reset_connection()
     try:
         yield
     finally:
-        catalog.reset_connection()
+        catalog_core.reset_connection()
         if old_home is None:
             os.environ.pop("SOURCE_SCOUT_HOME", None)
         else:
             os.environ["SOURCE_SCOUT_HOME"] = old_home
-        catalog.reset_connection()
+        catalog_core.reset_connection()

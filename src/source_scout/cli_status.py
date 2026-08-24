@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from .failures import FailureDetails, failure_from_exception
 
 if TYPE_CHECKING:
     from .deepseek import ModelConfig
@@ -12,21 +14,32 @@ async def _api_status(smoke_test: bool) -> dict[str, object]:
     config = deepseek.get_config()
     try:
         status = await deepseek.validate_model(config)
-    except deepseek.ModelConfigurationError as exc:
-        return _error_status(config, exc, reachable=None, configured=False, error_type="configuration")
-    except deepseek.ModelConnectionError as exc:
-        return _error_status(config, exc, reachable=False, configured=True, error_type="connection")
-    except deepseek.ModelStatusError as exc:
-        error_type = _http_error_type(exc.status_code)
-        error_result = _error_status(config, exc, reachable=True, configured=True, error_type=error_type)
-        error_result["status_code"] = exc.status_code
-        if exc.status_code in {401, 403}:
-            error_result["authorized"] = False
-        return error_result
     except deepseek.ModelError as exc:
-        return _error_status(config, exc, reachable=None, configured=True, error_type="api")
+        failure = failure_from_exception(exc, stage="model_status")
+        return _error_status(config, failure)
 
-    result: dict[str, object] = {"reachable": True, "configured": True, "authorized": True, **status}
+    result: dict[str, object] = {
+        "healthy": bool(status.get("model_available")),
+        "reachable": True,
+        "configured": True,
+        "authorized": True,
+        **status,
+    }
+    if not result["healthy"]:
+        failure = FailureDetails(
+            "configuration",
+            "model_status",
+            f"Configured DeepSeek model '{config.model_id}' is not available.",
+            retryable=False,
+        )
+        result.update(
+            {
+                "error_type": failure.error_type,
+                "error": failure.message,
+                "failure": failure.to_dict(),
+            }
+        )
+        return result
     if not smoke_test:
         return result
 
@@ -43,41 +56,60 @@ async def _api_status(smoke_test: bool) -> dict[str, object]:
         )
         smoke_results["assessment"] = {"completed": True, "response": response}
     except deepseek.ModelError as exc:
-        smoke_results["assessment"] = {"completed": False, "error": str(exc)}
+        failure = failure_from_exception(exc, stage="assessment_smoke")
+        smoke_results["assessment"] = {
+            "completed": False,
+            "error": str(exc),
+            "failure": failure.to_dict(),
+        }
     try:
         response = await fastcontext.smoke_test(config)
         smoke_results["exploration"] = {"completed": True, "response": response}
     except (fastcontext.FastContextError, deepseek.ModelError) as exc:
-        smoke_results["exploration"] = {"completed": False, "error": str(exc)}
+        failure = failure_from_exception(exc, stage="exploration_smoke")
+        smoke_results["exploration"] = {
+            "completed": False,
+            "error": str(exc),
+            "failure": failure.to_dict(),
+        }
     result["smoke_tests"] = smoke_results
+    result["healthy"] = bool(result["healthy"]) and all(
+        bool(smoke.get("completed")) for smoke in smoke_results.values() if isinstance(smoke, dict)
+    )
+    if not result["healthy"]:
+        for smoke in smoke_results.values():
+            if not isinstance(smoke, dict) or smoke.get("completed"):
+                continue
+            raw_failure = smoke.get("failure")
+            if isinstance(raw_failure, dict):
+                result["error_type"] = raw_failure.get("error_type", "model_response")
+                result["error"] = raw_failure.get("message", "Model smoke test failed.")
+                result["failure"] = raw_failure
+            break
     return result
 
 
 def _error_status(
     config: ModelConfig,
-    exc: Exception,
-    *,
-    reachable: bool | None,
-    configured: bool,
-    error_type: str,
+    failure: FailureDetails,
 ) -> dict[str, object]:
-    return {
-        "reachable": reachable,
-        "configured": configured,
+    result: dict[str, object] = {
+        "healthy": False,
+        "reachable": False if failure.error_type in {"connection", "timeout"} else None,
+        "configured": failure.error_type != "configuration",
         "base_url": config.base_url,
         "model_id": config.model_id,
-        "error_type": error_type,
-        "error": str(exc),
+        "error_type": failure.error_type,
+        "error": failure.message,
+        "failure": failure.to_dict(),
     }
+    if failure.status_code is not None:
+        result["reachable"] = True
+        result["status_code"] = failure.status_code
+    if failure.error_type == "authentication":
+        result["authorized"] = False
+    return result
 
 
-def _http_error_type(status_code: int) -> str:
-    if status_code in {401, 403}:
-        return "authentication"
-    if status_code == 402:
-        return "billing"
-    if status_code == 429:
-        return "rate_limit"
-    if status_code >= 500:
-        return "service"
-    return "http"
+def status_is_healthy(status: dict[str, Any]) -> bool:
+    return bool(status.get("healthy"))

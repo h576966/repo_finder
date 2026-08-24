@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import catalog
+from . import catalog_core
 from .catalog_scoring import (
     MIN_LABEL_SIGNAL,
     STRONG_LABEL_SIGNAL,
@@ -322,7 +322,7 @@ def _scoped_count(rows: list[dict[str, Any]], items: list[dict[str, Any]]) -> in
 
 
 def _query_dicts(query: str) -> list[dict[str, Any]]:
-    conn = catalog.get_connection()
+    conn = catalog_core.get_connection()
     rows = conn.execute(query).fetchall()
     columns = [str(column[0]) for column in conn.description]
     return [dict(zip(columns, row, strict=False)) for row in rows]
@@ -332,7 +332,7 @@ def _repository_cards_by_id(card_ids: list[str]) -> dict[str, dict[str, Any]]:
     if not card_ids:
         return {}
     placeholders = ", ".join("?" for _ in card_ids)
-    conn = catalog.get_connection()
+    conn = catalog_core.get_connection()
     rows = conn.execute(
         f"""
         SELECT
@@ -757,7 +757,7 @@ def _snapshot_downloaded(snapshot: dict[str, Any] | None, repo: dict[str, Any]) 
     commit_sha = snapshot.get("commit_sha")
     if not owner or not name or not commit_sha:
         return False
-    return catalog.snapshot_path(str(owner), str(name), str(commit_sha)).exists()
+    return catalog_core.snapshot_path(str(owner), str(name), str(commit_sha)).exists()
 
 
 def _float_value(value: Any) -> float:

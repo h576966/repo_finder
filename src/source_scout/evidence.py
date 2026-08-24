@@ -4,7 +4,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from . import catalog
+from . import catalog_assets, catalog_core, catalog_repositories
 from .capabilities import (
     AI_DATA_CAPABILITIES,
     CONCRETE_CAPABILITY_DEPENDENCIES,
@@ -905,8 +905,8 @@ def run_evidence(capability: str, limit: int) -> dict[str, int]:
     stored = 0
     skipped = 0
     normalized = normalize_capability(capability)
-    snapshots = catalog.list_snapshots_for_evidence(limit)
-    catalog.delete_assets_for_snapshots(
+    snapshots = catalog_repositories.list_snapshots_for_evidence(limit)
+    catalog_assets.delete_assets_for_snapshots(
         normalized,
         [str(snapshot["snapshot_id"]) for snapshot in snapshots],
     )
@@ -919,14 +919,14 @@ def run_evidence(capability: str, limit: int) -> dict[str, int]:
         if not result["evidence_paths"]:
             skipped += 1
             continue
-        catalog.upsert_asset(
+        catalog_assets.upsert_asset(
             snapshot_id=str(snapshot["snapshot_id"]),
             repo_id=str(snapshot["repo_id"]),
             capability=normalized,
             evidence=result,
         )
         stored += 1
-    catalog.record_analysis_run(
+    catalog_core.record_analysis_run(
         "evidence",
         "completed",
         {"capability": normalized, "stored": stored, "skipped": skipped},

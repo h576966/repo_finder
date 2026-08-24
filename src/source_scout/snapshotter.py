@@ -4,7 +4,7 @@ from pathlib import Path
 import git
 from fastmcp.exceptions import ToolError
 
-from . import catalog
+from . import catalog_core
 
 
 def clone_snapshot(
@@ -15,7 +15,7 @@ def clone_snapshot(
     default_branch: str | None,
 ) -> tuple[Path, str]:
     _ = default_branch
-    target = catalog.snapshot_path(owner, repo, commit_sha)
+    target = catalog_core.snapshot_path(owner, repo, commit_sha)
     if target.exists():
         try:
             existing = git.Repo(str(target))
@@ -50,7 +50,7 @@ def clone_snapshot(
 
 
 def _remove_generated_path(path: Path) -> None:
-    home = catalog.ensure_home().resolve()
+    home = catalog_core.ensure_home().resolve()
     resolved = path.resolve()
     if home not in resolved.parents:
         raise ToolError(f"Refusing to remove path outside source_scout home: {resolved}")

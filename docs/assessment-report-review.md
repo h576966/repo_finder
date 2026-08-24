@@ -1,7 +1,8 @@
 # Assessment Report Review
 
 Use this guide when reading `source-scout assess` output or
-`source-scout eval-assess` reports.
+`source-scout eval-assess` reports. The canonical workflow and command examples
+remain in the project README; this document only explains assessment output.
 
 ## Key Fields
 

@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 from pathlib import Path
@@ -353,3 +354,58 @@ async def test_reuse_tools_require_assessment_and_task_signature(tmp_path: Path)
 
     with pytest.raises(ToolError, match="task_signature is required"):
         await server.record_reuse_outcome(asset_id, "", "selected")
+
+
+@pytest.mark.asyncio
+async def test_model_status_tool_is_read_only_and_returns_health(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected = {"healthy": True, "reachable": True, "model_available": True}
+
+    async def fake_status(smoke_test: bool) -> dict[str, object]:
+        assert smoke_test is True
+        return expected
+
+    monkeypatch.setattr(server, "_api_status", fake_status)
+    tools = {tool.name: tool for tool in await server.mcp.list_tools()}
+
+    assert tools["model_status"].annotations.readOnlyHint is True
+    assert await server.model_status(smoke_test=True) == expected
+
+
+@pytest.mark.asyncio
+async def test_explore_local_code_returns_structured_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def slow_explore(**kwargs: Any) -> LocalExploreResult:
+        await asyncio.sleep(1)
+        raise AssertionError("unreachable")
+
+    monkeypatch.setenv("SOURCE_SCOUT_MCP_DEADLINE_SECONDS", "0.01")
+    monkeypatch.setattr(server.fastcontext, "explore_local_project", slow_explore)
+
+    with pytest.raises(ToolError) as exc_info:
+        await server.explore_local_code("Find code", str(tmp_path))
+
+    failure = json.loads(str(exc_info.value))
+    assert failure["error_type"] == "timeout"
+    assert failure["stage"] == "exploration"
+    assert failure["retryable"] is True
+
+
+@pytest.mark.asyncio
+async def test_explore_local_code_returns_structured_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def failed_explore(**kwargs: Any) -> LocalExploreResult:
+        raise server.deepseek.ModelConnectionError("Could not connect to the DeepSeek API.")
+
+    monkeypatch.setattr(server.fastcontext, "explore_local_project", failed_explore)
+
+    with pytest.raises(ToolError) as exc_info:
+        await server.explore_local_code("Find code", str(tmp_path))
+
+    failure = json.loads(str(exc_info.value))
+    assert failure["error_type"] == "connection"
+    assert failure["stage"] == "exploration"
+    assert failure["retryable"] is True

@@ -3,7 +3,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from . import assessment_rules, assessor, bundles, catalog, eval_support
+from . import (
+    assessment_rules,
+    assessor,
+    bundles,
+    catalog_assessments,
+    catalog_core,
+    catalog_search,
+    eval_support,
+)
 from .target_profile import TargetProfileV1, build_target_profile
 
 SUITE_ALIASES = {
@@ -59,7 +67,7 @@ def run_eval(
     report = evaluate_suite(loaded, top_k=top_k, label=label)
     path = output_path or default_report_path(str(loaded["suite_id"]), label)
     eval_support.write_report(report, path)
-    catalog.record_analysis_run(
+    catalog_core.record_analysis_run(
         "eval",
         "completed" if report["passed"] else "failed",
         {
@@ -98,7 +106,7 @@ async def run_reuse_loop_report(
     )
     path = output_path or reuse_loop_report_path(str(loaded["suite_id"]), label)
     eval_support.write_report(report, path)
-    catalog.record_analysis_run(
+    catalog_core.record_analysis_run(
         "eval-reuse-loop",
         "completed" if report["passed"] else "failed",
         {
@@ -259,7 +267,9 @@ def _target_profile_for_task(task: dict[str, Any]) -> TargetProfileV1 | None:
 
 def _evaluate_task(task: dict[str, Any], top_k: int) -> dict[str, Any]:
     profile = _target_profile_for_task(task)
-    results = catalog.search_assets(str(task["task"]), max_repos=top_k, target_profile=profile)
+    results = catalog_search.search_assets(
+        str(task["task"]), max_repos=top_k, target_profile=profile
+    )
     expect_no_match = bool(task["expect_no_match"])
     candidates: list[dict[str, Any]] = []
     first_hit_rank: int | None = None
@@ -386,11 +396,11 @@ async def _evaluate_reuse_loop_task(
 ) -> dict[str, Any]:
     task_text = str(task["task"])
     profile = _target_profile_for_task(task)
-    task_signature = catalog.task_signature(
+    task_signature = catalog_assessments.task_signature(
         task_text,
         profile.fingerprint if profile is not None else "",
     )
-    results = catalog.search_assets(task_text, max_repos=top_k, target_profile=profile)
+    results = catalog_search.search_assets(task_text, max_repos=top_k, target_profile=profile)
     expect_no_match = bool(task["expect_no_match"])
     returned = [
         {

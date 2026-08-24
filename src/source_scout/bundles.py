@@ -10,7 +10,13 @@ from uuid import uuid4
 
 from fastmcp.exceptions import ToolError
 
-from . import assessment_rules, catalog
+from . import (
+    assessment_rules,
+    catalog_assessments,
+    catalog_assets,
+    catalog_core,
+    catalog_repositories,
+)
 from .bundle_closure import BundleClosureError, BundleClosurePlan, plan_bundle_closure
 from .constants import _now_iso
 from .models import ReuseAssessmentResult, SourceBundleResult
@@ -76,13 +82,13 @@ def _unique_paths(paths: list[str]) -> list[str]:
 def create_source_bundle(assessment_id: str) -> SourceBundleResult:
     if not assessment_id.strip():
         raise ToolError("assessment_id is required.")
-    assessment = catalog.get_reuse_assessment(assessment_id)
+    assessment = catalog_assessments.get_reuse_assessment(assessment_id)
     if assessment is None:
         raise ToolError(f"Unknown assessment_id: {assessment_id}")
     _validate_assessment(assessment)
 
     candidate_id = assessment.candidate_id
-    asset = catalog.get_asset_detail(candidate_id)
+    asset = catalog_assets.get_asset_detail(candidate_id)
     if asset is None:
         raise ToolError(f"Unknown candidate_id: {candidate_id}")
     _validate_assessment_asset(assessment, asset)
@@ -129,7 +135,7 @@ def create_source_bundle(assessment_id: str) -> SourceBundleResult:
     files = [*required_files, *optional_files]
 
     try:
-        bundle_root = catalog.assessment_bundle_path(candidate_id, assessment_id)
+        bundle_root = catalog_core.assessment_bundle_path(candidate_id, assessment_id)
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
     source_paths = [(rel_path, _safe_source_path(snapshot_root, rel_path)) for rel_path in files]
@@ -287,7 +293,7 @@ def _validate_assessment_asset(assessment: ReuseAssessmentResult, asset: dict[st
             "Assessment no longer matches the current candidate snapshot "
             f"({', '.join(mismatches)}); reassess before bundling."
         )
-    latest = catalog.get_latest_snapshot_identity(assessment.repo_id)
+    latest = catalog_repositories.get_latest_snapshot_identity(assessment.repo_id)
     if latest != (assessment.snapshot_id, assessment.commit_sha):
         raise ToolError("Assessment references a superseded catalog snapshot; reassess before bundling.")
 
@@ -433,7 +439,7 @@ def _source_permalink(html_url: str, commit_sha: str, path: str) -> str:
 
 
 def _external_dependency_constraints(snapshot_id: str, manifest_paths: list[str]) -> dict[str, str]:
-    card = catalog.get_repository_card_for_snapshot(snapshot_id)
+    card = catalog_repositories.get_repository_card_for_snapshot(snapshot_id)
     if card is None:
         return {}
     manifests = card.get("package_manifests", {})

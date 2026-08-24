@@ -19,13 +19,6 @@ persistence, manifests, and eval metrics. The configured assessment model
 interprets validated evidence; the exploration harness only finds file and line
 evidence. DeepSeek V4 Flash is the default model for both roles.
 
-Version 0.2.0 intentionally replaces the bundle MCP contract with
-`get_source_bundle(assessment_id)`. Callers using the 0.1.x candidate/task
-signature form must reassess before creating a new bundle.
-
-See `docs/source_scout_direction.md` for the current product direction and
-`docs/complexity-budget.md` for scope boundaries and model role rules.
-
 The installed CLI exposes both `source-scout` and `source_scout`; examples use
 `source-scout`. The Python module/package remains `source_scout`.
 
@@ -49,6 +42,8 @@ $env:GITHUB_TOKEN = "ghp_your_token_here"
 $env:DEEPSEEK_API_KEY = "your_deepseek_api_key"
 # Optional request timeout; 120 seconds is the default.
 $env:SOURCE_SCOUT_MODEL_TIMEOUT = "120"
+# Optional MCP operation deadline; keep this below the client tool timeout.
+$env:SOURCE_SCOUT_MCP_DEADLINE_SECONDS = "270"
 ```
 
 ## Catalog Workflow
@@ -190,7 +185,7 @@ The local exploration eval suite lives at
 `evals/golden/local_explore_source_scout_v1.json`. It measures expected file/line
 hits, file/line precision and recall, unexpected or invalid citations, runtime,
 tool calls, citation budget violations, and a simple manual-search proxy. Run
-the current cleanup verification with:
+the suite with:
 
 ```powershell
 source-scout eval-local-explore --suite source-scout --max-turns 7 --label cleanup-verify
@@ -231,6 +226,7 @@ Default tools:
 | `get_source_bundle(assessment_id)` | Validate a current `select`/`inspect` assessment and atomically publish its dependency-aware manifest-v2 bundle. |
 | `record_reuse_outcome(candidate_id, task_signature, outcome, notes=None)` | Track selected, integrated, or rejected candidates against the original task. |
 | `explore_local_code(task, project_path, max_turns=7)` | Use FastContext to find relevant files and line ranges in a local project without catalog writes. |
+| `model_status(smoke_test=false)` | Read-only model reachability, authorization, availability, and optional assessment/exploration smoke diagnostics. |
 
 ## Model API
 
@@ -259,12 +255,11 @@ Check JSON assessment output and a native exploration tool call with:
 source-scout model-status --smoke-test
 ```
 
-The status output separates local configuration, network reachability, and
-HTTP failures. `error_type` is `configuration`, `connection`,
-`authentication`, `billing`, `rate_limit`, `service`, or `http`; an HTTP error
-still reports `reachable: true` because the DeepSeek endpoint answered. If a
-Codex sandbox reports `error_type: connection`, rerun the status command once
-with approved network access before treating DeepSeek as unavailable.
+The status output separates local configuration, timeout, network reachability,
+and HTTP failures. Failures include a stable schema version, stage, retryability,
+and optional HTTP status code. The command exits nonzero when the configured
+model is unhealthy or a requested smoke test fails. An HTTP error still reports
+`reachable: true` because the DeepSeek endpoint answered.
 
 Set `DEEPSEEK_API_KEY` in the environment inherited by the CLI or MCP process.
 For a persistent Windows user-level variable shared by projects, run this once
@@ -292,15 +287,17 @@ MCP config:
       "args": ["-m", "source_scout", "serve-mcp"],
       "env": {
         "PYTHONPATH": "<repo-root>\\src",
-        "SOURCE_SCOUT_HOME": "<repo-root>\\.source_scout"
+        "SOURCE_SCOUT_HOME": "<repo-root>\\.source_scout",
+        "SOURCE_SCOUT_MCP_DEADLINE_SECONDS": "270"
       }
     }
   }
 }
 ```
 
-Replace `<repo-root>` with your local Source Scout checkout path and make sure
-the MCP process inherits `DEEPSEEK_API_KEY`.
+Replace `<repo-root>` with your local Source Scout checkout path, make sure the
+MCP process inherits `DEEPSEEK_API_KEY`, and configure the client tool timeout
+above the 270-second application deadline (300 seconds is recommended).
 
 ## Local Checks
 
@@ -317,6 +314,9 @@ This runs the lightweight safe checks:
 .\.venv\Scripts\python.exe -m mypy src
 .\.venv\Scripts\python.exe -m pytest -q
 ```
+
+The wrapper gives pytest a unique temporary and cache directory under
+`.source_scout/checks/`, avoiding restricted system temporary directories.
 
 `--with-local-explore-eval` runs the live FastContext eval and requires the
 DeepSeek API and `DEEPSEEK_API_KEY` to be available:
