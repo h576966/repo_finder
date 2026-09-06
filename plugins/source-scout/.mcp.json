@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "source_scout": {
+      "command": "source-scout",
+      "args": [
+        "serve-mcp",
+        "--profile",
+        "default"
+      ],
+      "env_vars": [
+        "DEEPSEEK_API_KEY",
+        "GITHUB_TOKEN",
+        "SOURCE_SCOUT_HOME"
+      ],
+      "startup_timeout_sec": 30,
+      "tool_timeout_sec": 300,
+      "enabled_tools": [
+        "investigate_code",
+        "find_implementation_references",
+        "get_implementation_reference"
+      ]
+    }
+  }
+}

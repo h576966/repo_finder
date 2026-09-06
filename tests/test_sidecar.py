@@ -8,8 +8,7 @@ import httpx
 import pytest
 from fastmcp import Client
 
-from source_scout import deepseek, fastcontext, server
-from source_scout.cli_status import _api_status
+from source_scout import deepseek, fastcontext, fastcontext_routing, fastcontext_validation, server
 from source_scout.exploration_policy import remote_exploration_enabled
 from source_scout.exploration_trace import summarize_requests
 from source_scout.fastcontext_types import FastContextCitation, ObservationSupport
@@ -19,20 +18,12 @@ from tests.fastcontext_helpers import _response_message_json, _response_tool_cal
 
 @pytest.mark.asyncio
 async def test_profiles_expose_only_selected_tools():
-    assert server.DEFAULT_MCP_TOOL_NAMES == ("explore_local_code",)
     async with Client(server.create_server()) as client:
         assert {t.name for t in await client.list_tools()} == set(server.DEFAULT_MCP_TOOL_NAMES)
         with pytest.raises(Exception, match="[Uu]nknown|not found"):
             await client.call_tool("find_reusable_code", {"task": "x"})
-        with pytest.raises(Exception, match="[Uu]nknown|not found"):
-            await client.call_tool("model_status", {})
-    async with Client(server.create_server("reuse")) as client:
-        assert {t.name for t in await client.list_tools()} == {
-            "explore_local_code", "model_status", "find_reusable_code", "assess_reusable_code",
-            "get_source_bundle", "record_reuse_outcome",
-        } == set(server.REUSE_MCP_TOOL_NAMES)
-    with pytest.raises(ValueError):
-        server.create_server("other")
+    with pytest.raises(ValueError, match="retired"):
+        server.create_server("reuse")
 
 
 def test_default_server_does_not_import_catalog():
@@ -59,12 +50,10 @@ async def test_disabled_policy_precedes_model_and_source_access(monkeypatch, tmp
 
     monkeypatch.setattr(deepseek, "get_config", forbidden)
     monkeypatch.setattr(deepseek, "validate_model", forbidden)
-    monkeypatch.setattr(fastcontext, "_local_seed_context", forbidden)
+    monkeypatch.setattr(fastcontext_routing, "_local_seed_context", forbidden)
     result = await fastcontext.explore_local_project("trace", tmp_path, validate_model=True)
     assert result.status == "disabled"
-    assert (await server.explore_local_code("trace", str(tmp_path))).status == "disabled"
-    assert (await server.model_status(True))["status"] == "disabled"
-    assert (await _api_status(True))["status"] == "disabled"
+    assert (await server.investigate_code("trace", str(tmp_path))).status == "disabled"
     assert not (tmp_path / ".source_scout").exists()
 
 
@@ -107,7 +96,7 @@ def test_project_policy_and_process_override(monkeypatch, tmp_path):
 )
 def test_citations_require_full_coverage(ranges, accepted):
     support = ObservationSupport({"a.py"}, {"a.py": ranges})
-    note = fastcontext._support_validation_note("a.py", FastContextCitation("a.py", 1, 5), support)
+    note = fastcontext_validation._support_validation_note("a.py", FastContextCitation("a.py", 1, 5), support)
     assert (note is None) == accepted
 
 
@@ -120,7 +109,7 @@ def test_metadata_and_truncated_grep_do_not_count_as_read_lines(tmp_path):
     assert not support.ranges
     observed = fastcontext.execute_tool(tmp_path, {"tool": "Grep", "args": {"pattern": "first", "-C": 2}})
     support = _observation_support([observed])
-    assert fastcontext._support_validation_note("a.py", FastContextCitation("a.py", 1, 3), support)
+    assert fastcontext_validation._support_validation_note("a.py", FastContextCitation("a.py", 1, 3), support)
     observed = fastcontext.execute_tool(tmp_path, {"tool": "Grep", "args": {"pattern": "long"}})
     assert not _observation_support([observed]).ranges
 
@@ -137,9 +126,12 @@ def test_union_of_reads_and_stale_content(tmp_path):
     first, second = read(1, 2), read(3, 2)
     support = _merge_observation_support(_observation_support([first]), _observation_support([second]))
     citation = FastContextCitation("a.py", 1, 4)
-    assert fastcontext._validated_evidence_paths(tmp_path, [citation], support) == (["a.py:1-4"], [])
+    assert fastcontext_validation._validated_evidence_paths(tmp_path, [citation], support) == (
+        ["a.py:1-4"],
+        [],
+    )
     source.write_text("new\ntwo\nthree\nfour\n")
-    paths, notes = fastcontext._validated_evidence_paths(tmp_path, [citation], support)
+    paths, notes = fastcontext_validation._validated_evidence_paths(tmp_path, [citation], support)
     assert not paths and "stale" in notes[0]
     mixed = _merge_observation_support(support, _observation_support([read(3, 2)]))
     assert "a.py" in mixed.stale_files and "a.py" not in mixed.ranges
@@ -152,7 +144,7 @@ def test_sensitive_files_blocked_in_tools_and_seed(tmp_path, name):
     target.write_text('secret = "do not transmit"')
     read = fastcontext.execute_tool(tmp_path, {"tool": "Read", "args": {"path": name}})
     assert read["ok"] is False
-    seed = fastcontext._local_seed_context(tmp_path, "secret credentials")
+    seed = fastcontext_routing._local_seed_context(tmp_path, "secret credentials")
     assert "do not transmit" not in json.dumps(seed)
     assert not fastcontext.grep_paths(tmp_path, "secret")["matches"]
 
@@ -168,7 +160,9 @@ def test_symlink_outside_root_is_not_seed_context(tmp_path):
     except OSError as exc:
         pytest.skip(f"Symlink creation unavailable on host: {exc}")
     assert not fastcontext.execute_tool(root, {"tool": "Read", "args": {"path": "link.py"}})["ok"]
-    assert "secret_outside_root" not in json.dumps(fastcontext._local_seed_context(root, "secret outside"))
+    assert "secret_outside_root" not in json.dumps(
+        fastcontext_routing._local_seed_context(root, "secret outside")
+    )
 
 
 @pytest.fixture
@@ -327,7 +321,10 @@ async def test_cancelled_exploration_saves_journal(enabled_project):
 def test_full_coverage_not_lost_at_compact_choice_boundary():
     support = ObservationSupport({"a.py"}, {"a.py": [(1, 160), (161, 320)]})
     assert (
-        fastcontext._support_validation_note("a.py", FastContextCitation("a.py", 250, 300), support) is None
+        fastcontext_validation._support_validation_note(
+            "a.py", FastContextCitation("a.py", 250, 300), support
+        )
+        is None
     )
 
 
@@ -370,7 +367,7 @@ async def test_validation_consumes_call_budget_before_source_collection(enabled_
     def forbidden(*args):
         pytest.fail("No source collection after validation exhausts the call budget")
 
-    monkeypatch.setattr(fastcontext, "_local_seed_context", forbidden)
+    monkeypatch.setattr(fastcontext_routing, "_local_seed_context", forbidden)
     result = await fastcontext.explore_local_project(
         "trace",
         enabled_project,
@@ -391,6 +388,7 @@ def test_mcp_launcher_disables_update_requests(monkeypatch):
     monkeypatch.setattr(settings, "check_for_updates", "stable")
     calls = []
     monkeypatch.setattr(server.mcp, "run", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(server, "create_server", lambda profile: server.mcp)
     _run_mcp("stdio", 8000)
     assert settings.check_for_updates == "off"
     assert calls == [{"show_banner": False}]

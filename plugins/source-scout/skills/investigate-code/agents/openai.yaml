@@ -1,0 +1,11 @@
+interface:
+  display_name: "Source Scout: Code Investigation"
+  short_description: "Trace source relations after local navigation"
+  default_prompt: "Use $investigate-code to trace this unresolved source relation with Source Scout."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "source_scout"
+      description: "Source Scout investigate_code operation"
+policy:
+  allow_implicit_invocation: true

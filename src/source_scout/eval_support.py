@@ -5,8 +5,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import catalog_core
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_DIR = REPO_ROOT / "evals" / "golden"
 
@@ -44,7 +42,7 @@ def suite_path(suite: str, aliases: dict[str, str], *, suite_label: str) -> Path
 def default_report_path(run_dir: str, suite_id: str, label: str | None = None) -> Path:
     timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     suffix = f"_{safe_label(label)}" if label else ""
-    return catalog_core.ensure_home() / run_dir / suite_id / f"{timestamp}{suffix}.json"
+    return Path.cwd() / ".source_scout" / run_dir / safe_label(suite_id) / f"{timestamp}{suffix}.json"
 
 
 def write_report(report: dict[str, Any], path: Path) -> dict[str, Any]:

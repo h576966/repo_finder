@@ -1,45 +1,49 @@
-﻿# Project Instructions
+# Project Instructions
 
-Source Scout provides a small explicit collection of commit-pinned implementation
-references, reliable local check results and optional bounded read-only code
-exploration. Codex owns reasoning, adaptation, edits, test selection and final
-assessment. See `docs/source_scout_direction.md` and `docs/complexity-budget.md`.
+Be concise; avoid over-engineering. Source Scout provides Implementation References
+and selective Code Investigation for Codex across projects/worktrees. Codex owns
+reasoning, adaptation, edits, test selection and final assessment. Read
+`docs/source_scout_direction.md` and `docs/complexity-budget.md`.
 
 ## Workflow
 
 1. Write a short plan before non-trivial changes; protect uncommitted work.
-2. Exact text/file: use `rg` or direct reads. Symbols/references: use Serena
-   when available. No mandatory tool cycle or reminder hooks.
-3. Use the DeepSeek investigator only for unresolved cross-file contracts,
-   indirect runtime flow, ambiguous ownership or concrete architecture relations
-   after local navigation. Project default is selective: supply `use_case`, a
-   concrete `reason` and `attempted_local_methods` (rg, direct_read or serena).
-   Serena is optional; no mandatory call before every task. An API key alone
-   does not authorize a route. Standing authorization applies; do not ask again.
-4. Treat citations as navigation. Codex reads the source and makes changes.
-5. Review locally for correctness, security, edge cases and missing tests.
-6. Run `source-scout check` before done. It runs Ruff, mypy and pytest in the
-   trusted working copy and saves logs/results under `.source_scout/checks/`.
-   A report verifies only its recorded working-copy identity; rerun after edits.
+2. Exact text/files use rg or direct reads. Symbols/references use Serena when
+   useful and available. No mandatory tool chain.
+3. Use `investigate_code` only for a concrete unresolved cross-file contract,
+   indirect runtime flow, ambiguous ownership or architecture relation after
+   relevant local navigation. Supply actual `source_root`, concrete `reason`,
+   `use_case` and `attempted_local_methods`; pass known anchors when useful.
+4. Use `find_implementation_references` for examples from explicitly selected
+   personal/curated sources; read `get_implementation_reference` citations and
+   make your own assessment. Abstention never triggers automatic GitHub crawling.
+5. Review correctness, security, edge cases and missing tests locally.
+6. Run `source-scout check` in this trusted working copy before done. It runs this
+   project's Ruff/mypy/offline pytest and stores logs/results under
+   `.source_scout/checks/`. A report verifies only its recorded working-copy
+   identity; rerun after edits. Select other projects' checks yourself.
 
-## Constraints
+## Authorization and limits
 
-- Keep changes focused. Do not add dependencies without discussion.
-- No external/hosted PR review services, including CodeRabbit.
-- Do not execute arbitrary cloned repository code.
+Standing Source Scout authorization: when the user asks Codex to work on a
+repository, Source Scout/FastContext model operations may send the task and
+minimum relevant read-only excerpts to DeepSeek at `https://api.deepseek.com`.
+This persists across repositories/conversations until revoked. Do not ask again
+or add routine permission disclaimers. Do not send material required to remain
+offline. A key alone does not authorize a route; honor off/selective/on policy.
+
+- Keep source root, target project and collection root distinct. Never install
+  a global policy override or a global hardcoded target root.
+- Keep Serena separate and bound to the actual project/worktree per process.
+- No retries, provider switching, budget increases or chained investigators to
+  bypass incomplete/error outcomes. Finalization shares the configured budget.
+- Preserve data, IDs, snapshots, reports and bundles. No destructive migrations
+  or real user-data cleanup. Retired pipelines and the reuse MCP profile stay retired.
+- No arbitrary cloned code execution, hosted PR review services, new dependencies
+  without discussion, new index/LSP/server/router, dashboard or reminder hooks.
 - Keep generated data under `.source_scout/`; never commit logs or keys.
-- Keep model output versioned by model, prompt, schema and analyzer.
-- The investigator only scouts permitted source; it never edits, assesses
-  candidates, selects tests or summarizes test logs in the default flow.
-- Use at most the configured call/deadline budget, including finalization.
-  Report missing context; do not chain investigators to bypass budgets.
-- Keep repo-map, rg and Python AST as support/fallback. No new index, LSP,
-  provider router, search product or dashboard.
-- Prioritize `reference-add -> reference-find -> reference-context`. Keep it
-  deterministic and independent of capability ontologies, assessment and bundles.
-- Preserve the older catalog CLI/data as legacy; its MCP tools require explicit
-  `serve-mcp --profile reuse`.
 - Do not run paid live evals, commit, push or create a PR unless requested.
 
-The older global `fastcontext-local` skill must not override these routing and
-selective-use rules. Its migration is documented in `docs/source_scout_direction.md`.
+Versioned plugin skills supersede the old global `fastcontext-local` and
+`source-scout-reuse-flow`. Do not reinstall duplicate active copies. Their
+controlled migration and backups are documented in `docs/integration-2026-09-06.md`.

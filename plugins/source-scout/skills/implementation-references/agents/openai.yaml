@@ -1,0 +1,11 @@
+interface:
+  display_name: "Source Scout: Implementation References"
+  short_description: "Find examples in selected commit-pinned source"
+  default_prompt: "Use $implementation-references to find an implementation example in my Source Scout collection."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "source_scout"
+      description: "Source Scout find_implementation_references and get_implementation_reference operations"
+policy:
+  allow_implicit_invocation: true

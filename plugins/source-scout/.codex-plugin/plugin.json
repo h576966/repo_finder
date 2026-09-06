@@ -1,0 +1,19 @@
+{
+  "name": "source-scout",
+  "version": "0.3.0",
+  "description": "Implementation References and selective Code Investigation for Codex",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Source Scout",
+    "shortDescription": "Use Source Scout in Codex.",
+    "longDescription": "Find selected implementation examples and investigate unresolved source relations.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Help me use Source Scout."
+  },
+  "mcpServers": "./.mcp.json"
+}

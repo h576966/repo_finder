@@ -1,9 +1,12 @@
 [project]
 name = "source-scout"
-version = "0.2.0"
-description = "Compact local checks and optional read-only code exploration for Codex"
+version = "0.3.0"
+description = "Implementation References and selective Code Investigation for Codex"
 requires-python = ">=3.11"
-dependencies = [
+dependencies = []
+
+[project.optional-dependencies]
+all = [
     "fastmcp>=3.4.2,<4.0.0",
     "httpx==0.28.1",
     "duckdb>=1.5.4,<2.0.0",
@@ -11,6 +14,11 @@ dependencies = [
     "gitpython>=3.1.50,<4.0.0",
     "openai==2.44.0",
 ]
+references = ["httpx==0.28.1", "duckdb>=1.5.4,<2.0.0", "gitpython>=3.1.50,<4.0.0"]
+investigation = ["httpx==0.28.1", "openai==2.44.0"]
+mcp = ["fastmcp>=3.4.2,<4.0.0", "pydantic>=2.13.4,<3.0.0"]
+dev = ["ruff>=0.15.20,<1.0.0", "mypy>=2.1.0,<3.0.0", "pytest>=9.1.1,<10.0.0",
+       "pytest-asyncio>=1.4.0,<2.0.0"]
 
 [project.scripts]
 source-scout = "source_scout.__main__:main"

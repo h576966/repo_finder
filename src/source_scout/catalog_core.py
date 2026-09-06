@@ -1,19 +1,22 @@
 import hashlib
 import json
 import os
-from datetime import UTC, datetime, timedelta
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 import duckdb
 
-from .constants import _now_iso
+from .file_lock import file_lock
 
 ANALYZER_VERSION = "deterministic-ui-v1"
 DEFAULT_DB_NAME = "cache.duckdb"
 
-_connection: duckdb.DuckDBPyConnection | None = None
-_connection_path: str | None = None
+_active_connection: ContextVar[tuple[str, duckdb.DuckDBPyConnection] | None] = ContextVar(
+    "catalog_connection", default=None
+)
 
 
 def source_scout_home() -> Path:
@@ -26,8 +29,6 @@ def source_scout_home() -> Path:
 def ensure_home() -> Path:
     home = source_scout_home()
     (home / "repos").mkdir(parents=True, exist_ok=True)
-    (home / "bundles").mkdir(parents=True, exist_ok=True)
-    (home / "logs").mkdir(parents=True, exist_ok=True)
     return home
 
 
@@ -43,53 +44,48 @@ def snapshot_path(owner: str, repo: str, commit_sha: str) -> Path:
     return ensure_home() / "repos" / safe_repo_dir(owner, repo) / commit_sha
 
 
-def _safe_bundle_segment(value: str, label: str) -> str:
-    segment = str(value).strip()
-    if (
-        not segment
-        or Path(segment).is_absolute()
-        or "/" in segment
-        or "\\" in segment
-        or segment in {".", ".."}
-    ):
-        raise ValueError(f"Unsafe bundle {label}: {value}")
-    return segment
-
-
-def bundle_path(candidate_id: str, task_signature: str | None = None) -> Path:
-    root = ensure_home() / "bundles" / _safe_bundle_segment(candidate_id, "candidate_id")
-    if task_signature is None:
-        return root
-    return root / _safe_bundle_segment(task_signature, "task_signature")
-
-
-def assessment_bundle_path(candidate_id: str, assessment_id: str) -> Path:
-    root = ensure_home() / "bundles" / _safe_bundle_segment(candidate_id, "candidate_id")
-    return root / _safe_bundle_segment(assessment_id, "assessment_id")
-
-
 def reset_connection() -> None:
-    global _connection, _connection_path
-    if _connection is not None:
-        _connection.close()
-    _connection = None
-    _connection_path = None
+    """Compatibility no-op: connections are scoped and never retained."""
 
 
-def get_connection() -> duckdb.DuckDBPyConnection:
-    global _connection, _connection_path
+@contextmanager
+def get_connection() -> Iterator[duckdb.DuckDBPyConnection]:
+    """One short atomic operation, shared by every catalog reader and writer.
+
+    Nested synchronous helpers share the transaction. No network/model work may
+    run in this scope. The OS releases the advisory lock if the process exits.
+    """
     path = str(catalog_db_path())
-    if _connection is None or _connection_path != path:
-        if _connection is not None:
-            _connection.close()
-        _connection = duckdb.connect(path)
-        _connection_path = path
-        initialize_catalog(_connection)
-    return _connection
+    existing = _active_connection.get()
+    if existing is not None:
+        if existing[0] != path:
+            raise ValueError("Cannot change collection root during a catalog transaction.")
+        yield existing[1]
+        return
+    with file_lock(Path(path + ".lock")):
+        try:
+            conn = duckdb.connect(path)
+        except duckdb.IOException as exc:
+            raise TimeoutError("Catalog unavailable; stop older Source Scout sessions and retry.") from exc
+        token = _active_connection.set((path, conn))
+        try:
+            conn.execute("BEGIN")
+            initialize_catalog(conn)
+            yield conn
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            _active_connection.reset(token)
+            conn.close()
 
 
 def initialize_catalog(conn: duckdb.DuckDBPyConnection | None = None) -> None:
-    active = conn if conn is not None else get_connection()
+    if conn is None:
+        with get_connection():
+            return
+    active = conn
     active.execute("""
         CREATE TABLE IF NOT EXISTS repositories (
             repo_id TEXT PRIMARY KEY,
@@ -294,12 +290,6 @@ def _hash_id(*parts: str) -> str:
     return hashlib.sha256(":".join(parts).encode()).hexdigest()[:24]
 
 
-def _cutoff_date(days: int) -> str:
-    cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    cutoff = cutoff - timedelta(days=days)
-    return cutoff.strftime("%Y-%m-%d")
-
-
 def _ensure_column(
     conn: duckdb.DuckDBPyConnection,
     table_name: str,
@@ -335,45 +325,7 @@ def _migrate_column_name(
     ).fetchall()
     columns = {str(row[0]) for row in rows}
     if old_name in columns and new_name not in columns:
-        conn.execute(f"ALTER TABLE {table_name} RENAME COLUMN {old_name} TO {new_name}")
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {new_name} TEXT")
+        conn.execute(f"UPDATE {table_name} SET {new_name} = {old_name}")
     elif old_name in columns and new_name in columns:
         conn.execute(f"UPDATE {table_name} SET {new_name} = COALESCE({new_name}, {old_name})")
-        conn.execute(f"ALTER TABLE {table_name} DROP COLUMN {old_name}")
-
-
-def record_analysis_run(
-    stage_name: str,
-    status: str,
-    details: dict[str, Any],
-    repo_id: str | None = None,
-    snapshot_id: str | None = None,
-    model_id: str | None = None,
-    quantization: str | None = None,
-    prompt_version: str | None = None,
-    analyzer_version: str = ANALYZER_VERSION,
-) -> str:
-    run_id = _hash_id(stage_name, status, _now_iso())
-    get_connection().execute(
-        """
-        INSERT INTO analysis_runs (
-            run_id, stage_name, repo_id, snapshot_id, model_id,
-            quantization, prompt_version, analyzer_version, status,
-            details, created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        [
-            run_id,
-            stage_name,
-            repo_id,
-            snapshot_id,
-            model_id,
-            quantization,
-            prompt_version,
-            analyzer_version,
-            status,
-            _json_dump(details),
-            _now_iso(),
-        ],
-    )
-    return run_id

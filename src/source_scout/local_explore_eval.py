@@ -13,17 +13,15 @@ from . import deepseek, eval_support, fastcontext
 
 REPO_ROOT = eval_support.REPO_ROOT
 SUITE_ALIASES = {
-    "ernaering": "local_explore_ernaering_v1.json",
-    "local-explore-ernaering": "local_explore_ernaering_v1.json",
-    "source-scout": "local_explore_source_scout_v1.json",
-    "source_scout": "local_explore_source_scout_v1.json",
-    "local-explore-source-scout": "local_explore_source_scout_v1.json",
+    "source-scout": "navigation_v2.json",
+    "source_scout": "navigation_v2.json",
+    "local-explore-source-scout": "navigation_v2.json",
 }
 PROMPT_VERSION = fastcontext.PROMPT_VERSION
-ANALYZER_VERSION = "local-explore-eval-v1"
+ANALYZER_VERSION = "navigation-diagnostic-v2"
 DEFAULT_PATH_HIT_RATE = 0.75
 DEFAULT_LINE_OVERLAP_RATE = 0.5
-DEFAULT_MAX_BAD_CITATIONS_PER_TASK = 3
+DEFAULT_MAX_BAD_CITATIONS_PER_TASK = 0
 
 
 @dataclass(frozen=True)
@@ -230,8 +228,6 @@ def _task_type(task: dict[str, Any], task_text: str) -> str:
         return "cli_navigation"
     if terms & {"mcp", "tool", "tools", "fastmcp"}:
         return "mcp_navigation"
-    if terms & {"assessment", "assessor", "reuse", "verdict"}:
-        return "assessment_navigation"
     if terms & {"documentation", "docs", "readme", "agents"}:
         return "documentation_navigation"
     return "source_navigation"
@@ -252,8 +248,6 @@ def _target_family(task: dict[str, Any], task_text: str) -> str:
         return "mcp"
     if task_type == "documentation_navigation":
         return "docs"
-    if task_type == "assessment_navigation":
-        return "assessment"
     return "src"
 
 

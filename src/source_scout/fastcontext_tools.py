@@ -502,8 +502,12 @@ def _rg_skip_globs() -> list[str]:
         args.extend(["--glob", f"!{dirname}/**"])
     for filename in sorted(LOCAL_SKIP_FILE_NAMES):
         args.extend(["--glob", f"!{filename}"])
-    for pattern in [".env", ".env.*", *sorted(path_safety.SENSITIVE_NAMES),
-                    *(f"*{suffix}" for suffix in sorted(path_safety.SENSITIVE_SUFFIXES))]:
+    for pattern in [
+        ".env",
+        ".env.*",
+        *sorted(path_safety.SENSITIVE_NAMES),
+        *(f"*{suffix}" for suffix in sorted(path_safety.SENSITIVE_SUFFIXES)),
+    ]:
         args.extend(["--glob", f"!{pattern}"])
     return args
 

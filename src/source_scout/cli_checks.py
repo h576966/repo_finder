@@ -33,7 +33,7 @@ def _project_python(cwd: Path) -> str:
     return sys.executable
 
 
-def _check_commands(with_local_explore_eval: bool, run_root: Path | None = None) -> list[list[str]]:
+def _check_commands(run_root: Path | None = None) -> list[list[str]]:
     active_root = run_root or _check_run_root()
     python = _project_python(Path.cwd())
     commands = [
@@ -51,23 +51,6 @@ def _check_commands(with_local_explore_eval: bool, run_root: Path | None = None)
             f"--junitxml={active_root / 'pytest.xml'}",
         ],
     ]
-    if with_local_explore_eval:
-        from .fastcontext_constants import DEFAULT_MAX_TURNS
-
-        commands.append(
-            [
-                python,
-                "-m",
-                "source_scout",
-                "eval-local-explore",
-                "--suite",
-                "source-scout",
-                "--max-turns",
-                str(DEFAULT_MAX_TURNS),
-                "--label",
-                "check-local-explore",
-            ]
-        )
     return commands
 
 
@@ -257,9 +240,7 @@ def _parse_result(name: str, item: dict[str, Any], run_root: Path) -> None:
     item["errors"] = [e[:500] for e in errors[:MAX_ERRORS]]
 
 
-def _run_check_commands(
-    with_local_explore_eval: bool, *, output_format: str = "text", timeout_seconds: float = 300.0
-) -> None:
+def _run_check_commands(*, output_format: str = "text", timeout_seconds: float = 300.0) -> None:
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("Check timeout must be a positive finite number.")
     cwd = Path.cwd().resolve()
@@ -288,8 +269,8 @@ def _run_check_commands(
         "report_path": str(run_root / "report.json"),
     }
     cancelled = bool(before.get("cancelled"))
-    commands = _check_commands(with_local_explore_eval, run_root)
-    for name, argv in zip(("ruff", "mypy", "pytest", "local-explore-eval"), commands, strict=False):
+    commands = _check_commands(run_root)
+    for name, argv in zip(("ruff", "mypy", "pytest"), commands, strict=False):
         item: dict[str, Any] = {
             "name": name,
             "argv": argv,

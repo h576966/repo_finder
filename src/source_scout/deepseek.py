@@ -46,7 +46,7 @@ class ModelConfig:
     base_url: str = DEEPSEEK_BASE_URL
     model_id: str = DEEPSEEK_MODEL
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
-    max_retries: int = 2
+    max_retries: int = 0
 
 
 @dataclass(frozen=True)
@@ -199,60 +199,6 @@ async def validate_model(
         "model_id": active.model_id,
         "model_available": active.model_id in models,
     }
-
-
-async def response_json(
-    *,
-    messages: list[dict[str, Any]],
-    config: ModelConfig | None = None,
-    transport: httpx.AsyncBaseTransport | None = None,
-    max_tokens: int = 1600,
-    temperature: float = 0.0,
-    attempts: int = 2,
-    response_format: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    text_format = _responses_text_format(response_format or {"type": "json_object"})
-    last_error: ModelResponseError | None = None
-    async with DeepSeekClient(config, transport) as client:
-        for _attempt in range(max(1, attempts)):
-            try:
-                response = await client.create_response(
-                    input_items=messages,
-                    max_output_tokens=max_tokens,
-                    temperature=temperature,
-                    text_format=text_format,
-                    tool_choice="none",
-                )
-                if not response.content.strip():
-                    raise ModelResponseError("DeepSeek returned an empty response.")
-                return parse_json_content(response.content)
-            except ModelResponseError as exc:
-                last_error = exc
-    if last_error is not None:
-        raise last_error
-    raise ModelError("DeepSeek response failed.")
-
-
-async def response_text(
-    *,
-    messages: list[dict[str, Any]],
-    config: ModelConfig | None = None,
-    transport: httpx.AsyncBaseTransport | None = None,
-    max_tokens: int = 1600,
-    temperature: float = 0.0,
-    response_format: dict[str, Any] | None = None,
-) -> str:
-    async with DeepSeekClient(config, transport) as client:
-        response = await client.create_response(
-            input_items=messages,
-            max_output_tokens=max_tokens,
-            temperature=temperature,
-            text_format=(_responses_text_format(response_format) if response_format is not None else None),
-            tool_choice="none",
-        )
-    if not response.content.strip():
-        raise ModelResponseError("DeepSeek returned an empty response.")
-    return response.content
 
 
 async def response_completion(

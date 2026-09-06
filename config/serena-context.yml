@@ -2,7 +2,7 @@
 description: Direct symbol navigation for Codex in the Source Scout working copy
 prompt: |
   Codex owns reasoning, edits, test selection and final assessment.
-  Use these tools for symbol overviews, definitions, references and implementations.
+  Use these tools for symbol overviews, definitions, references.
   Use Codex's rg and file tools for exact text and direct reads. No mandatory tool cycle.
   Memory, editing and shell tools are unavailable. Keep ordinary type checks authoritative.
 fixed_tools:
@@ -11,7 +11,6 @@ fixed_tools:
   - get_symbols_overview
   - find_symbol
   - find_referencing_symbols
-  - find_implementations
   - find_declaration
 # Serena's single_project mode also removes get_current_config. Keep root inspection;
 # fixed_tools omits activate_project, so this connection cannot switch projects.

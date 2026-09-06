@@ -38,78 +38,14 @@ from .fastcontext_types import (
     ObservationSupport,
     ParsedFastContextResponse,
 )
+from .investigation_anchors import InvestigationAnchor, anchor_seed
 from .models import LocalExploreResult
 
 execute_tool = fastcontext_tooling.execute_tool
 glob_paths = fastcontext_tooling.glob_paths
 grep_paths = fastcontext_tooling.grep_paths
 read_file = fastcontext_tooling.read_file
-_canonical_tool_name = fastcontext_tooling._canonical_tool_name
-_evidence_path_sort_key = fastcontext_tooling._evidence_path_sort_key
-_fastcontext_tools = fastcontext_prompts.fastcontext_tool_schemas
-_has_glob_meta = fastcontext_tooling._has_glob_meta
-_is_noisy_evidence_path = fastcontext_tooling._is_noisy_evidence_path
-_is_primary_source_path = fastcontext_tooling._is_primary_source_path
-_iter_files = fastcontext_tooling._iter_files
-_match_sort_key = fastcontext_tooling._match_sort_key
-_optional_int = fastcontext_tooling._optional_int
-_relative_path = fastcontext_tooling._relative_path
-_resolve_under_root = fastcontext_tooling._resolve_under_root
-_rg_skip_globs = fastcontext_tooling._rg_skip_globs
-_safe_label = fastcontext_tooling._safe_label
-_tool_name = fastcontext_tooling._tool_name
-_generic_local_task_file_bonus = fastcontext_routing._generic_local_task_file_bonus
-_likely_source_files = fastcontext_routing._likely_source_files
-_local_seed_context = fastcontext_routing._local_seed_context
-_seed_path_priority = fastcontext_routing._seed_path_priority
-_seed_priority_paths = fastcontext_routing._seed_priority_paths
-_task_family_path_bonus = fastcontext_routing._task_family_path_bonus
-_task_family_routing = fastcontext_routing._task_family_routing
-_task_file_bonus = fastcontext_routing._task_file_bonus
-_task_grep_pattern = fastcontext_routing._task_grep_pattern
-_task_terms = fastcontext_routing._task_terms
-_observed_citation_choices_text = fastcontext_validation._observed_citation_choices_text
-_observed_citation_choices = fastcontext_validation._observed_citation_choices
-_observed_citation_choice_items = fastcontext_validation._observed_citation_choice_items
-_observed_citation_choice_map = fastcontext_validation._observed_citation_choice_map
-_observed_priority_paths = fastcontext_validation._observed_priority_paths
-_required_observed_priority_path = fastcontext_validation._required_observed_priority_path
-_priority_omission_notes = fastcontext_validation._priority_omission_notes
-_priority_observation_evidence_paths = fastcontext_validation._priority_observation_evidence_paths
-_apply_evidence_budget = fastcontext_validation._apply_evidence_budget
-_budget_trace = fastcontext_validation._budget_trace
-_citation_files = fastcontext_validation._citation_files
-_citation_path = fastcontext_validation._citation_path
-_evidence_citation_sort_key = fastcontext_validation._evidence_citation_sort_key
-_prioritized_path_sort_key = fastcontext_validation._prioritized_path_sort_key
-_priority_path_index = fastcontext_validation._priority_path_index
-_citation_choice_label = fastcontext_validation._citation_choice_label
-_is_focused_citation = fastcontext_validation._is_focused_citation
-_citation_line_span = fastcontext_validation._citation_line_span
-_fastcontext_response_format = fastcontext_validation._fastcontext_response_format
 parse_fastcontext_response = fastcontext_validation.parse_fastcontext_response
-_validated_evidence_paths = fastcontext_validation._validated_evidence_paths
-_validated_response_evidence_paths = fastcontext_validation._validated_response_evidence_paths
-_validated_citation_id_paths = fastcontext_validation._validated_citation_id_paths
-_citation_shape_note = fastcontext_validation._citation_shape_note
-_line_validation_note = fastcontext_validation._line_validation_note
-_support_validation_note = fastcontext_validation._support_validation_note
-_line_count = fastcontext_validation._line_count
-_observation_support = fastcontext_validation._observation_support
-_merge_observation_support = fastcontext_validation._merge_observation_support
-_evidence_from_observation_support = fastcontext_validation._evidence_from_observation_support
-_merge_ranges = fastcontext_validation._merge_ranges
-_range_sort_key = fastcontext_validation._range_sort_key
-_extract_citations = fastcontext_validation._extract_citations
-_extract_citation_ids = fastcontext_validation._extract_citation_ids
-_extract_notes = fastcontext_validation._extract_notes
-_citations_from_value = fastcontext_validation._citations_from_value
-_citation_ids_from_value = fastcontext_validation._citation_ids_from_value
-_parse_final_answer_citations = fastcontext_validation._parse_final_answer_citations
-_parse_final_answer_citation_ids = fastcontext_validation._parse_final_answer_citation_ids
-_parse_citation_ids = fastcontext_validation._parse_citation_ids
-_dedupe_preserve_order = fastcontext_validation._dedupe_preserve_order
-_parse_citation_lines = fastcontext_validation._parse_citation_lines
 __all__ = [
     "ANALYZER_VERSION",
     "DEFAULT_MAX_TURNS",
@@ -127,8 +63,6 @@ __all__ = [
     "grep_paths",
     "parse_fastcontext_response",
     "read_file",
-    "refine_candidate",
-    "refine_suite",
     "smoke_test",
 ]
 
@@ -163,8 +97,8 @@ async def smoke_test(
         transport=transport,
         max_tokens=100,
         temperature=0.0,
-        response_format=_fastcontext_response_format(),
-        tools=_fastcontext_tools(),
+        response_format=fastcontext_validation._fastcontext_response_format(),
+        tools=fastcontext_prompts.fastcontext_tool_schemas(),
         tool_choice="required",
     )
     calls = _tool_calls_from_completion(completion)
@@ -174,28 +108,6 @@ async def smoke_test(
             "The exploration model did not return exactly the requested native Read tool call."
         )
     return {"ok": True, "tool_call": calls[0]}
-
-
-async def refine_candidate(
-    candidate_id: str,
-    task: str,
-    max_turns: int = DEFAULT_MAX_TURNS,
-    transport: httpx.AsyncBaseTransport | None = None,
-    validate_model: bool = False,
-    task_signature_override: str | None = None,
-) -> dict[str, Any]:
-    from . import fastcontext_refinement
-
-    return await fastcontext_refinement.refine_candidate(
-        candidate_id=candidate_id,
-        task=task,
-        max_turns=max_turns,
-        transport=transport,
-        validate_model=validate_model,
-        task_signature_override=task_signature_override,
-        run_tool_loop=_run_tool_loop,
-        ensure_available=ensure_fastcontext_available,
-    )
 
 
 async def explore_local_project(
@@ -209,6 +121,7 @@ async def explore_local_project(
     deadline_seconds: float | None = None,
     use_case: ExplorationUseCase | None = None,
     attempted_local_methods: list[LocalMethod] | None = None,
+    anchors: list[InvestigationAnchor] | None = None,
 ) -> LocalExploreResult:
     from .exploration_policy import (
         exploration_deadline_seconds,
@@ -266,7 +179,11 @@ async def explore_local_project(
                 await ensure_fastcontext_available(config, transport=transport)
                 if max_turns == 1:
                     raise FastContextLoopError("Model validation exhausted the call budget.", trajectory)
-            seed_context = _local_seed_context(root, task)
+            seed_context = (
+                anchor_seed(root, anchors)
+                if anchors is not None
+                else fastcontext_routing._local_seed_context(root, task)
+            )
             remaining = deadline - (time.monotonic() - started)
             if remaining <= 0:
                 raise TimeoutError("Exploration budget exhausted before model exploration.")
@@ -279,18 +196,18 @@ async def explore_local_project(
                     max_turns=max_turns - int(validate_model),
                     transport=transport,
                     allow_observation_fallback=True,
-                    priority_paths=_seed_priority_paths(seed_context),
+                    priority_paths=fastcontext_routing._seed_priority_paths(seed_context),
                     trajectory=trajectory,
                     deadline_at=started + deadline,
                 )
             support = ObservationSupport(files=set(), ranges={})
             for turn in trajectory:
-                support = _merge_observation_support(
-                    support, _observation_support(turn.get("tool_observations", []))
+                support = fastcontext_validation._merge_observation_support(
+                    support, fastcontext_validation._observation_support(turn.get("tool_observations", []))
                 )
-            paths, stale_notes = _validated_evidence_paths(
+            paths, stale_notes = fastcontext_validation._validated_evidence_paths(
                 root,
-                _parse_citation_lines("\n".join(loop_result.evidence_paths)),
+                fastcontext_validation._parse_citation_lines("\n".join(loop_result.evidence_paths)),
                 support,
             )
             result.evidence_paths = paths
@@ -309,7 +226,7 @@ async def explore_local_project(
                 result.stop_reason = "call_budget"
                 result.status = "incomplete"
                 result.missing_context = True
-        # Timer includes validation, seed collection, finalization, and all model requests.
+                # Timer includes validation, seed collection, finalization, and all model requests.
     except TimeoutError:
         result.status, result.stop_reason, result.missing_context = "incomplete", "deadline", True
         result.notes.append("Total exploration deadline reached; context is incomplete.")
@@ -331,11 +248,12 @@ async def explore_local_project(
         report_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             **asdict(result),
-            "report_schema_version": "source-scout-exploration-v2",
+            "report_schema_version": "source-scout-investigation-v3",
             "policy_mode": policy_mode,
             "use_case": use_case,
             "attempted_local_methods": list(dict.fromkeys(attempted_local_methods or [])),
             "reason": reason.strip(),
+            "anchors": [asdict(anchor) for anchor in anchors or []],
             "deadline_seconds": deadline,
             "call_budget": max_turns,
             "sdk_max_retries": 0,
@@ -349,29 +267,6 @@ async def explore_local_project(
             trace_target.parent.mkdir(parents=True, exist_ok=True)
             trace_target.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return result
-
-
-async def refine_suite(
-    suite: str,
-    top_k: int,
-    label: str | None = None,
-    output_path: Path | None = None,
-    max_turns: int = DEFAULT_MAX_TURNS,
-    limit_tasks: int | None = None,
-    transport: httpx.AsyncBaseTransport | None = None,
-) -> dict[str, Any]:
-    from . import fastcontext_refinement
-
-    return await fastcontext_refinement.refine_suite(
-        suite=suite,
-        top_k=top_k,
-        label=label,
-        output_path=output_path,
-        max_turns=max_turns,
-        limit_tasks=limit_tasks,
-        transport=transport,
-        refine_candidate_func=refine_candidate,
-    )
 
 
 def write_trace(
@@ -494,7 +389,7 @@ async def _run_tool_loop_with_client(
         )
 
         if parsed.citation_ids or parsed.citations:
-            evidence_paths, validation_notes = _validated_response_evidence_paths(
+            evidence_paths, validation_notes = fastcontext_validation._validated_response_evidence_paths(
                 root,
                 parsed,
                 observation_support,
@@ -503,7 +398,7 @@ async def _run_tool_loop_with_client(
             if validation_notes:
                 turn_record["validation_notes"] = validation_notes
             if evidence_paths:
-                budget_result = _apply_evidence_budget(
+                budget_result = fastcontext_validation._apply_evidence_budget(
                     evidence_paths,
                     priority_paths=active_priority_paths,
                 )
@@ -520,7 +415,7 @@ async def _run_tool_loop_with_client(
                     budget_retry_used = True
                     final_answer_only_next = True
                     continue
-                priority_notes = _priority_omission_notes(
+                priority_notes = fastcontext_validation._priority_omission_notes(
                     budget_result.evidence_paths,
                     observation_support,
                     active_priority_paths,
@@ -570,9 +465,9 @@ async def _run_tool_loop_with_client(
         if tool_calls and allow_tools:
             executed_calls = tool_calls[:MAX_TOOL_CALLS_PER_TURN]
             observations = [execute_tool(root, call) for call in executed_calls]
-            observation_support = _merge_observation_support(
+            observation_support = fastcontext_validation._merge_observation_support(
                 observation_support,
-                _observation_support(observations),
+                fastcontext_validation._observation_support(observations),
             )
             skipped_observations = [
                 {
@@ -717,12 +612,12 @@ async def _run_tool_loop_with_client(
             )
             final_answer_only_next = False
 
-    fallback_evidence = _evidence_from_observation_support(
+    fallback_evidence = fastcontext_validation._evidence_from_observation_support(
         observation_support,
         priority_paths=active_priority_paths,
     )
     if fallback_evidence:
-        fallback_budget = _apply_evidence_budget(
+        fallback_budget = fastcontext_validation._apply_evidence_budget(
             fallback_evidence,
             max_citations=MAX_FALLBACK_CITATIONS,
             max_files=MAX_FALLBACK_CITATIONS,
@@ -739,7 +634,7 @@ async def _run_tool_loop_with_client(
                 "final_citations": fallback_budget.evidence_paths,
                 "selected_citation_ids": [],
                 "finalization_reason": "max_turn_observation_fallback",
-                "citation_budget": _budget_trace(fallback_budget),
+                "citation_budget": fastcontext_validation._budget_trace(fallback_budget),
                 "validation_notes": [
                     "FastContext reached max_turns without a final answer; using supported tool observations."
                 ],
@@ -786,7 +681,7 @@ async def _fastcontext_completion(
             client=client,
             max_tokens=max_tokens,
             temperature=temperature,
-            response_format=_fastcontext_response_format(),
+            response_format=fastcontext_validation._fastcontext_response_format(),
             tool_choice="none",
         )
     return await deepseek.response_completion(
@@ -794,8 +689,8 @@ async def _fastcontext_completion(
         client=client,
         max_tokens=max_tokens,
         temperature=temperature,
-        response_format=_fastcontext_response_format(),
-        tools=_fastcontext_tools(),
+        response_format=fastcontext_validation._fastcontext_response_format(),
+        tools=fastcontext_prompts.fastcontext_tool_schemas(),
     )
 
 
@@ -807,7 +702,7 @@ def _tool_calls_from_completion(
         calls.append(
             {
                 "id": tool_call.id,
-                "tool": _canonical_tool_name(tool_call.name),
+                "tool": fastcontext_tooling._canonical_tool_name(tool_call.name),
                 "args": tool_call.arguments,
                 "raw": tool_call.raw,
                 "arguments_error": tool_call.arguments_error,
@@ -839,6 +734,9 @@ def _continue_exploration_message(
     *,
     priority_paths: list[str] | None = None,
 ) -> dict[str, str]:
+    choices = fastcontext_validation._observed_citation_choices_text(
+        observation_support, priority_paths=priority_paths
+    )
     return {
         "role": "user",
         "content": (
@@ -847,7 +745,7 @@ def _continue_exploration_message(
             "already certain, you may return final_answer JSON with 1-3 citation_ids, ideally "
             f"{TARGET_FINAL_CITATIONS}, from the observed choices below.\n\n"
             f"{_priority_paths_text(priority_paths)}"
-            f"{_observed_citation_choices_text(observation_support, priority_paths=priority_paths)}"
+            f"{choices}"
         ),
     }
 
@@ -859,7 +757,7 @@ def _final_answer_request_message(
     finalization_reason: str | None = None,
     priority_paths: list[str] | None = None,
 ) -> dict[str, str]:
-    choices_text = _observed_citation_choices_text(
+    choices_text = fastcontext_validation._observed_citation_choices_text(
         observation_support,
         priority_paths=priority_paths,
     )
@@ -1043,7 +941,7 @@ def _record_budget_result(
     turn_record: dict[str, Any],
     budget_result: EvidenceBudgetResult,
 ) -> None:
-    turn_record["citation_budget"] = _budget_trace(budget_result)
+    turn_record["citation_budget"] = fastcontext_validation._budget_trace(budget_result)
     if budget_result.notes:
         turn_record.setdefault("validation_notes", []).extend(budget_result.notes)
 
@@ -1055,15 +953,21 @@ def _finalization_reason(
     *,
     priority_paths: list[str] | None = None,
 ) -> str | None:
-    choices = _observed_citation_choice_items(support)
+    choices = fastcontext_validation._observed_citation_choice_items(support)
     if (
         priority_paths
         and not _has_priority_observation(support, priority_paths)
         and turn < max(1, max_turns - 1)
     ):
         return None
-    primary_choices = [citation for _choice_id, citation in choices if _is_primary_source_path(citation.path)]
-    focused_primary_count = sum(1 for citation in primary_choices if _is_focused_citation(citation))
+    primary_choices = [
+        citation
+        for _choice_id, citation in choices
+        if fastcontext_tooling._is_primary_source_path(citation.path)
+    ]
+    focused_primary_count = sum(
+        1 for citation in primary_choices if fastcontext_validation._is_focused_citation(citation)
+    )
     if len(primary_choices) >= 2:
         return "enough_primary_source_ranges"
     if turn >= max(1, max_turns - 1):
@@ -1081,7 +985,7 @@ def _has_priority_observation(
     support: ObservationSupport,
     priority_paths: list[str] | None = None,
 ) -> bool:
-    return bool(_observed_priority_paths(support, priority_paths))
+    return bool(fastcontext_validation._observed_priority_paths(support, priority_paths))
 
 
 def _fallback_observation_result(
@@ -1091,8 +995,8 @@ def _fallback_observation_result(
     note: str,
     priority_paths: list[str] | None = None,
 ) -> FastContextLoopResult:
-    budget_result = _apply_evidence_budget(
-        _evidence_from_observation_support(support, priority_paths=priority_paths),
+    budget_result = fastcontext_validation._apply_evidence_budget(
+        fastcontext_validation._evidence_from_observation_support(support, priority_paths=priority_paths),
         max_citations=MAX_FALLBACK_CITATIONS,
         max_files=MAX_FALLBACK_CITATIONS,
         priority_paths=priority_paths,
@@ -1109,7 +1013,7 @@ def _fallback_observation_result(
             "final_citations": evidence,
             "selected_citation_ids": [],
             "finalization_reason": "supported_observation_fallback",
-            "citation_budget": _budget_trace(budget_result),
+            "citation_budget": fastcontext_validation._budget_trace(budget_result),
             "validation_notes": [note, *budget_result.notes],
         }
     )
@@ -1130,13 +1034,13 @@ def _completed_priority_observation_result(
     turn_record: dict[str, Any] | None = None,
     prefix_notes: list[str] | None = None,
 ) -> FastContextLoopResult | None:
-    priority_evidence = _priority_observation_evidence_paths(
+    priority_evidence = fastcontext_validation._priority_observation_evidence_paths(
         support,
         priority_paths,
     )
     if not priority_evidence:
         return None
-    budget_result = _apply_evidence_budget(
+    budget_result = fastcontext_validation._apply_evidence_budget(
         priority_evidence,
         priority_paths=priority_paths,
     )
@@ -1159,7 +1063,7 @@ def _completed_priority_observation_result(
                 "final_citations": evidence,
                 "selected_citation_ids": [],
                 "finalization_reason": "supported_priority_observation",
-                "citation_budget": _budget_trace(budget_result),
+                "citation_budget": fastcontext_validation._budget_trace(budget_result),
                 "validation_notes": [note, *budget_result.notes],
             }
         )
@@ -1183,7 +1087,7 @@ def _local_messages(
     *,
     seed_context: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
-    active_seed_context = seed_context or _local_seed_context(root, task)
+    active_seed_context = seed_context or fastcontext_routing._local_seed_context(root, task)
     context = {
         "mode": "local-project-exploration",
         "project_path": str(root),
@@ -1266,7 +1170,9 @@ def _tool_trace_summary(trajectory: list[dict[str, Any]]) -> list[dict[str, obje
                 "turn": int(turn.get("turn", 0)),
                 "tools_enabled": bool(turn.get("tools_enabled", False)),
                 "tool_calls": [
-                    _canonical_tool_name(_tool_name(call)) for call in tool_calls if isinstance(call, dict)
+                    fastcontext_tooling._canonical_tool_name(fastcontext_tooling._tool_name(call))
+                    for call in tool_calls
+                    if isinstance(call, dict)
                 ]
                 if isinstance(tool_calls, list)
                 else [],

@@ -1,0 +1,57 @@
+{
+  "suite_id": "local-explore-source-scout",
+  "description": "Explicit paid navigation diagnostic, not product acceptance. Invalid citations must be zero.",
+  "default_project_path": ".",
+  "pass_threshold": {
+    "path_hit_rate": 1.0,
+    "line_overlap_rate": 0.0,
+    "max_bad_citations_per_task": 0
+  },
+  "tasks": [
+    {
+      "id": "reference_evidence",
+      "task": "Trace how source evidence gates a reference match before target fit is computed.",
+      "expected_citations": [
+        {
+          "path": "src/source_scout/implementation_references.py"
+        }
+      ]
+    },
+    {
+      "id": "shared_catalog",
+      "task": "Trace connection and process lock lifetimes for one reference add.",
+      "expected_citations": [
+        {
+          "path": "src/source_scout/catalog_core.py"
+        },
+        {
+          "path": "src/source_scout/file_lock.py"
+        }
+      ]
+    },
+    {
+      "id": "pinned_context",
+      "task": "Trace how a pinned source snippet obtains canonical bytes without checkout filters.",
+      "expected_citations": [
+        {
+          "path": "src/source_scout/snapshotter.py"
+        },
+        {
+          "path": "src/source_scout/implementation_references.py"
+        }
+      ]
+    },
+    {
+      "id": "policy_deadline",
+      "task": "Trace project off policy and the common investigation request and finalization deadline.",
+      "expected_citations": [
+        {
+          "path": "src/source_scout/exploration_policy.py"
+        },
+        {
+          "path": "src/source_scout/fastcontext.py"
+        }
+      ]
+    }
+  ]
+}

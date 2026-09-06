@@ -1,34 +1,25 @@
-﻿# Complexity budget
+# Complexity budget — 2026-09-06
 
-This iteration is a bounded Codex sidecar, not a new development platform.
+Keep two capabilities and three normal MCP operations. No new runtime dependency,
+DB server, provider router, LSP/index server, ontology, dashboard or reminder hook.
 
-- Normal path: terminal checks + rg + optional direct Serena navigation.
-- Check execution: existing Ruff/mypy/pytest, standard-library process control,
-  Ruff JSON, pytest JUnit XML and bounded text summaries. No parser framework,
-  generic MCP executor or intelligent test selection.
-- Investigation: existing DeepSeek client and model, seven calls by default,
-  at most twelve when explicitly selected, 240-second maximum inner deadline,
-  zero SDK retries, finalization inside the same budget. No chained runs.
-  Selective routing uses four typed use cases and three caller-declared local
-  methods, with off/on overrides. No automatic router or Serena dependency.
-- Results: small MCP response; full local logs/trajectory in unique directories.
-  Unknown metrics remain null. No pricing/provider abstraction.
-- Source navigation: preserve rg, repo-map and Python AST. Serena is a separate
-  optional process; no Source Scout LSP, persistent symbol index or new search API.
-- Legacy: preserve catalog code/data/CLI, explicit reuse MCP profile, freeze
-  feature work. Avoid unrelated refactors and directory/name migrations.
-- References: one additive DuckDB schema, existing commit snapshots, bounded
-  deterministic BM25 and exact excerpts. At most three find/fallback results;
-  no ontology, model assessment, bundle dependency, crawler or new index service.
-- Dependencies: no new Source Scout dependencies. The approved pinned Serena
-  installation and its language-server components use a separate local environment.
-- Excluded: embeddings/vector databases, CocoIndex, RTK, SWE-Pruner, GitNexus,
-  semantic indexing, local model servers, multi-provider routing, frontend,
-  dashboard, reminder hooks and automatic integration.
+| Area | Local bound or decision |
+|---|---|
+| Reference presentation | 64,000 serialized ASCII-JSON bytes; at most 3 matches |
+| Metadata | 8,000 presentation bytes, depth 6, 20 entries per collection, strings 500 characters |
+| Snapshot | 240,000 bytes/blob, 30 MB materialized, 6,000 tree entries; fetched Git pack size is not bounded by these materialization limits |
+| Reference index | 1,500 files, 30 MB total, 12,000 terms/file, source-only term extraction |
+| Catalog retrieval | 2,000 rows and 8 MB; excessive historical fields rejected, partial search disclosed |
+| Target profile | 6,000 files, 64 manifests, 240,000 bytes/manifest; exceeding counts fails explicitly |
+| Catalog concurrency | Short transactions and OS file lock, five-second wait; no DB lock during fetching or models |
+| Source excerpts | Whole lines, at most 6,000 bytes per excerpt before numbered display; whole-file and excerpt hashes distinct |
+| GitHub | Explicit search/inspection only, capped streamed REST responses; no automatic crawling or permanent add |
+| Investigation | Seven calls by default, maximum twelve; finalization shares budget; 240-second maximum inner deadline, zero SDK retries |
+| Anchors | 1–6 relative regular source files, range <=160 lines, optional validated symbol hint; never observation evidence |
+| Navigation | rg, bounded repo-map and Python AST support; optional separate Serena process |
+| Checks | This repository's Ruff/mypy/pytest, existing process control, bounded summaries, complete local logs |
 
-Evaluate quality of finished changes before expanding scope. The manual
-comparison in `source_scout_direction.md` is the next evidence gate; no automatic
-paid evaluation or claimed savings percentage belongs in this implementation.
-
-Deferred: unique check/exploration directories currently grow without automatic
-retention. No automatic deletion or retention subsystem is added in this iteration.
+Historical raw administrative export is row-paginated and preserves stored data;
+it is not a source presentation endpoint. No new packaging feature is retained.
+No automatic retention is added. Generated journals and snapshots can grow;
+failed writes may leave a reusable immutable snapshot, never partial catalog rows.

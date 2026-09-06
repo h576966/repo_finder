@@ -74,13 +74,6 @@ def test_check_cli_runs_default_commands(check_workspace, monkeypatch, capsys):
     assert report["checks"][2]["tests"]["collected"] == 1
 
 
-def test_check_cli_local_explore_flag_appends_eval(check_workspace, monkeypatch, capsys):
-    calls = _fake_checks(monkeypatch)
-    report, code = _run(monkeypatch, capsys, "--with-local-explore-eval")
-    assert calls[-1][2:4] == ["source_scout", "eval-local-explore"]
-    assert len(report["checks"]) == 4 and code == 0
-
-
 def test_check_cli_runs_remaining_checks_after_failure(check_workspace, monkeypatch, capsys):
     calls = _fake_checks(monkeypatch, codes={"ruff": 1, "mypy": 1})
     report, code = _run(monkeypatch, capsys)
@@ -90,8 +83,8 @@ def test_check_cli_runs_remaining_checks_after_failure(check_workspace, monkeypa
 
 
 def test_check_commands_use_unique_workspace_roots(check_workspace):
-    first = cli_checks._check_commands(False)[2]
-    second = cli_checks._check_commands(False)[2]
+    first = cli_checks._check_commands()[2]
+    second = cli_checks._check_commands()[2]
     assert first[4] == "--basetemp"
     assert Path(first[5]).parent != Path(second[5]).parent
     assert Path(first[5]).parent.parent == check_workspace / ".source_scout" / "checks"
@@ -250,7 +243,7 @@ def test_project_python_handles_spaces(monkeypatch, tmp_path):
     python.parent.mkdir(parents=True)
     python.touch()
     monkeypatch.chdir(root)
-    assert cli_checks._check_commands(False)[0][0] == str(python)
+    assert cli_checks._check_commands()[0][0] == str(python)
 
 
 def test_checkout_identity_detects_dirty_content_and_ignores_generated(tmp_path):
@@ -308,7 +301,7 @@ def test_downloaded_checkout_is_rejected_before_execution(monkeypatch, tmp_path)
     root.mkdir(parents=True)
     monkeypatch.chdir(root)
     with pytest.raises(ValueError, match="downloaded repositories"):
-        cli_checks._run_check_commands(False)
+        cli_checks._run_check_commands()
 
 
 def test_unknown_checkout_identity_never_verifies(check_workspace, monkeypatch, capsys):

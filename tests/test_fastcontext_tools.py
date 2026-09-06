@@ -5,7 +5,8 @@ from typing import Any
 import httpx
 import pytest
 
-from source_scout import deepseek, fastcontext, fastcontext_tools
+from source_scout import deepseek, fastcontext, fastcontext_routing, fastcontext_tools, fastcontext_validation
+from source_scout import fastcontext_tools as fastcontext_tooling
 from tests.fastcontext_helpers import _write_snapshot
 
 
@@ -102,7 +103,7 @@ def test_rg_grep_uses_delimiter_before_model_controlled_pattern(
             "--line-number",
             "--glob",
             "**/*.tsx",
-            *fastcontext._rg_skip_globs(),
+            *fastcontext_tooling._rg_skip_globs(),
             "--",
             "-dangerous-pattern",
             ".",
@@ -264,7 +265,7 @@ def test_citation_validation_rejects_bad_ranges_and_unsupported_observations(tmp
     root.mkdir()
     _write_snapshot(root)
 
-    evidence, notes = fastcontext._validated_evidence_paths(
+    evidence, notes = fastcontext_validation._validated_evidence_paths(
         root,
         [
             fastcontext.FastContextCitation("src/components/data-table.tsx", 5, 1),
@@ -294,7 +295,7 @@ def test_citation_id_validation_rejects_unknown_ids(tmp_path: Path) -> None:
     root.mkdir()
     _write_snapshot(root)
 
-    evidence, notes = fastcontext._validated_response_evidence_paths(
+    evidence, notes = fastcontext_validation._validated_response_evidence_paths(
         root,
         fastcontext.ParsedFastContextResponse(
             citations=[],
@@ -312,7 +313,7 @@ def test_citation_id_validation_rejects_unknown_ids(tmp_path: Path) -> None:
 
 
 def test_evidence_budget_detects_too_many_files() -> None:
-    result = fastcontext._apply_evidence_budget(
+    result = fastcontext_validation._apply_evidence_budget(
         [
             "src/a.ts:1-1",
             "src/b.ts:1-1",
@@ -355,15 +356,15 @@ def test_local_seed_context_uses_generated_repo_map_without_repo_specific_paths(
         encoding="utf-8",
     )
 
-    catalog_seed = fastcontext._local_seed_context(
+    catalog_seed = fastcontext_routing._local_seed_context(
         root,
         "Find where catalog search_assets scoring is implemented.",
     )
-    mcp_seed = fastcontext._local_seed_context(
+    mcp_seed = fastcontext_routing._local_seed_context(
         root,
         "Find the MCP tool that exposes find_reusable_code.",
     )
-    eval_seed = fastcontext._local_seed_context(
+    eval_seed = fastcontext_routing._local_seed_context(
         root,
         "Find the golden eval fixture suite file.",
     )
@@ -375,7 +376,7 @@ def test_local_seed_context_uses_generated_repo_map_without_repo_specific_paths(
     assert catalog_seed["repo_map"]
     assert catalog_seed["priority_file_matches"]
     assert catalog_seed["priority_file_matches"][0]["path"] == "src/app/catalog_store.py"
-    assert fastcontext._seed_priority_paths(catalog_seed)[0] == "src/app/catalog_store.py"
+    assert fastcontext_routing._seed_priority_paths(catalog_seed)[0] == "src/app/catalog_store.py"
 
 
 def test_final_answer_choices_prioritize_primary_source_paths() -> None:
@@ -389,13 +390,15 @@ def test_final_answer_choices_prioritize_primary_source_paths() -> None:
         },
     )
 
-    choices = fastcontext._observed_citation_choices(support)
+    choices = fastcontext_validation._observed_citation_choices(support)
 
     assert choices[:2] == [
         "src/source_scout/models.py:5-8",
         "src/source_scout/server.py:20-30",
     ]
-    assert "C1: src/source_scout/models.py:5-8" in fastcontext._observed_citation_choices_text(support)
+    assert "C1: src/source_scout/models.py:5-8" in fastcontext_validation._observed_citation_choices_text(
+        support
+    )
 
 
 def test_final_answer_choices_and_budget_honor_task_priority_paths() -> None:
@@ -408,11 +411,11 @@ def test_final_answer_choices_and_budget_honor_task_priority_paths() -> None:
         },
     )
 
-    choices = fastcontext._observed_citation_choices(
+    choices = fastcontext_validation._observed_citation_choices(
         support,
         priority_paths=["src/source_scout/evidence.py"],
     )
-    budget = fastcontext._apply_evidence_budget(
+    budget = fastcontext_validation._apply_evidence_budget(
         [
             "src/source_scout/assessor.py:20-30",
             "src/source_scout/catalog.py:140-150",
@@ -478,7 +481,7 @@ def test_local_seed_context_includes_likely_source_files(tmp_path: Path, monkeyp
     (root / "tests" / "test_deepseek.py").write_text("def test_status(): pass\n", encoding="utf-8")
     monkeypatch.setattr(fastcontext_tools.shutil, "which", lambda name: None)
 
-    seed = fastcontext._local_seed_context(root, "Find the DeepSeek status CLI command")
+    seed = fastcontext_routing._local_seed_context(root, "Find the DeepSeek status CLI command")
 
     likely = seed["likely_source_files"]
     assert "src/source_scout/__main__.py" in likely
@@ -499,13 +502,12 @@ async def test_fastcontext_structured_output_failure_is_not_retried() -> None:
         return httpx.Response(400, json={"error": "structured output unsupported"})
 
     with pytest.raises(deepseek.ModelError, match="HTTP 400"):
-        await deepseek.response_json(
+        await deepseek.response_completion(
             messages=[{"role": "user", "content": "Find the data table"}],
             transport=httpx.MockTransport(handler),
             max_tokens=3000,
             temperature=0.0,
-            attempts=1,
-            response_format=fastcontext._fastcontext_response_format(),
+            response_format=fastcontext_validation._fastcontext_response_format(),
         )
 
     assert response_calls == 1

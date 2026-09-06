@@ -1,99 +1,57 @@
-"""Compatibility facade for Source Scout catalog operations."""
+"""Historical catalog access; retired workflows are not executable."""
 
-from .catalog_assessments import (
-    ALLOWED_REUSE_OUTCOMES,
-    get_latest_reuse_assessment,
-    get_reuse_assessment,
-    list_evidence_refinements,
-    record_reuse_outcome,
-    store_evidence_refinement,
-    store_reuse_assessment,
-    task_signature,
-)
-from .catalog_assets import delete_assets_for_snapshots, get_asset_detail, upsert_asset
+from __future__ import annotations
+
+from typing import Any
+
 from .catalog_core import (
-    ANALYZER_VERSION,
-    DEFAULT_DB_NAME,
-    assessment_bundle_path,
-    bundle_path,
     catalog_db_path,
     ensure_home,
     get_connection,
     initialize_catalog,
-    record_analysis_run,
     reset_connection,
-    safe_repo_dir,
     snapshot_path,
     source_scout_home,
 )
-from .catalog_repositories import (
-    garbage_collect_snapshots,
-    get_latest_snapshot_identity,
-    get_repository,
-    get_repository_card_for_snapshot,
-    get_snapshot,
-    list_repositories_for_qualification,
-    list_repository_cards_for_profile,
-    list_snapshots_for_evidence,
-    update_repository_card_profile,
-    upsert_repository,
-    upsert_repository_card,
-    upsert_snapshot,
-)
-from .catalog_scoring import _has_backend_path
-from .catalog_search import (
-    BM25_MAX_BOOST,
-    BM25_MIN_ROLE_OVERLAP,
-    BM25_ROLE_VERSION,
-    MIN_RETRIEVAL_SCORE_V1,
-    MIN_TASK_RELEVANCE_SIGNAL_V1,
-    RETRIEVAL_THRESHOLD_VERSION,
-    search_assets,
-)
+from .catalog_repositories import get_repository, get_snapshot, upsert_repository, upsert_snapshot
 
 __all__ = [
-    "ALLOWED_REUSE_OUTCOMES",
-    "ANALYZER_VERSION",
-    "BM25_MAX_BOOST",
-    "BM25_MIN_ROLE_OVERLAP",
-    "BM25_ROLE_VERSION",
-    "DEFAULT_DB_NAME",
-    "MIN_RETRIEVAL_SCORE_V1",
-    "MIN_TASK_RELEVANCE_SIGNAL_V1",
-    "RETRIEVAL_THRESHOLD_VERSION",
-    "assessment_bundle_path",
-    "bundle_path",
     "catalog_db_path",
-    "delete_assets_for_snapshots",
     "ensure_home",
-    "garbage_collect_snapshots",
-    "get_asset_detail",
     "get_connection",
-    "get_latest_reuse_assessment",
-    "get_latest_snapshot_identity",
-    "get_repository",
-    "get_repository_card_for_snapshot",
-    "get_reuse_assessment",
-    "get_snapshot",
     "initialize_catalog",
-    "list_evidence_refinements",
-    "list_repositories_for_qualification",
-    "list_repository_cards_for_profile",
-    "list_snapshots_for_evidence",
-    "record_analysis_run",
-    "record_reuse_outcome",
     "reset_connection",
-    "safe_repo_dir",
-    "search_assets",
     "snapshot_path",
     "source_scout_home",
-    "store_evidence_refinement",
-    "store_reuse_assessment",
-    "task_signature",
-    "update_repository_card_profile",
-    "upsert_asset",
+    "get_repository",
+    "get_snapshot",
     "upsert_repository",
-    "upsert_repository_card",
     "upsert_snapshot",
-    "_has_backend_path",
+    "read_records",
 ]
+
+HISTORICAL_TABLES = frozenset(
+    {
+        "repositories",
+        "snapshots",
+        "repository_cards",
+        "assets",
+        "reuse_assessments",
+        "reuse_outcomes",
+        "analysis_runs",
+        "evidence_refinements",
+        "reference_sources",
+        "implementation_references",
+    }
+)
+
+
+def read_records(table: str, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+    """Paginated read/export without reinterpreting old fields or touching artifacts."""
+    if table not in HISTORICAL_TABLES or not 1 <= limit <= 100 or offset < 0:
+        raise ValueError("Select a known table, limit 1..100 and nonnegative offset.")
+    with get_connection() as conn:
+        cursor = conn.execute(f'SELECT * FROM "{table}" ORDER BY 1 LIMIT ? OFFSET ?', [limit, offset])
+        columns = [str(col[0]) for col in cursor.description]
+        rows = [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+    return {"table": table, "offset": offset, "rows": rows, "next_offset": offset + len(rows)}

@@ -4,7 +4,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from source_scout import catalog, deepseek, fastcontext
+from source_scout import deepseek, fastcontext
 from tests.fastcontext_helpers import (
     _payload_message_text,
     _response_message_json,
@@ -85,10 +85,7 @@ async def test_explore_local_project_returns_ephemeral_citations(tmp_path: Path)
     assert trace[1]["final_citations"] == ["src/components/data-table.tsx:1-4"]
     assert stored["accounting"]["request_count"] == 2
 
-    conn = catalog.get_connection()
-    assert conn.execute("SELECT COUNT(*) FROM evidence_refinements").fetchone()[0] == 0
-    assert conn.execute("SELECT COUNT(*) FROM analysis_runs").fetchone()[0] == 0
-    assert conn.execute("SELECT COUNT(*) FROM reuse_outcomes").fetchone()[0] == 0
+    assert not (root / ".source_scout" / "cache.duckdb").exists()
 
 
 @pytest.mark.asyncio

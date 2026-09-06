@@ -13,7 +13,9 @@ from .constants import SKIP_DIRS
 from .path_safety import EXTRA_SKIP_DIRS
 
 PROFILE_VERSION = "target-profile-v1"
-MAX_MANIFEST_BYTES = 2_000_000
+MAX_MANIFEST_BYTES = 240_000
+MAX_PROFILE_FILES = 6_000
+MAX_PROFILE_MANIFESTS = 64
 
 SOURCE_SUFFIX_LANGUAGES = {
     ".py": "python",
@@ -184,6 +186,8 @@ def build_target_profile(project_path: str | Path) -> TargetProfileV1:
         _record_file_shape(accumulator, rel_path)
         if _is_manifest_path(rel_path):
             accumulator.manifest_paths.add(rel_path)
+            if len(accumulator.manifest_paths) > MAX_PROFILE_MANIFESTS:
+                raise TargetProfileError("Profile exceeds 64 manifests; target fit is unavailable.")
 
         name = path.name.lower()
         if name == "package.json":
@@ -287,6 +291,8 @@ def _project_files(root: Path) -> list[tuple[Path, str]]:
                 continue
             rel_path = path.relative_to(root).as_posix()
             files.append((path, rel_path))
+            if len(files) > MAX_PROFILE_FILES:
+                raise TargetProfileError("Profile exceeds 6000 files; target fit is unavailable.")
     return files
 
 
@@ -369,7 +375,9 @@ def _read_manifest_text(path: Path) -> str | None:
     try:
         if path.stat().st_size > MAX_MANIFEST_BYTES:
             return None
-        return path.read_text(encoding="utf-8", errors="replace")
+        with path.open("rb") as stream:
+            raw = stream.read(MAX_MANIFEST_BYTES + 1)
+        return raw.decode("utf-8", errors="replace") if len(raw) <= MAX_MANIFEST_BYTES else None
     except OSError:
         return None
 

@@ -67,7 +67,7 @@ def test_tracked_local_explore_suite_loads_by_alias() -> None:
     suite = local_explore_eval.load_suite("source-scout")
 
     assert suite["suite_id"] == "local-explore-source-scout"
-    assert 15 <= len(suite["tasks"]) <= 25
+    assert len(suite["tasks"]) == 4
     assert suite["tasks"][0]["expected_citations"]
 
 
@@ -75,15 +75,6 @@ def test_tracked_local_explore_suite_keeps_underscore_alias() -> None:
     suite = local_explore_eval.load_suite("source_scout")
 
     assert suite["suite_id"] == "local-explore-source-scout"
-
-
-def test_tracked_ernaering_suite_loads_by_alias() -> None:
-    suite = local_explore_eval.load_suite("ernaering")
-
-    assert suite["suite_id"] == "local-explore-ernaering"
-    assert 10 <= len(suite["tasks"]) <= 15
-    assert suite["default_project_path"].endswith(r"\Ernaering")
-    assert suite["tasks"][0]["expected_citations"]
 
 
 def test_validate_suite_rejects_missing_expected_citations() -> None:
@@ -426,7 +417,7 @@ def test_eval_local_explore_cli_invokes_runner(monkeypatch, capsys, tmp_path: Pa
         "argv",
         [
             "source_scout",
-            "eval-local-explore",
+            "eval-navigation",
             "--suite",
             "source-scout",
             "--max-turns",

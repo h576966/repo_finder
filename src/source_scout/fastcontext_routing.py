@@ -183,165 +183,39 @@ def _task_terms(task: str) -> list[str]:
 
 
 def _task_family_routing(terms: list[str]) -> dict[str, Any]:
-    term_set = set(terms)
-    if term_set & {"documentation", "docs", "readme", "agents", "usage"}:
-        return {
-            "task_type": "documentation_navigation",
-            "target_family": "docs",
-            "priority_paths": ["README.md", "AGENTS.md"],
-            "priority_prefixes": ["docs/"],
-        }
-    if term_set & {"test", "tests", "pytest", "assert", "asserts", "verifies", "verify", "prove"}:
-        return {
-            "task_type": "test_navigation",
-            "target_family": "tests",
-            "priority_paths": [],
-            "priority_prefixes": ["tests/"],
-        }
-    if term_set & {"mcp", "fastmcp"}:
-        return {
-            "task_type": "mcp_navigation",
-            "target_family": "mcp",
-            "priority_paths": [],
-            "priority_prefixes": ["src/", "app/", "lib/", "tests/"],
-        }
-    if {"status", "server", "loaded", "load", "smoke"} & term_set and (
-        {"lmstudio", "studio", "fastcontext"} & term_set
-    ):
-        return {
-            "task_type": "cli_navigation",
-            "target_family": "cli",
-            "priority_paths": [],
-            "priority_prefixes": ["src/", "app/", "lib/", "cli/", "tests/"],
-        }
-    if {
-        "dataclass",
-        "dataclasses",
-        "model",
-        "models",
-        "result",
-        "results",
-        "shape",
-        "shapes",
-    } & term_set and {
-        "candidate",
-        "candidates",
-        "bundle",
-        "bundles",
-        "outcome",
-        "outcomes",
-        "explore_local",
-    } & term_set:
-        return {
-            "task_type": "source_navigation",
-            "target_family": "src",
-            "priority_paths": [],
-            "priority_prefixes": ["src/", "app/", "lib/"],
-        }
-    if {"github", "api", "rate_limit", "repository", "search", "calls", "requests"} & term_set and (
-        {"github", "api", "rate_limit"} & term_set
-    ):
-        return {
-            "task_type": "source_navigation",
-            "target_family": "src",
-            "priority_paths": [],
-            "priority_prefixes": ["src/", "app/", "lib/"],
-        }
-    if term_set & {"cli", "command", "commands", "parser", "argparse"}:
-        return {
-            "task_type": "cli_navigation",
-            "target_family": "cli",
-            "priority_paths": [],
-            "priority_prefixes": ["src/", "app/", "lib/", "cli/", "scripts/", "tests/"],
-        }
-    if {"fastcontext", "explore_local", "exploration", "tool_loop", "tool"} & term_set and (
-        {"fastcontext", "explore_local", "exploration"} & term_set
-    ):
-        return {
-            "task_type": "source_navigation",
-            "target_family": "src",
-            "priority_paths": [],
-            "priority_prefixes": ["src/", "app/", "lib/", "tests/"],
-        }
-    if {"bundle", "bundles", "opened_bundle", "outcome", "outcomes"} & term_set:
-        return {
-            "task_type": "source_navigation",
-            "target_family": "src",
-            "priority_paths": [],
-            "priority_prefixes": ["src/", "app/", "lib/", "tests/"],
-        }
-    if {"profile", "profiles", "profiler", "repository_profile"} & term_set and (
-        {"strict", "json", "card", "cards", "repository"} & term_set
-    ):
-        return {
-            "task_type": "source_navigation",
-            "target_family": "src",
-            "priority_paths": [],
-            "priority_prefixes": ["src/", "app/", "lib/", "tests/"],
-        }
-    if {"evidence", "scanner", "scan", "dependency", "dependencies", "signal", "signals"} & term_set and (
-        {"evidence", "scanner", "scan"} & term_set
-    ):
-        return {
-            "task_type": "source_navigation",
-            "target_family": "src",
-            "priority_paths": [],
-            "priority_prefixes": ["src/", "app/", "lib/", "tests/"],
-        }
-    if {"eval", "evals", "evaluation", "suite"} & term_set and {
-        "loaded",
-        "scored",
-        "score",
-        "summarized",
-        "summary",
-        "runner",
-        "exposed",
-    } & term_set:
-        return {
-            "task_type": "eval_runner_navigation",
-            "target_family": "eval_runner",
-            "priority_paths": [],
-            "priority_prefixes": ["src/", "evals/", "tests/"],
-        }
-    if {"catalog", "candidate", "candidates", "search_assets"} & term_set and (
-        {
-            "score",
-            "scored",
-            "scoring",
-            "search",
-            "searched",
-            "capability",
-            "intent",
-            "profile",
-            "signals",
-        }
-        & term_set
-    ):
-        return {
-            "task_type": "source_navigation",
-            "target_family": "src",
-            "priority_paths": [],
-            "priority_prefixes": ["src/", "app/", "lib/", "tests/"],
-        }
-    if term_set & {"golden", "fixture", "fixtures", "suite", "eval", "evals", "evaluation"}:
-        return {
-            "task_type": "fixture_navigation",
-            "target_family": "evals",
-            "priority_paths": [],
-            "priority_prefixes": ["evals/"],
-        }
-    if term_set & {"assessment", "assessor", "verdict", "reuse"}:
-        return {
-            "task_type": "assessment_navigation",
-            "target_family": "assessment",
-            "priority_paths": [],
-            "priority_prefixes": ["src/", "tests/"],
-        }
+    """Small file-family hints; source evidence still determines the result."""
+    families = [
+        (
+            {"documentation", "docs", "readme", "agents", "usage"},
+            "documentation",
+            "docs",
+            ["docs/"],
+            ["README.md", "AGENTS.md"],
+        ),
+        ({"test", "tests", "pytest", "assert", "verify"}, "test", "tests", ["tests/"], []),
+        (
+            {"cli", "command", "commands", "parser", "argparse"},
+            "cli",
+            "cli",
+            ["src/", "app/", "lib/", "scripts/"],
+            [],
+        ),
+        ({"mcp", "fastmcp"}, "mcp", "mcp", ["src/", "app/", "lib/"], []),
+        ({"eval", "evals", "evaluation", "fixture", "fixtures", "suite"}, "fixture", "evals", ["evals/"], []),
+    ]
+    for keywords, task_type, family, prefixes, paths in families:
+        if set(terms) & keywords:
+            return {
+                "task_type": task_type + "_navigation",
+                "target_family": family,
+                "priority_paths": paths,
+                "priority_prefixes": prefixes,
+            }
     return {
         "task_type": "source_navigation",
         "target_family": "src",
         "priority_paths": [],
-        "priority_prefixes": ["src/"],
+        "priority_prefixes": ["src/", "app/", "lib/"],
     }
 
 
@@ -427,15 +301,6 @@ def _task_family_path_bonus(rel_path: str, routing: dict[str, Any]) -> int:
     if target_family == "mcp":
         if "server" in normalized or "mcp" in normalized:
             bonus += 10
-    if target_family == "assessment" and ("assessor" in normalized or "assessment" in normalized):
-        bonus += 16
-    if target_family == "eval_runner" and ("eval" in normalized or normalized.startswith("evals/")):
-        if normalized.startswith("src/"):
-            bonus += 22
-        elif normalized.startswith("tests/"):
-            bonus += 16
-        else:
-            bonus += 6
     return bonus
 
 

@@ -1,41 +1,15 @@
 # Project-local Codex CLI / VS Code extension configuration for this checkout.
 # Serena is pinned and runtime-verified; see docs/source_scout_direction.md.
-[mcp_servers.source_scout]
-command = 'C:\AI\Dev\source_scout\.venv\Scripts\python.exe'
-args = ['-m', 'source_scout', 'serve-mcp', '--profile', 'sidecar']
-cwd = 'C:\AI\Dev\source_scout'
-enabled_tools = ['explore_local_code']
-startup_timeout_sec = 20
-tool_timeout_sec = 300
-
-[mcp_servers.source_scout.env]
-PYTHONPATH = 'C:\AI\Dev\source_scout\src'
-SOURCE_SCOUT_EXPLORATION_DEADLINE_SECONDS = '240'
-SOURCE_SCOUT_MCP_DEADLINE_SECONDS = '270'
-
-# Explicitly opt in by setting enabled=true, then reconnecting MCP servers.
-[mcp_servers.source_scout_references]
-command = 'C:\AI\Dev\source_scout\.venv\Scripts\python.exe'
-args = ['-m', 'source_scout', 'serve-mcp', '--profile', 'references']
-cwd = 'C:\AI\Dev\source_scout'
-enabled = false
-enabled_tools = ['find_reuse_references', 'get_reuse_context']
-startup_timeout_sec = 20
-tool_timeout_sec = 60
-
-[mcp_servers.source_scout_references.env]
-PYTHONPATH = 'C:\AI\Dev\source_scout\src'
-
 [mcp_servers.serena]
 command = 'C:\AI\Dev\source_scout\.source_scout\tools\serena-venv\Scripts\serena.exe'
-args = ['start-mcp-server', '--project', 'C:\AI\Dev\source_scout', '--context', 'C:\AI\Dev\source_scout\config\serena-context.yml', '--mode', 'no-memories', '--enable-web-dashboard', 'false', '--open-web-dashboard', 'false', '--enable-gui-log-window', 'false']
-cwd = 'C:\AI\Dev\source_scout'
+args = ['start-mcp-server', '--project-from-cwd', '--context', 'C:\AI\Dev\source_scout\config\serena-context.yml', '--mode', 'no-memories', '--enable-web-dashboard', 'false', '--open-web-dashboard', 'false', '--enable-gui-log-window', 'false']
 enabled = true
 startup_timeout_sec = 60
 tool_timeout_sec = 120
-enabled_tools = ['initial_instructions', 'get_current_config', 'get_symbols_overview', 'find_symbol', 'find_referencing_symbols', 'find_implementations', 'find_declaration']
+enabled_tools = ['initial_instructions', 'get_current_config', 'get_symbols_overview', 'find_symbol', 'find_referencing_symbols', 'find_declaration']
 
 [mcp_servers.serena.env]
+UV_TOOL_DIR = 'C:\AI\Dev\source_scout\.source_scout\tools\uv-tools'
 SERENA_HOME = 'C:\AI\Dev\source_scout\.source_scout\serena-home'
 UVX = 'C:\AI\Dev\source_scout\.source_scout\tools\serena-venv\Scripts\uvx.exe'
 UV_CACHE_DIR = 'C:\AI\Dev\source_scout\.source_scout\tools\uv-cache'

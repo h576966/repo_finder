@@ -1,124 +1,78 @@
-# Development Notes
+# Development notes — 2026-09-06
 
-Useful implementation notes for the current Source Scout product path.
-
-## Product Scope
-
-- Keep the active path local-first, commit-pinned, bounded, and evidence-backed.
-- Favor eval-backed improvements to retrieval, target fit, assessment, bundles,
-  and local exploration over broad framework or repository coverage.
-- Defer hosted dashboards, semantic index layers, autonomous integration,
-  model reranking, outcome-based ranking, and multi-provider routing until the
-  deterministic baseline demonstrates a concrete need.
-- Do not turn Source Scout into generic repository ranking, license automation,
-  or an external review workflow.
-
-## FastMCP
-
-- Define tools with `@mcp.tool()` and use `annotations={"readOnlyHint": True}`
-  only for tools that do not write files, mutate the catalog, or record outcomes.
-- Prefer `Annotated[..., Field(...)]` for tool parameters so MCP clients get clear
-  schemas.
-- Return project dataclasses from `models.py` for structured tool output.
-- Use `ToolError` for user-correctable validation errors.
-- Use structured runtime errors for recoverable system failures such as rate
-  limits.
-
-## GitHub API
-
-- Repository search uses `GET /search/repositories` with query qualifiers such as
-  `language:`, `topic:`, `pushed:`, `archived:false`, `is:public`, `size:`, and
-  `in:name,description,topics,readme`.
-- Qualification rejects archived, private, stale, mirrored, oversized,
-  docs-only/empty, lockfile-only, and generated/vendor-heavy repositories.
-- Authenticated search has tighter search-specific limits than normal REST calls;
-  keep scouting offline/batched rather than per MCP request.
-- Treat GitHub language metadata as a signal only. Confirm stack via manifests,
-  config files, and local source snapshots.
-- Resolve and store the exact default-branch commit SHA before analysis.
-
-## Local Snapshots
-
-- Clone or fetch by commit SHA, not moving branch names.
-- Never execute code from cloned repositories.
-- Store generated catalog data under `.source_scout/`.
-- Garbage-collect old snapshots through `source-scout gc`.
-
-## Reuse Loop Contracts
-
-- Preserve the order `find_reusable_code -> assess_reusable_code ->
-  get_source_bundle`.
-- Pass the same optional `project_path` to find and assess. Target profiling is
-  read-only: do not execute code, follow directory symlinks, persist source
-  text, or store the absolute project path.
-- `get_source_bundle` accepts only an `assessment_id`. Do not add a legacy
-  candidate/task-signature bridge.
-- Only current `select` and `inspect` assessments can create bundles. Old-schema
-  assessments must be rerun.
-- New bundles live at
-  `.source_scout/bundles/<candidate_id>/<assessment_id>/`; legacy bundle
-  directories remain readable and untouched.
-- Manifest `source-bundle-v2` records exact commit/provenance, required and
-  optional files, import-closure diagnostics, source hashes/permalinks, warnings,
-  dependency constraints, and total bytes.
-
-## Model Runtime
-
-- DeepSeek V4 Flash is the only model runtime. Every model-backed role uses the
-  rolling API alias `deepseek-v4-flash`.
-- Base URL: `https://api.deepseek.com`; endpoint: `/responses`.
-- Structured assessment calls and every exploration request use Responses
-  `text.format` with JSON Schema.
-  Exploration replays response output items and `function_call_output` because
-  the API is stateless and does not support `previous_response_id`.
-- Requests use `reasoning={"effort":"none"}` and temperature `0`. Non-retryable
-  errors surface directly; transient retries are bounded by the SDK.
-- The assessment role handles JSON profiling/synthesis after deterministic evidence exists.
-- The exploration role handles evidence refinement over read-only `READ`, `GLOB`, and
-  `GREP`-style tools, not general code generation.
-- Standalone FastContext exploration is evaluated through
-  `evals/golden/local_explore_source_scout_v1.json` and
-  `source-scout eval-local-explore --suite source-scout --max-turns 7`.
-- Final FastContext evidence is budgeted to at most three citations across at
-  most three files, with one or two tight ranges preferred.
-
-## Prompt Maintenance
-
-- Keep production prompts in source code and review them like application logic.
-- Bump the relevant `PROMPT_VERSION` whenever prompt behavior changes.
-- Prefer short, outcome-first prompts with explicit evidence rules, retrieval
-  budgets, validation rules, and output schema expectations.
-- Preserve all returned Responses output items before appending matching
-  `function_call_output` items. Every function call must receive an output,
-  including calls skipped by the local execution cap.
-- Do not add broad process instructions unless tests or evals show they improve
-  retrieval or assessment quality.
-
-API status and smoke tests:
+Install `.[all,dev]` in the trusted working copy and run `source-scout check`
+before completion. The report records the actual tracked and non-ignored file
+identity before and after checks. Rerun after edits. Do not run cloned source
+code or use this runner as a generic verification engine for another project.
 
 ```powershell
-source-scout model-status --smoke-test
+.venv\Scripts\python.exe -m pytest tests/test_implementation_references.py tests/test_catalog_processes.py tests/test_github_client.py -q --basetemp .source_scout/refs-test -o cache_dir=.source_scout/pytest-cache
+.venv\Scripts\python.exe -m pytest tests/test_investigation_anchors.py tests/test_exploration_policy.py tests/test_sidecar.py tests/test_integration.py -q --basetemp .source_scout/integration-test -o cache_dir=.source_scout/pytest-cache
+.venv\Scripts\python.exe -m source_scout check --format json
 ```
 
-Status failures include an `error_type`. A sandbox-only `connection` failure
-from a CLI fallback may be retried once with approved network access. When
-Codex uses Source Scout, MCP is authoritative: diagnose an exploration failure
-once with the MCP `model_status` tool and do not repeat application or provider
-errors through the CLI. Handle configuration, authentication, billing,
-rate-limit, and service errors directly.
+Use a fresh basetemp path for a new run. Catalog fixtures are opt-in. The autouse
+test fixture supplies dummy model credentials, removes external API credentials
+and blocks external socket connections, while retaining local MCP IPC. GitHub
+and DeepSeek use HTTP mock transports in standard tests. No paid eval runs in
+checks. The small Windows/Linux CI installs dependencies, then runs the same
+offline contracts on Python 3.12; Linux CI has not been executed on this Windows
+host.
 
-Default test runs cover catalog, assessment, the DeepSeek Responses contract,
-and exploration:
+Baseline `ec5266d78157b5c0a6c7dafc08b7cd34f25d7116` had 385 tests. The current
+suite collects 245: exclusive assessment/scoring/bundling/refinement/eval tests
+were retired, and product regressions now cover metadata false positives,
+canonical CRLF/filter-safe blobs, bounded Unicode/one-line responses, cjs/cts,
+unknown ecosystem fit, two-process add/find, lock release and rollback,
+historical schema/ID/hash compatibility, retired GC, Windows long paths,
+GitHub auth/failure/provenance, anchors and actual stdio across two worktrees.
+Existing policy-before-key/source, path escape, stale evidence, deadlines, zero
+retry and process termination contracts remain. Counts alone are not coverage.
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-```
+`eval-navigation --suite source-scout` is an explicit paid navigation diagnostic,
+not product acceptance. Its portable v2 fixture names current source relations;
+invalid citations must be zero. Historical reuse suites, personal worktree paths
+and `check --with-local-explore-eval` are removed. No live diagnostic was run.
 
-Required model environment:
+Versioned contracts: implementation reference schema/index v2; investigation
+report v3, evidence schema v3, prompt v5, analyzer v4; Git materialization v2.
+Historic fields retain their original meaning. `explore-local` and
+`fastcontext.explore_local_project` remain limited caller compatibility, with
+the historical `project_path` result field; modern MCP inputs use `source_root`.
 
-```text
-DEEPSEEK_API_KEY=<inherited by the CLI or MCP process>
-# Optional:
-SOURCE_SCOUT_MODEL_TIMEOUT=120
-SOURCE_SCOUT_MCP_DEADLINE_SECONDS=270
-```
+## Dependencies and official contracts checked 2026-09-06
+
+No blanket upgrade: installed FastMCP 3.4.2, DuckDB 1.5.4, GitPython 3.1.50,
+Pydantic 2.13.4, HTTPX 0.28.1 and OpenAI SDK 2.44.0 were retained. Development
+versions observed: Ruff 0.15.20, mypy 2.1.0, pytest 9.1.1. Extras separate imports
+and installation; a clean built wheel was installed without optional dependencies
+and `check --help` succeeded with model/catalog/MCP packages absent.
+
+[Codex plugin packaging](https://developers.openai.com/plugins/build/plugins)
+and [skill documentation](https://learn.chatgpt.com/docs/build-skills) were checked
+against actual CLI 0.153.0 discovery. This host reads the prior `.codex/skills`
+location; the migration does not duplicate it under `.agents/skills`. The helper's
+`mcpServers` wrapper works on this host. Personal marketplace relative source
+paths resolved from the user directory in the actual installation, so the small
+installer uses `~/plugins/source-scout`; discovery is the acceptance check.
+
+[Serena's client guidance](https://oraios.github.io/serena/02-usage/030_clients.html)
+was checked; the installed commit stays pinned. Do not infer its revision from
+the banner, which on this host includes the caller checkout's Git revision.
+Use installed `direct_url.json`. Two isolated stdio sessions returned different
+symbol bodies for the same path in two worktrees, with correct callers. The
+probe sets a workspace `UV_TOOL_DIR` and offline cached LSP dependencies; its first
+sandboxed run diagnosed a uv tools-lock permission failure, then passed after
+the tools directory was explicitly scoped. No LSP upgrade was necessary.
+
+[DeepSeek Responses](https://api-docs.deepseek.com/api/create-response/) supports
+the selected `deepseek-v4-flash` and stateless conversation replay. Its
+[compatibility table](https://api-docs.deepseek.com/guides/responses_api/) says
+`max_tool_calls` and `parallel_tool_calls` are ignored. Local request/tool/deadline
+limits and replay therefore remain authoritative. No provider smoke check or
+paid request was used to verify this documentation.
+
+[GitHub REST version policy](https://docs.github.com/en/rest/about-the-rest-api/api-versions)
+still supports `2022-11-28` through 2028-03-10. Retain that version intentionally;
+moving to `2026-03-10` offers no required contract benefit here. Private Git
+fetch credentials are independent of REST; real private Git fetch was not tested.

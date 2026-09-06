@@ -1,536 +1,218 @@
+"""Source Scout CLI. Check imports only the local check runner."""
+
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json
-import os
 import sys
 from dataclasses import asdict
+from pathlib import Path
+from typing import Any
 
 from . import cli_checks as _cli_checks
-from .cli_output import _format_local_explore_text
-from .cli_status import _api_status, status_is_healthy
-from .exploration_policy import LOCAL_METHODS, SELECTIVE_USE_CASES
-from .failures import failure_from_exception
-from .fastcontext_constants import DEFAULT_MAX_TURNS
 
 _check_commands = _cli_checks._check_commands
 _run_check_commands = _cli_checks._run_check_commands
+RETIRED_COMMANDS = {
+    "scout",
+    "qualify",
+    "evidence",
+    "profile",
+    "assess",
+    "refine-evidence",
+    "eval",
+    "eval-reuse-loop",
+    "eval-assess",
+    "gc",
+    "audit",
+}
 
 
-def _require_github_token() -> None:
-    token = os.environ.get("GITHUB_TOKEN")
-    if token:
-        return
-    print("ERROR: GITHUB_TOKEN environment variable is required for this command.", file=sys.stderr)
-    print("Set it via: set GITHUB_TOKEN=ghp_your_token  (Windows)", file=sys.stderr)
-    print("         or: export GITHUB_TOKEN=ghp_your_token  (Unix)", file=sys.stderr)
-    sys.exit(1)
-
-
-def _run_mcp(transport: str, port: int, profile: str = "sidecar") -> None:
+def _run_mcp(transport: str, port: int, profile: str = "default") -> None:
     from fastmcp import settings
 
     from .server import create_server
 
     settings.check_for_updates = "off"
     mcp = create_server(profile)
-
     if transport == "http":
-        print(f"Starting MCP server on http://127.0.0.1:{port}/mcp")
         mcp.run(transport="http", host="127.0.0.1", port=port, show_banner=False)
     else:
         mcp.run(show_banner=False)
 
 
 def main() -> None:
+    from .exploration_policy import LOCAL_METHODS, SELECTIVE_USE_CASES
+    from .fastcontext_constants import DEFAULT_MAX_TURNS
+
+    # Transition messages must not import or invoke the retired chain.
+    if len(sys.argv) > 1 and sys.argv[1] in RETIRED_COMMANDS:
+        print(
+            "This workflow is retired. Use 'references add|find|context|github-search' "
+            "or 'references export-data' for historical records. No data was changed.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     parser = argparse.ArgumentParser(
-        description=("Source Scout - compact checks and optional read-only code exploration for Codex."),
+        description=(
+            "Source Scout: Implementation References, selective Code Investigation and this project's checks."
+        )
     )
-    parser.add_argument(
-        "--transport",
-        choices=["stdio", "http"],
-        default="stdio",
-        help="Transport protocol (default: stdio)",
+    parser.add_argument("--transport", choices=["stdio", "http"], default="stdio")
+    parser.add_argument("--port", type=int, default=8000)
+    sub = parser.add_subparsers(dest="command")
+    check = sub.add_parser("check", help="Run Source Scout's own Ruff, mypy and offline pytest checks")
+    check.add_argument("--format", choices=["text", "json"], default="text")
+    check.add_argument("--timeout-seconds", type=float, default=300.0)
+
+    refs = sub.add_parser("references", help="Manage and inspect explicit implementation references")
+    refsub = refs.add_subparsers(dest="reference_command", required=True)
+    add = refsub.add_parser("add", help="Pin one explicitly selected local/GitHub repository")
+    add.add_argument("--source", required=True)
+    add.add_argument("--kind", choices=["personal", "curated"], default="personal")
+    add.add_argument("--commit")
+    find = refsub.add_parser("find", help="Find source evidence, or abstain")
+    find.add_argument("--task", required=True)
+    find.add_argument("--target-project-path")
+    find.add_argument("--max-results", type=int, choices=range(1, 4), default=3)
+    context = refsub.add_parser("context", help="Read verified Git-blob context")
+    context.add_argument("--reference-id", required=True)
+    context.add_argument("--task", default="")
+    context.add_argument("--target-project-path")
+    search = refsub.add_parser("github-search", help="Explicit temporary GitHub repository leads")
+    search.add_argument("--task", required=True)
+    search.add_argument("--max-results", type=int, choices=range(1, 4), default=3)
+    inspect = refsub.add_parser("inspect", help="Temporarily inspect selected GitHub files at a commit")
+    inspect.add_argument("--source", required=True)
+    inspect.add_argument("--commit", required=True)
+    inspect.add_argument("--path", action="append", required=True)
+    export = refsub.add_parser("export-data", help="Read/export unchanged historical table records")
+    export.add_argument("--table", required=True)
+    export.add_argument("--limit", type=int, default=100)
+    export.add_argument("--offset", type=int, default=0)
+
+    investigate = sub.add_parser(
+        "investigate",
+        aliases=["explore-local"],
+        help="Investigate an unresolved relation after local navigation",
     )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8000,
-        help="Port for HTTP transport (default: 8000)",
+    investigate.add_argument("--task", required=True)
+    investigate.add_argument("--source-root", "--project-path", dest="source_root", required=True)
+    investigate.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
+    investigate.add_argument("--format", choices=["json", "text"], default="json")
+    investigate.add_argument("--trace-path")
+    investigate.add_argument("--reason", default="")
+    investigate.add_argument("--use-case", choices=SELECTIVE_USE_CASES)
+    investigate.add_argument(
+        "--attempted-local-method", dest="attempted_local_methods", action="append", choices=LOCAL_METHODS
     )
-    subparsers = parser.add_subparsers(dest="command")
-
-    check_parser = subparsers.add_parser("check", help="Run local development checks")
-    check_parser.add_argument("--with-local-explore-eval", action="store_true")
-    check_parser.add_argument("--format", choices=["text", "json"], default="text")
-    check_parser.add_argument("--timeout-seconds", type=float, default=300.0)
-
-    reference_add_parser = subparsers.add_parser(
-        "reference-add", help="Add one explicit local or GitHub repository as implementation references"
+    investigate.add_argument("--anchor", action="append", help="Known source path[:start[-end]]")
+    serve = sub.add_parser("serve-mcp", help="Run the three-tool MCP surface")
+    serve.add_argument("--transport", choices=["stdio", "http"], default="stdio")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument(
+        "--profile", choices=["default", "investigator", "references", "sidecar"], default="default"
     )
-    reference_add_parser.add_argument("--source", required=True)
-    reference_add_parser.add_argument("--kind", choices=["personal", "curated"], default="personal")
-    reference_add_parser.add_argument("--commit", default=None)
-
-    reference_find_parser = subparsers.add_parser(
-        "reference-find", help="Find deterministic matches in the explicit reference collection"
-    )
-    reference_find_parser.add_argument("--task", required=True)
-    reference_find_parser.add_argument("--project-path", default=None)
-    reference_find_parser.add_argument("--max-results", type=int, choices=range(1, 4), default=3)
-
-    reference_context_parser = subparsers.add_parser(
-        "reference-context", help="Read verified source context for a reference candidate"
-    )
-    reference_context_parser.add_argument("--candidate-id", required=True)
-    reference_context_parser.add_argument("--task", default="")
-    reference_context_parser.add_argument("--project-path", default=None)
-
-    github_fallback_parser = subparsers.add_parser(
-        "reference-github-search", help="Explicitly inspect up to three pinned GitHub fallback candidates"
-    )
-    github_fallback_parser.add_argument("--task", required=True)
-    github_fallback_parser.add_argument("--max-results", type=int, choices=range(1, 4), default=3)
-
-    scout_parser = subparsers.add_parser("scout", help="Discover raw candidate repositories")
-    scout_parser.add_argument("--domain", default="personal-code", choices=["personal-code", "nextjs-ui"])
-    scout_parser.add_argument("--limit", type=int, default=500)
-
-    qualify_parser = subparsers.add_parser("qualify", help="Clone and qualify repositories into snapshots")
-    qualify_parser.add_argument("--limit", type=int, default=100)
-
-    evidence_parser = subparsers.add_parser("evidence", help="Create deterministic evidence assets")
-    evidence_parser.add_argument("--capability")
-    evidence_parser.add_argument("--domain", choices=["personal-code", "nextjs-ui"])
-    evidence_parser.add_argument("--limit", type=int, default=30)
-
-    eval_parser = subparsers.add_parser("eval", help="Run a local golden eval suite")
-    eval_parser.add_argument("--suite", default="ui-reuse")
-    eval_parser.add_argument("--top-k", type=int, default=5)
-    eval_parser.add_argument("--label", default=None)
-    eval_parser.add_argument("--output", default=None)
-
-    reuse_loop_parser = subparsers.add_parser(
-        "eval-reuse-loop",
-        help="Run a compact quality report for find -> assess -> bundle",
-    )
-    reuse_loop_parser.add_argument("--suite", default="ui-reuse")
-    reuse_loop_parser.add_argument("--top-k", type=int, default=3)
-    reuse_loop_parser.add_argument("--label", default=None)
-    reuse_loop_parser.add_argument("--output", default=None)
-    reuse_loop_parser.add_argument("--limit-tasks", type=int, default=None)
-    reuse_loop_parser.add_argument(
-        "--fastcontext-policy",
-        choices=["auto", "always", "never"],
-        default="never",
-    )
-    reuse_loop_parser.add_argument("--max-evidence-rounds", type=int, default=0)
-    reuse_loop_parser.add_argument("--use-cache", action="store_true")
-
-    local_eval_parser = subparsers.add_parser(
-        "eval-local-explore",
-        help="Run a FastContext local exploration golden eval suite",
-    )
-    local_eval_parser.add_argument("--suite", default="source-scout")
-    local_eval_parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
-    local_eval_parser.add_argument("--label", default=None)
-    local_eval_parser.add_argument("--output", default=None)
-    local_eval_parser.add_argument("--limit-tasks", type=int, default=None)
-    local_eval_parser.add_argument("--task-timeout-seconds", type=float, default=None)
-    local_eval_parser.add_argument("--progress", action="store_true")
-
-    assess_eval_parser = subparsers.add_parser(
-        "eval-assess",
-        help="Run a mocked golden eval suite for task-specific reuse assessment",
-    )
-    assess_eval_parser.add_argument("--suite", default="assessment-smoke")
-    assess_eval_parser.add_argument("--label", default=None)
-    assess_eval_parser.add_argument("--output", default=None)
-    assess_eval_parser.add_argument("--deterministic-only", action="store_true")
-
-    profile_parser = subparsers.add_parser(
-        "profile",
-        help="Profile repository cards with the configured assessment model",
-    )
-    profile_parser.add_argument("--limit", type=int, default=30)
-    profile_parser.add_argument("--force", action="store_true")
-    profile_parser.add_argument("--priority", choices=["created-at", "audit"], default="created-at")
-    profile_parser.add_argument("--scope", choices=["downloaded", "cataloged", "all"], default="downloaded")
-
-    audit_parser = subparsers.add_parser(
-        "audit",
-        help="Audit catalog quality and cleanup candidates",
-    )
-    audit_parser.add_argument("--limit", type=int, default=10, help="Max repos per bucket")
-    audit_parser.add_argument("--bucket", default=None, help="Optional bucket filter")
-    audit_parser.add_argument("--scope", choices=["downloaded", "cataloged", "all"], default="downloaded")
-
-    assess_parser = subparsers.add_parser(
-        "assess",
-        help="Assess one reusable-code candidate for a task",
-    )
-    assess_parser.add_argument("--candidate-id", required=True)
-    assess_parser.add_argument("--task", required=True)
-    assess_parser.add_argument(
-        "--project-path",
-        default=None,
-        help="Optional target project path for deterministic compatibility profiling",
-    )
-    assess_parser.add_argument(
-        "--fastcontext-policy",
-        choices=["auto", "always", "never"],
-        default="auto",
-    )
-    assess_parser.add_argument("--max-evidence-rounds", type=int, default=1)
-    assess_parser.add_argument("--force", action="store_true")
-
-    api_parser = subparsers.add_parser(
-        "model-status",
-        help="Check the configured model API",
-    )
-    api_parser.add_argument("--smoke-test", action="store_true")
-
-    refine_parser = subparsers.add_parser(
-        "refine-evidence",
-        help="Use FastContext to refine evidence for a catalog candidate",
-    )
-    refine_parser.add_argument("--candidate-id")
-    refine_parser.add_argument("--task")
-    refine_parser.add_argument("--suite")
-    refine_parser.add_argument("--top-k", type=int, default=3)
-    refine_parser.add_argument("--label", default=None)
-    refine_parser.add_argument("--output", default=None)
-    refine_parser.add_argument("--limit-tasks", type=int, default=None)
-    refine_parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
-
-    explore_local_parser = subparsers.add_parser(
-        "explore-local",
-        help="Use FastContext to find relevant files and lines in a local project",
-    )
-    explore_local_parser.add_argument("--task", required=True)
-    explore_local_parser.add_argument("--project-path", default=".")
-    explore_local_parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
-    explore_local_parser.add_argument("--format", choices=["json", "text"], default="json")
-    explore_local_parser.add_argument("--trace-path", default=None)
-    explore_local_parser.add_argument("--reason", default="", help="Why rg/Serena did not suffice")
-    explore_local_parser.add_argument("--use-case", choices=SELECTIVE_USE_CASES)
-    explore_local_parser.add_argument(
-        "--attempted-local-method", dest="attempted_local_methods", action="append",
-        choices=LOCAL_METHODS, help="Local method already attempted; repeat for multiple methods",
-    )
-
-    serve_parser = subparsers.add_parser("serve-mcp", help="Run the MCP server")
-    serve_parser.add_argument("--transport", choices=["stdio", "http"], default=None)
-    serve_parser.add_argument("--port", type=int, default=None)
-    serve_parser.add_argument("--profile", choices=["sidecar", "references", "reuse"], default="sidecar")
-
-    gc_parser = subparsers.add_parser("gc", help="Garbage-collect old local snapshots")
-    gc_parser.add_argument("--keep-per-repo", type=int, default=2)
-
+    nav = sub.add_parser("eval-navigation", help="Explicit model-backed navigation diagnostic (paid)")
+    nav.add_argument("--suite", required=True)
+    nav.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
+    nav.add_argument("--label")
+    nav.add_argument("--output")
+    nav.add_argument("--limit-tasks", type=int)
+    nav.add_argument("--task-timeout-seconds", type=float, default=240.0)
+    nav.add_argument("--progress", action="store_true")
     args = parser.parse_args()
-
-    if args.command in (None, "serve-mcp"):
-        transport = args.transport
-        port = args.port
-        if args.command == "serve-mcp":
-            transport = args.transport or parser.get_default("transport")
-            port = args.port or parser.get_default("port")
-        _run_mcp(str(transport), int(port), getattr(args, "profile", "sidecar"))
+    if args.command in {None, "serve-mcp"}:
+        _run_mcp(args.transport, args.port, getattr(args, "profile", "default"))
         return
-
     if args.command == "check":
-        _run_check_commands(args.with_local_explore_eval, output_format=args.format,
-                            timeout_seconds=args.timeout_seconds)
+        _run_check_commands(output_format=args.format, timeout_seconds=args.timeout_seconds)
         return
+    try:
+        if args.command == "references":
+            result = _references(args)
+        elif args.command in {"investigate", "explore-local"}:
+            from . import fastcontext
+            from .cli_output import _format_local_explore_text
+            from .investigation_anchors import parse_cli_anchor
 
-    if args.command in {"reference-add", "reference-find", "reference-context", "reference-github-search"}:
-        from . import reuse_references
-
-        value: object
-        try:
-            if args.command == "reference-add":
-                value = asyncio.run(
-                    reuse_references.add_reference_source(
-                        args.source, selection_kind=args.kind, commit=args.commit
-                    )
-                )
-            elif args.command == "reference-find":
-                value = reuse_references.find_reuse_references(
-                    args.task, project_path=args.project_path, max_results=args.max_results
-                )
-            elif args.command == "reference-context":
-                value = reuse_references.get_reuse_context(
-                    args.candidate_id, task=args.task, project_path=args.project_path
-                )
-            else:
-                value = asyncio.run(
-                    reuse_references.search_github_fallback(
-                        args.task, max_results=args.max_results
-                    )
-                )
-        except (reuse_references.ReuseReferenceError, OSError, ValueError) as exc:
-            print(json.dumps({"status": "error", "error": str(exc)}, sort_keys=True), file=sys.stderr)
-            sys.exit(1)
-        output = reuse_references.reference_to_jsonable(value)
-        print(json.dumps(output, indent=2, sort_keys=True))
-        if output.get("status") in {"abstained", "network_error", "error"}:
-            sys.exit(1)
-        return
-
-    if args.command == "scout":
-        _require_github_token()
-        from .pipeline import scout
-
-        result = asyncio.run(scout(args.domain, args.limit))
-        print(result)
-        return
-
-    if args.command == "qualify":
-        _require_github_token()
-        from .pipeline import qualify
-
-        result = asyncio.run(qualify(args.limit))
-        print(result)
-        return
-
-    if args.command == "evidence":
-        from .evidence import run_evidence, run_evidence_domain
-
-        if args.domain and args.capability:
-            evidence_parser.error("--domain cannot be combined with --capability.")
-        if args.domain:
-            result = run_evidence_domain(args.domain, args.limit)
-        elif args.capability:
-            result = run_evidence(args.capability, args.limit)
-        else:
-            evidence_parser.error("Either --capability or --domain is required.")
-        print(result)
-        return
-
-    if args.command == "eval":
-        from pathlib import Path
-
-        from .eval_runner import run_eval
-
-        output_path = Path(args.output) if args.output else None
-        result = run_eval(args.suite, args.top_k, label=args.label, output_path=output_path)
-        summary = {
-            "suite_id": result["suite_id"],
-            "label": result["label"],
-            "passed": result["passed"],
-            "metrics": result["metrics"],
-            "report_path": result["report_path"],
-        }
-        print(json.dumps(summary, indent=2, sort_keys=True))
-        return
-
-    if args.command == "eval-reuse-loop":
-        from pathlib import Path
-
-        from .eval_runner import run_reuse_loop_report
-
-        output_path = Path(args.output) if args.output else None
-        result = asyncio.run(
-            run_reuse_loop_report(
-                args.suite,
-                args.top_k,
-                label=args.label,
-                output_path=output_path,
-                limit_tasks=args.limit_tasks,
-                fastcontext_policy=args.fastcontext_policy,
-                max_evidence_rounds=args.max_evidence_rounds,
-                force_assessment=not args.use_cache,
-            )
-        )
-        summary = {
-            "suite_id": result["suite_id"],
-            "label": result["label"],
-            "passed": result["passed"],
-            "metrics": result["metrics"],
-            "report_path": result["report_path"],
-        }
-        print(json.dumps(summary, indent=2, sort_keys=True))
-        return
-
-    if args.command == "eval-local-explore":
-        from pathlib import Path
-
-        from .local_explore_eval import run_local_explore_eval
-
-        output_path = Path(args.output) if args.output else None
-        result = asyncio.run(
-            run_local_explore_eval(
-                suite=args.suite,
-                max_turns=args.max_turns,
-                label=args.label,
-                output_path=output_path,
-                limit_tasks=args.limit_tasks,
-                task_timeout_seconds=args.task_timeout_seconds,
-                progress=args.progress,
-            )
-        )
-        summary = {
-            "suite_id": result["suite_id"],
-            "label": result["label"],
-            "passed": result["passed"],
-            "metrics": result["metrics"],
-            "report_path": result["report_path"],
-        }
-        print(json.dumps(summary, indent=2, sort_keys=True))
-        return
-
-    if args.command == "eval-assess":
-        from pathlib import Path
-
-        from .assessment_eval import run_assessment_eval
-
-        output_path = Path(args.output) if args.output else None
-        result = asyncio.run(
-            run_assessment_eval(
-                suite=args.suite,
-                label=args.label,
-                output_path=output_path,
-                deterministic_only=args.deterministic_only,
-            )
-        )
-        summary = {
-            "suite_id": result["suite_id"],
-            "label": result["label"],
-            "passed": result["passed"],
-            "metrics": result["metrics"],
-            "failure_examples": result["failure_examples"],
-            "report_path": result["report_path"],
-        }
-        print(json.dumps(summary, indent=2, sort_keys=True))
-        return
-
-    if args.command == "profile":
-        from .profiler import profile_repository_cards
-
-        result = asyncio.run(
-            profile_repository_cards(
-                args.limit,
-                force=args.force,
-                priority=args.priority,
-                scope=args.scope,
-            )
-        )
-        print(result)
-        return
-
-    if args.command == "audit":
-        from .catalog_audit import audit_catalog
-
-        try:
-            result = audit_catalog(limit_per_bucket=args.limit, bucket=args.bucket, scope=args.scope)
-        except ValueError as exc:
-            audit_parser.error(str(exc))
-        print(json.dumps(result, indent=2, sort_keys=True))
-        return
-
-    if args.command == "assess":
-        if args.max_evidence_rounds < 0 or args.max_evidence_rounds > 2:
-            assess_parser.error("--max-evidence-rounds must be between 0 and 2.")
-        from .assessor import AssessorError, assess_candidate, assessment_to_jsonable
-        from .deepseek import ModelError
-
-        try:
-            assessment_result = asyncio.run(
-                assess_candidate(
-                    candidate_id=args.candidate_id,
-                    task=args.task,
-                    project_path=args.project_path,
-                    fastcontext_policy=args.fastcontext_policy,
-                    max_evidence_rounds=args.max_evidence_rounds,
-                    force=args.force,
-                )
-            )
-        except (AssessorError, ModelError, OSError, ValueError) as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(1)
-        print(json.dumps(assessment_to_jsonable(assessment_result), sort_keys=True))
-        return
-
-    if args.command == "model-status":
-        status_result = asyncio.run(_api_status(args.smoke_test))
-        print(json.dumps(status_result, indent=2, sort_keys=True))
-        if not status_is_healthy(status_result):
-            sys.exit(1)
-        return
-
-    if args.command == "refine-evidence":
-        from pathlib import Path
-
-        from . import fastcontext
-
-        if args.suite:
-            if args.candidate_id or args.task:
-                refine_parser.error("--suite cannot be combined with --candidate-id or --task.")
-            output_path = Path(args.output) if args.output else None
-            result = asyncio.run(
-                fastcontext.refine_suite(
-                    suite=args.suite,
-                    top_k=args.top_k,
-                    label=args.label,
-                    output_path=output_path,
-                    max_turns=args.max_turns,
-                    limit_tasks=args.limit_tasks,
-                )
-            )
-            summary = {
-                "suite_id": result["suite_id"],
-                "label": result["label"],
-                "metrics": result["metrics"],
-                "scoring_recommendation": result["scoring_recommendation"],
-                "report_path": result["report_path"],
-            }
-            print(json.dumps(summary, indent=2, sort_keys=True))
-            return
-        if not args.candidate_id or not args.task:
-            refine_parser.error("--candidate-id and --task are required unless --suite is used.")
-        result = asyncio.run(
-            fastcontext.refine_candidate(
-                candidate_id=args.candidate_id,
-                task=args.task,
-                max_turns=args.max_turns,
-            )
-        )
-        print(json.dumps(result, indent=2, sort_keys=True))
-        return
-
-    if args.command == "explore-local":
-        from . import fastcontext
-        from .deepseek import ModelError
-
-        try:
-            local_result = asyncio.run(
+            local = asyncio.run(
                 fastcontext.explore_local_project(
                     task=args.task,
-                    project_path=args.project_path,
+                    project_path=args.source_root,
                     max_turns=args.max_turns,
                     trace_path=args.trace_path,
                     reason=args.reason,
                     use_case=args.use_case,
                     attempted_local_methods=args.attempted_local_methods,
+                    anchors=[parse_cli_anchor(item) for item in args.anchor] if args.anchor else None,
                 )
             )
-        except (fastcontext.FastContextError, ModelError, OSError, ValueError, TimeoutError) as exc:
-            failure = failure_from_exception(exc, stage="exploration")
-            print(json.dumps(failure.to_dict(), sort_keys=True), file=sys.stderr)
-            sys.exit(1)
-        if args.format == "text":
-            print(_format_local_explore_text(local_result))
+            print(
+                _format_local_explore_text(local)
+                if args.format == "text"
+                else json.dumps(asdict(local), sort_keys=True)
+            )
+            if local.status != "completed":
+                raise SystemExit(1)
+            return
         else:
-            print(json.dumps(asdict(local_result), indent=2, sort_keys=True))
-        if local_result.status != "completed":
-            sys.exit(1)
-        return
+            from .local_explore_eval import run_local_explore_eval
 
-    if args.command == "gc":
-        from .pipeline import gc
+            result = asyncio.run(
+                run_local_explore_eval(
+                    suite=args.suite,
+                    max_turns=args.max_turns,
+                    label=args.label,
+                    output_path=Path(args.output) if args.output else None,
+                    limit_tasks=args.limit_tasks,
+                    task_timeout_seconds=args.task_timeout_seconds,
+                    progress=args.progress,
+                )
+            )
+    except (OSError, ValueError, RuntimeError) as exc:
+        from .failures import failure_from_exception
 
-        result = gc(args.keep_per_repo)
-        print(result)
-        return
+        print(
+            json.dumps(
+                failure_from_exception(
+                    exc,
+                    stage="exploration" if args.command in {"investigate", "explore-local"} else args.command,
+                ).to_dict()
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+    print(json.dumps(result, sort_keys=True))
+
+
+def _references(args: argparse.Namespace) -> dict[str, Any]:
+    from . import implementation_references as references
+
+    command = args.reference_command
+    result: Any
+    if command == "add":
+        result = asyncio.run(
+            references.add_reference_source(args.source, selection_kind=args.kind, commit=args.commit)
+        )
+    elif command == "find":
+        result = references.find_implementation_references(
+            args.task, target_project_path=args.target_project_path, max_results=args.max_results
+        )
+    elif command == "context":
+        result = references.get_implementation_reference(
+            args.reference_id, task=args.task, target_project_path=args.target_project_path
+        )
+    elif command == "github-search":
+        result = asyncio.run(references.search_github_fallback(args.task, max_results=args.max_results))
+    elif command == "inspect":
+        result = asyncio.run(references.inspect_github_source(args.source, args.commit, paths=args.path))
+    else:
+        from .catalog import read_records
+
+        return read_records(args.table, limit=args.limit, offset=args.offset)
+    return references.reference_to_jsonable(result)
 
 
 if __name__ == "__main__":

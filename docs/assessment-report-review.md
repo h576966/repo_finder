@@ -1,3 +1,7 @@
+# Historical assessment experiment — retired 2026-09-06
+
+This is historical evidence. Its workflow and commands are removed; see the current README.
+
 # Assessment Report Review
 
 Use this guide when reading `source-scout assess` output or

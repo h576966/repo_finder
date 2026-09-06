@@ -1,6 +1,6 @@
-PROMPT_VERSION = "fastcontext-refine-v4"
-SCHEMA_VERSION = "fastcontext-evidence-v2"
-ANALYZER_VERSION = "fastcontext-harness-v3"
+PROMPT_VERSION = "code-investigation-v5"
+SCHEMA_VERSION = "code-investigation-evidence-v3"
+ANALYZER_VERSION = "code-investigation-harness-v4"
 
 DEFAULT_MAX_TURNS = 7
 MAX_TOOL_CALLS_PER_TURN = 5
