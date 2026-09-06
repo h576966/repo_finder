@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from source_scout import target_profile
 from source_scout.target_profile import (
     DependencySpec,
     TargetProfileError,
@@ -105,6 +106,112 @@ def test_build_target_profile_collects_canonical_target_metadata(tmp_path: Path)
 
     with pytest.raises(FrozenInstanceError):
         profile.has_tsconfig = False  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "fixture_path",
+    [
+        "tests/fixtures/conflict",
+        "test/fixtures/conflict",
+        "packages/core/__tests__/fixtures/conflict",
+        "spec/fixtures/conflict",
+        "specs/fixtures/conflict",
+        "evals/fixtures/conflict",
+        "Tests/Fixtures/conflict",
+    ],
+)
+def test_fixture_manifests_do_not_change_profile(tmp_path: Path, fixture_path: str) -> None:
+    (tmp_path / "package.json").write_text(
+        json.dumps({"type": "module", "dependencies": {"react": "^19"}}), encoding="utf-8"
+    )
+    fixture = tmp_path / fixture_path
+    fixture.mkdir(parents=True)
+    (fixture / "test_case.py").write_text("def test_case(): pass\n", encoding="utf-8")
+    baseline = build_target_profile(tmp_path)
+    assert baseline.languages == ("python",)
+    assert "tests-present" in baseline.test_signals
+
+    manifests = {
+        "package.json": json.dumps({
+            "type": "commonjs",
+            "packageManager": "pnpm@10",
+            "dependencies": {"react": "^18", "next": "^16"},
+            "devDependencies": {"vitest": "^4"},
+            "scripts": {"test": "jest"},
+        }),
+        "pyproject.toml": '[project]\ndependencies = ["django", "pytest"]\n[tool.poetry]\n',
+        "requirements-dev.txt": "hypothesis\n",
+        "Pipfile": '[packages]\nflask = "*"\n',
+        "Pipfile.lock": '{"default": {"fastapi": {"version": "==0.115"}}}',
+        "package-lock.json": '{"packages": {"": {"dependencies": {"vue": "^3"}}}}',
+        "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+        "yarn.lock": "",
+        "uv.lock": "",
+        "environment.yml": "name: fixture\n",
+    }
+    for name, content in manifests.items():
+        (fixture / name).write_text(content, encoding="utf-8")
+
+    profile = build_target_profile(tmp_path)
+    assert profile == baseline
+    assert profile.fingerprint == baseline.fingerprint
+
+
+@pytest.mark.parametrize(
+    "package_path",
+    [
+        "apps/web",
+        "packages/web",
+        "packages/fixtures",
+        "fixtures/demo",
+        "examples/demo",
+        "samples/demo",
+        "tests/samples/demo",
+        "tests/fixture-data/demo",
+        "fixtures/tests/demo",
+        "tests/data/fixtures/demo",
+    ],
+)
+def test_nested_and_ambiguous_manifests_remain_eligible(tmp_path: Path, package_path: str) -> None:
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    package = tmp_path / package_path
+    package.mkdir(parents=True)
+    (package / "package.json").write_text(
+        json.dumps({"dependencies": {"react": "^19"}, "packageManager": "pnpm@10"}), encoding="utf-8"
+    )
+    (package / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["fastapi>=0.115"]\n', encoding="utf-8"
+    )
+
+    profile = build_target_profile(tmp_path)
+    assert set(profile.manifest_paths) == {
+        "package.json", f"{package_path}/package.json", f"{package_path}/pyproject.toml"
+    }
+    assert profile.framework_signals == ("fastapi", "react")
+    assert profile.package_managers == ("pip", "pnpm")
+    assert _constraints(profile.runtime_dependencies) == {
+        ("npm", "react", f"{package_path}/package.json"): "^19",
+        ("pypi", "fastapi", f"{package_path}/pyproject.toml"): ">=0.115",
+    }
+
+
+def test_fixture_manifests_preserve_profile_bounds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(target_profile, "MAX_PROFILE_MANIFESTS", 1)
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    fixture = tmp_path / "tests" / "fixtures"
+    fixture.mkdir(parents=True)
+    (fixture / "package.json").write_text("{}", encoding="utf-8")
+    (fixture / "pyproject.toml").write_text("", encoding="utf-8")
+    assert build_target_profile(tmp_path).manifest_paths == ("package.json",)
+
+    # Ignored manifests still count toward the discovery file limit.
+    monkeypatch.setattr(target_profile, "MAX_PROFILE_FILES", 2)
+    with pytest.raises(TargetProfileError, match="6000 files"):
+        build_target_profile(tmp_path)
+    monkeypatch.setattr(target_profile, "MAX_PROFILE_FILES", 6000)
+    (tmp_path / "pyproject.toml").write_text("", encoding="utf-8")
+    with pytest.raises(TargetProfileError, match="64 manifests"):
+        build_target_profile(tmp_path)
 
 
 def test_target_profile_fingerprint_is_canonical_across_tuple_order() -> None:

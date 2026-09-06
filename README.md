@@ -69,6 +69,11 @@ write rolls back atomically; an already generated snapshot can remain for reuse.
 
 Retrieval gates on file paths, identifiers and source text. Repository metadata,
 manifest names, personal priority and advisory target fit cannot create a match.
+Profiles ignore manifests beneath an adjacent `tests/fixtures`, `test/fixtures`,
+`__tests__/fixtures`, `spec/fixtures`, `specs/fixtures`, or `evals/fixtures` directory
+pair (case-insensitive, at any depth). Root and normal nested workspace manifests,
+standalone `fixtures`, `examples`, and `samples` remain eligible. Source-file
+detection and the overall file bound are unchanged.
 Abstention does not trigger GitHub crawling. Python and Node target-fit signals
 are advisory; unsupported ecosystems are unknown. `.cjs` and `.cts` are indexed.
 

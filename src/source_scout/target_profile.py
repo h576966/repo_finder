@@ -185,6 +185,8 @@ def build_target_profile(project_path: str | Path) -> TargetProfileV1:
     for path, rel_path in files:
         _record_file_shape(accumulator, rel_path)
         if _is_manifest_path(rel_path):
+            if _is_test_fixture_manifest(rel_path):
+                continue
             accumulator.manifest_paths.add(rel_path)
             if len(accumulator.manifest_paths) > MAX_PROFILE_MANIFESTS:
                 raise TargetProfileError("Profile exceeds 64 manifests; target fit is unavailable.")
@@ -343,6 +345,16 @@ def _is_test_source_path(rel_path: str) -> bool:
     name = pure_path.name.lower()
     return bool(lower_parts & TEST_ROOT_NAMES) or (
         name.startswith("test_") or name.endswith("_test.py") or ".test." in name or ".spec." in name
+    )
+
+
+def _is_test_fixture_manifest(rel_path: str) -> bool:
+    # Require an adjacent test/evaluation context and fixtures directory.
+    # Standalone fixtures and normal nested workspace packages remain eligible.
+    parts = [part.lower() for part in PurePosixPath(rel_path).parts[:-1]]
+    return any(
+        context in TEST_ROOT_NAMES | {"evals"} and child == "fixtures"
+        for context, child in zip(parts, parts[1:])
     )
 
 
