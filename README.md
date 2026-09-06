@@ -7,7 +7,8 @@ Serena directly when they answer the question.
 
 ## Install
 
-Python 3.11+ and Git are required. From this trusted checkout:
+Windows is the supported platform. Python 3.11+ and Git are required.
+From this trusted checkout:
 
 ```powershell
 python -m venv .venv
@@ -15,7 +16,7 @@ python -m venv .venv
 .venv\Scripts\python.exe scripts/install_codex.py
 ```
 
-On Linux use `.venv/bin/python`. The base wheel has no runtime dependencies;
+The base wheel has no runtime dependencies;
 `references`, `investigation`, `mcp`, `all` and `dev` extras select existing
 dependencies. `check --help` and check dispatch do not import model, catalog or
 MCP packages. Running checks needs the dev tools; the complete product test suite

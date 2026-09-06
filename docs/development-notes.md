@@ -15,9 +15,9 @@ Use a fresh basetemp path for a new run. Catalog fixtures are opt-in. The autous
 test fixture supplies dummy model credentials, removes external API credentials
 and blocks external socket connections, while retaining local MCP IPC. GitHub
 and DeepSeek use HTTP mock transports in standard tests. No paid eval runs in
-checks. The small Windows/Linux CI installs dependencies, then runs the same
-offline contracts on Python 3.12; Linux CI has not been executed on this Windows
-host.
+checks. CI runs on Windows with Python 3.12, installs dependencies, then runs the
+same offline contracts. Windows is the supported platform; Linux compatibility
+is outside the current verification scope.
 
 Baseline `ec5266d78157b5c0a6c7dafc08b7cd34f25d7116` had 385 tests. The current
 suite collects 245: exclusive assessment/scoring/bundling/refinement/eval tests

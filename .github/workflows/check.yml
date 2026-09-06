@@ -2,10 +2,7 @@ name: Offline product contracts
 on: [push, pull_request]
 jobs:
   check:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
