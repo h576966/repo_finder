@@ -1,0 +1,27 @@
+# Project-local Codex CLI / VS Code extension configuration for this checkout.
+# Serena is deliberately disabled until installation and runtime verification.
+[mcp_servers.source_scout]
+command = 'C:\AI\Dev\source_scout\.venv\Scripts\python.exe'
+args = ['-m', 'source_scout', 'serve-mcp', '--profile', 'sidecar']
+cwd = 'C:\AI\Dev\source_scout'
+enabled_tools = ['explore_local_code', 'model_status']
+startup_timeout_sec = 20
+tool_timeout_sec = 300
+
+[mcp_servers.source_scout.env]
+PYTHONPATH = 'C:\AI\Dev\source_scout\src'
+SOURCE_SCOUT_REMOTE_EXPLORATION = 'false'
+SOURCE_SCOUT_EXPLORATION_DEADLINE_SECONDS = '240'
+SOURCE_SCOUT_MCP_DEADLINE_SECONDS = '270'
+
+[mcp_servers.serena]
+command = 'C:\AI\Dev\source_scout\.source_scout\tools\serena-venv\Scripts\serena.exe'
+args = ['start-mcp-server', '--project', 'C:\AI\Dev\source_scout', '--context', 'C:\AI\Dev\source_scout\config\serena-context.yml', '--mode', 'no-memories', '--enable-web-dashboard', 'false', '--open-web-dashboard', 'false', '--enable-gui-log-window', 'false']
+cwd = 'C:\AI\Dev\source_scout'
+enabled = false
+startup_timeout_sec = 60
+tool_timeout_sec = 120
+enabled_tools = ['initial_instructions', 'get_current_config', 'get_symbols_overview', 'find_symbol', 'find_referencing_symbols', 'find_implementations', 'find_declaration']
+
+[mcp_servers.serena.env]
+SERENA_HOME = 'C:\AI\Dev\source_scout\.source_scout\serena-home'

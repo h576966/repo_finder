@@ -149,6 +149,7 @@ async def test_evaluate_suite_scores_hits_bad_citations_and_manual_search(
         task: str,
         project_path: str | Path = ".",
         max_turns: int = fastcontext.DEFAULT_MAX_TURNS,
+        reason: str = "",
     ) -> LocalExploreResult:
         assert task == "Find target function"
         assert Path(project_path) == tmp_path.resolve()
@@ -300,6 +301,7 @@ async def test_evaluate_suite_does_not_pass_fallback_observations(
         task: str,
         project_path: str | Path = ".",
         max_turns: int = fastcontext.DEFAULT_MAX_TURNS,
+        reason: str = "",
     ) -> LocalExploreResult:
         return LocalExploreResult(
             task=task,
@@ -396,6 +398,7 @@ def test_eval_local_explore_cli_invokes_runner(monkeypatch, capsys, tmp_path: Pa
     async def fake_run_local_explore_eval(
         suite: str,
         max_turns: int = fastcontext.DEFAULT_MAX_TURNS,
+        reason: str = "",
         label: str | None = None,
         output_path: Path | None = None,
         limit_tasks: int | None = None,
@@ -445,3 +448,45 @@ def test_eval_local_explore_cli_invokes_runner(monkeypatch, capsys, tmp_path: Pa
     captured = capsys.readouterr()
     assert '"suite_id": "local-explore-source-scout"' in captured.out
     assert '"path_hits": 3' in captured.out
+
+
+@pytest.mark.asyncio
+async def test_evaluate_reads_local_journal_for_compact_results(tmp_path, monkeypatch):
+    _write_local_project(tmp_path)
+    journal = tmp_path / ".source_scout" / "explorations" / "test" / "report.json"
+    journal.parent.mkdir(parents=True)
+    accounting = {"request_count": 1, "usage": {"input_tokens": None}}
+    journal.write_text(
+        json.dumps(
+            {
+                "accounting": accounting,
+                "trajectory": [
+                    {
+                        "turn": 1,
+                        "tool_calls": [{"tool": "Read"}],
+                        "tool_observations": [],
+                        "final_citations": ["src/foo.py:1-2"],
+                    }
+                ],
+            }
+        )
+    )
+
+    async def fake_explore(*args, **kwargs):
+        return LocalExploreResult(
+            task="Find target function",
+            project_path=str(tmp_path),
+            model_id="test-model",
+            prompt_version="test",
+            schema_version="test",
+            analyzer_version="test",
+            status="completed",
+            evidence_paths=["src/foo.py:1-2"],
+            report_path=str(journal),
+        )
+
+    monkeypatch.setattr(fastcontext, "explore_local_project", fake_explore)
+    report = await local_explore_eval.evaluate_suite(_suite(tmp_path), max_turns=2)
+    assert report["tasks"][0]["accounting"] == accounting
+    assert report["tasks"][0]["tool_call_count"] == 1
+    assert report["tasks"][0]["exploration_report_path"] == str(journal)

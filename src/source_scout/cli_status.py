@@ -9,6 +9,11 @@ if TYPE_CHECKING:
 
 
 async def _api_status(smoke_test: bool) -> dict[str, object]:
+    from .exploration_policy import remote_exploration_enabled
+
+    if not remote_exploration_enabled():
+        return {"status": "disabled", "healthy": False, "reachable": None,
+                "reason": "Remote exploration is disabled by policy; no model requests were made."}
     from . import deepseek, fastcontext
 
     config = deepseek.get_config()

@@ -10,6 +10,7 @@ from typing import Any
 
 from .constants import SKIP_DIRS
 from .fastcontext_constants import LOCAL_EXTRA_SKIP_DIRS, LOCAL_SKIP_FILE_NAMES, LOCAL_TASK_STOPWORDS
+from .path_safety import should_skip_path
 
 SOURCE_SUFFIXES = {".py", ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"}
 TEXT_MAP_SUFFIXES = SOURCE_SUFFIXES | {".json", ".toml", ".txt", ".md", ".yml", ".yaml"}
@@ -195,6 +196,8 @@ def _candidate_files(root: Path, *, max_files: int) -> list[Path]:
             if filename in LOCAL_SKIP_FILE_NAMES:
                 continue
             path = current_root / filename
+            if should_skip_path(root, path, extra_skip_dirs=LOCAL_EXTRA_SKIP_DIRS):
+                continue
             if path.suffix.lower() not in TEXT_MAP_SUFFIXES and path.name not in MANIFEST_NAMES:
                 continue
             matches.append(path)

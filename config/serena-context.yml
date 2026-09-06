@@ -1,0 +1,18 @@
+# Inspected against oraios/serena be609b625740846dc2750cc13291966cf1216b00.
+description: Direct symbol navigation for Codex in the Source Scout working copy
+prompt: |
+  Codex owns reasoning, edits, test selection and final assessment.
+  Use these tools for symbol overviews, definitions, references and implementations.
+  Use Codex's rg and file tools for exact text and direct reads. No mandatory tool cycle.
+  Memory, editing and shell tools are unavailable. Keep ordinary type checks authoritative.
+fixed_tools:
+  - initial_instructions
+  - get_current_config
+  - get_symbols_overview
+  - find_symbol
+  - find_referencing_symbols
+  - find_implementations
+  - find_declaration
+single_project: true
+tool_description_overrides:
+  initial_instructions: Read Serena's active tool instructions when needed for this connection.

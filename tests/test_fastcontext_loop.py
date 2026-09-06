@@ -775,7 +775,7 @@ async def test_fastcontext_tool_loop_accepts_truncated_budget_on_final_turn(
         transport=httpx.MockTransport(handler),
     )
 
-    assert result.status == "completed"
+    assert result.status == "incomplete"
     assert result.evidence_paths == [
         "src/components/data-table.tsx:1-1",
         "src/components/data-table.tsx:3-3",
@@ -850,7 +850,7 @@ async def test_fastcontext_tool_loop_truncates_over_budget_retry_source_first(
         transport=httpx.MockTransport(handler),
     )
 
-    assert result.status == "completed"
+    assert result.status == "incomplete"
     assert result.evidence_paths == [
         "src/components/data-table.tsx:1-1",
         "src/components/data-table.tsx:3-3",
@@ -1182,7 +1182,7 @@ async def test_fastcontext_tool_loop_uses_priority_observation_after_retry_omiss
         priority_paths=["src/components/data-table.tsx"],
     )
 
-    assert result.status == "completed"
+    assert result.status == "fallback_observations"
     assert result.evidence_paths == ["src/components/data-table.tsx:1-1"]
     assert any("Accepted observed task-priority citations" in note for note in result.notes)
     assert chat_calls == 3
@@ -1229,7 +1229,7 @@ async def test_fastcontext_tool_loop_completes_with_priority_observation_after_e
         priority_paths=["src/components/data-table.tsx"],
     )
 
-    assert result.status == "completed"
+    assert result.status == "fallback_observations"
     assert result.evidence_paths == ["src/components/data-table.tsx:1-1"]
     assert any("Accepted observed task-priority citations" in note for note in result.notes)
     assert chat_calls == 3

@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from fastmcp.exceptions import ToolError
 
-from source_scout import catalog, fastcontext, server
+from source_scout import assessor, catalog, fastcontext, server
 from source_scout.models import (
     AdaptationStep,
     AssessmentDimensions,
@@ -22,6 +22,8 @@ async def test_explore_local_code_tool_is_read_only_and_ephemeral(monkeypatch, t
         task: str,
         project_path: str,
         max_turns: int = fastcontext.DEFAULT_MAX_TURNS,
+        reason: str = "",
+        deadline_seconds: float | None = None,
     ) -> LocalExploreResult:
         assert task == "Find MCP tools"
         assert project_path == str(tmp_path)
@@ -72,9 +74,9 @@ async def test_assess_reusable_code_tool_is_registered_and_returns_cli_shape(
         calls.append(kwargs)
         return Result()
 
-    monkeypatch.setattr(server.assessor, "assess_candidate", fake_assess_candidate)
+    monkeypatch.setattr(assessor, "assess_candidate", fake_assess_candidate)
     monkeypatch.setattr(
-        server.assessor,
+        assessor,
         "assessment_to_jsonable",
         lambda result: {
             "candidate_id": result.candidate_id,
@@ -83,7 +85,7 @@ async def test_assess_reusable_code_tool_is_registered_and_returns_cli_shape(
         },
     )
 
-    tools = {tool.name: tool for tool in await server.mcp.list_tools()}
+    tools = {tool.name: tool for tool in await server.create_server("reuse").list_tools()}
     assert "assess_reusable_code" in tools
     assert not bool(getattr(tools["assess_reusable_code"].annotations, "readOnlyHint", False))
     assert "local assessment cache" in str(tools["assess_reusable_code"].description)
@@ -138,9 +140,9 @@ async def test_assess_reusable_code_converts_assessor_errors_to_tool_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_assess_candidate(**kwargs: Any) -> object:
-        raise server.assessor.AssessorError("Unknown candidate_id: missing")
+        raise assessor.AssessorError("Unknown candidate_id: missing")
 
-    monkeypatch.setattr(server.assessor, "assess_candidate", fake_assess_candidate)
+    monkeypatch.setattr(assessor, "assess_candidate", fake_assess_candidate)
 
     with pytest.raises(ToolError, match="Unknown candidate_id"):
         await server.assess_reusable_code("missing", "Find reusable code")
@@ -207,9 +209,9 @@ def _store_reusable_assessment(asset_id: str, task: str) -> str:
         task=task,
         task_signature=catalog.task_signature(task),
         model_id="test-model",
-        prompt_version=server.assessor.PROMPT_VERSION,
-        schema_version=server.assessor.SCHEMA_VERSION,
-        analyzer_version=server.assessor.ANALYZER_VERSION,
+        prompt_version=assessor.PROMPT_VERSION,
+        schema_version=assessor.SCHEMA_VERSION,
+        analyzer_version=assessor.ANALYZER_VERSION,
         input_fingerprint="server-assessment-input",
         fastcontext_policy="never",
         fastcontext_status="not_requested",
@@ -336,7 +338,7 @@ async def test_find_reusable_code_profiles_target_project(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_reuse_tools_advertise_local_mutations() -> None:
-    tools = {tool.name: tool for tool in await server.mcp.list_tools()}
+    tools = {tool.name: tool for tool in await server.create_server("reuse").list_tools()}
 
     for name in ("find_reusable_code", "get_source_bundle", "record_reuse_outcome"):
         assert not bool(getattr(tools[name].annotations, "readOnlyHint", False))

@@ -31,13 +31,12 @@ async def test_refine_candidate_stores_fastcontext_evidence(tmp_path: Path) -> N
             return httpx.Response(
                 200,
                 json=_response_tool_call_json(
-                    "Grep",
-                    {"pattern": "useReactTable", "glob": "**/*.tsx"},
+                    "Read",
+                    {"path": "src/components/data-table.tsx", "offset": 1, "limit": 5},
                 ),
             )
 
         assert "src/components/data-table.tsx" in _payload_message_text(payload)
-        assert "tools" not in payload
         return httpx.Response(
             200,
             json=_response_message_json(

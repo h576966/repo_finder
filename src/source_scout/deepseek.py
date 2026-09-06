@@ -46,6 +46,7 @@ class ModelConfig:
     base_url: str = DEEPSEEK_BASE_URL
     model_id: str = DEEPSEEK_MODEL
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    max_retries: int = 2
 
 
 @dataclass(frozen=True)
@@ -110,7 +111,7 @@ class DeepSeekClient:
             base_url=self.config.base_url,
             api_key=api_key,
             timeout=self.config.timeout_seconds,
-            max_retries=2,
+            max_retries=self.config.max_retries,
             http_client=self._http_client,
         )
         return self

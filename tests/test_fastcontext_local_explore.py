@@ -13,6 +13,11 @@ from tests.fastcontext_helpers import (
 )
 
 
+@pytest.fixture(autouse=True)
+def enable_selected_exploration(monkeypatch):
+    monkeypatch.setenv("SOURCE_SCOUT_REMOTE_EXPLORATION", "true")
+
+
 @pytest.mark.asyncio
 async def test_explore_local_project_returns_ephemeral_citations(tmp_path: Path) -> None:
     root = tmp_path / "local"
@@ -34,12 +39,11 @@ async def test_explore_local_project_returns_ephemeral_citations(tmp_path: Path)
             return httpx.Response(
                 200,
                 json=_response_tool_call_json(
-                    "Grep",
-                    {"pattern": "useReactTable", "glob": "**/*.tsx"},
+                    "Read",
+                    {"path": "src/components/data-table.tsx", "offset": 1, "limit": 5},
                 ),
             )
         assert "src/components/data-table.tsx" in _payload_message_text(payload)
-        assert "tools" not in payload
         return httpx.Response(
             200,
             json=_response_message_json(
@@ -64,6 +68,7 @@ async def test_explore_local_project_returns_ephemeral_citations(tmp_path: Path)
     result = await fastcontext.explore_local_project(
         "Find the data table",
         project_path=root,
+        reason="Fixture: unresolved cross-file investigation",
         transport=httpx.MockTransport(handler),
     )
 
@@ -71,14 +76,14 @@ async def test_explore_local_project_returns_ephemeral_citations(tmp_path: Path)
     assert result.project_path == str(root.resolve())
     assert result.evidence_paths == ["src/components/data-table.tsx:1-4"]
     assert result.notes == ["Inspect this component before editing."]
-    assert result.tool_trace[0]["tools_enabled"] is True
-    assert result.tool_trace[0]["tool_calls"] == ["Grep"]
-    assert result.tool_trace[0]["tool_call_count"] == 1
-    assert result.tool_trace[0]["observation_count"] == 1
-    assert result.tool_trace[0]["finalization_reason"] == "enough_primary_source_ranges"
-    assert result.tool_trace[1]["tools_enabled"] is False
-    assert result.tool_trace[1]["tool_calls"] == []
-    assert result.tool_trace[1]["final_citations"] == ["src/components/data-table.tsx:1-4"]
+    assert result.tool_trace == []
+    stored = json.loads(Path(result.report_path).read_text())
+    trace = fastcontext._tool_trace_summary(stored["trajectory"])
+    assert trace[0]["tool_calls"] == ["Read"]
+    assert trace[0]["observation_count"] == 1
+    assert trace[1]["tool_calls"] == []
+    assert trace[1]["final_citations"] == ["src/components/data-table.tsx:1-4"]
+    assert stored["accounting"]["request_count"] == 2
 
     conn = catalog.get_connection()
     assert conn.execute("SELECT COUNT(*) FROM evidence_refinements").fetchone()[0] == 0
@@ -127,12 +132,11 @@ async def test_explore_local_project_recovers_from_invalid_citation(tmp_path: Pa
             return httpx.Response(
                 200,
                 json=_response_tool_call_json(
-                    "Grep",
-                    {"pattern": "useReactTable", "glob": "**/*.tsx"},
+                    "Read",
+                    {"path": "src/components/data-table.tsx", "offset": 1, "limit": 5},
                 ),
             )
         assert "src/components/data-table.tsx" in _payload_message_text(payload)
-        assert "tools" not in payload
         return httpx.Response(
             200,
             json=_response_message_json(
@@ -156,14 +160,16 @@ async def test_explore_local_project_recovers_from_invalid_citation(tmp_path: Pa
     result = await fastcontext.explore_local_project(
         "Find the data table",
         project_path=root,
+        reason="Fixture: unresolved cross-file investigation",
         transport=httpx.MockTransport(handler),
     )
 
     assert result.evidence_paths == ["src/components/data-table.tsx:1-4"]
     assert result.notes == ["Recovered after validation feedback."]
-    assert result.tool_trace[0]["final_citations"] == ["src/missing.ts:1-3"]
-    assert result.tool_trace[0]["validation_notes"] == ["Skipped missing citation file: src/missing.ts"]
-    assert result.tool_trace[1]["tool_calls"] == ["Grep"]
+    trace = fastcontext._tool_trace_summary(json.loads(Path(result.report_path).read_text())["trajectory"])
+    assert trace[0]["final_citations"] == ["src/missing.ts:1-3"]
+    assert trace[0]["validation_notes"] == ["Skipped missing citation file: src/missing.ts"]
+    assert trace[1]["tool_calls"] == ["Read"]
 
 
 @pytest.mark.asyncio
@@ -202,6 +208,7 @@ async def test_explore_local_project_writes_trace_file(tmp_path: Path) -> None:
     await fastcontext.explore_local_project(
         "Find the data table",
         project_path=root,
+        reason="Fixture: unresolved cross-file investigation",
         transport=httpx.MockTransport(handler),
         trace_path=trace_path,
     )

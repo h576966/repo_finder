@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -87,6 +88,16 @@ def execute_tool(root: Path, call: dict[str, Any]) -> dict[str, Any]:
             )
         else:
             raise FastContextError(f"Unsupported tool: {tool}")
+        if tool == "Grep":
+            for match in result.get("matches", []):
+                if not isinstance(match, dict) or not isinstance(match.get("line"), int):
+                    continue
+                path, _ = _resolve_under_root(root, str(match["path"]))
+                raw = path.read_bytes()
+                lines = raw.decode("utf-8", errors="replace").splitlines()
+                line = match["line"]
+                if 1 <= line <= len(lines) and match.get("text") == lines[line - 1]:
+                    match["content_sha256"] = hashlib.sha256(raw).hexdigest()
         return {
             "tool_call_id": call.get("id"),
             "tool": tool,
@@ -130,7 +141,8 @@ def read_file(
     if path.stat().st_size > MAX_READ_FILE_BYTES:
         raise FastContextError(f"READ target is too large: {safe_rel}")
 
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    raw = path.read_bytes()
+    lines = raw.decode("utf-8", errors="replace").splitlines()
     if not lines:
         return {"path": safe_rel, "start_line": 1, "end_line": 0, "content": "", "line_count": 0}
 
@@ -149,6 +161,7 @@ def read_file(
         "end_line": end_line,
         "content": content,
         "line_count": len(lines),
+        "content_sha256": hashlib.sha256(raw).hexdigest(),
     }
 
 
@@ -266,7 +279,7 @@ def grep_paths(
                     "start_line": start_line,
                     "end_line": end_line,
                     "citation": f"{rel_path}:{line_number}-{line_number}",
-                    "text": line.strip()[:220],
+                    "text": line[:220],
                 }
             )
             if len(matches) >= effective_limit:
@@ -485,10 +498,13 @@ def _run_rg(root: Path, command: list[str]) -> subprocess.CompletedProcess[str] 
 
 def _rg_skip_globs() -> list[str]:
     args: list[str] = []
-    for dirname in sorted(SKIP_DIRS | LOCAL_EXTRA_SKIP_DIRS):
+    for dirname in sorted(SKIP_DIRS | LOCAL_EXTRA_SKIP_DIRS | path_safety.SENSITIVE_DIRS):
         args.extend(["--glob", f"!{dirname}/**"])
     for filename in sorted(LOCAL_SKIP_FILE_NAMES):
         args.extend(["--glob", f"!{filename}"])
+    for pattern in [".env", ".env.*", *sorted(path_safety.SENSITIVE_NAMES),
+                    *(f"*{suffix}" for suffix in sorted(path_safety.SENSITIVE_SUFFIXES))]:
+        args.extend(["--glob", f"!{pattern}"])
     return args
 
 

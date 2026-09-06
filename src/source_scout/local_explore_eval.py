@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 import sys
@@ -274,6 +275,7 @@ async def _evaluate_task(
     error_tool_trace: list[dict[str, object]] = []
     try:
         explore = fastcontext.explore_local_project(
+            reason="Explicitly selected local exploration evaluation task",
             task=str(task["task"]),
             project_path=project_root,
             max_turns=max_turns,
@@ -301,6 +303,15 @@ async def _evaluate_task(
     )
     scoring = _score_citations(project_root, expected, acceptable, returned_citations)
     tool_trace = list(getattr(result, "tool_trace", [])) if result else error_tool_trace
+    run_report_path = getattr(result, "report_path", None) if result else None
+    accounting = None
+    if run_report_path:
+        try:
+            saved = json.loads(Path(run_report_path).read_text(encoding="utf-8"))
+            tool_trace = fastcontext._tool_trace_summary(saved["trajectory"])
+            accounting = saved.get("accounting")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            error = f"Could not read local exploration accounting: {exc}"
     result_status = str(getattr(result, "status", "")) if result else ""
     report = {
         "id": task["id"],
@@ -316,6 +327,8 @@ async def _evaluate_task(
         "returned_citations": returned_paths,
         "notes": list(getattr(result, "notes", [])) if result else [],
         "tool_trace": tool_trace,
+        "exploration_report_path": run_report_path,
+        "accounting": accounting,
         "turn_count": len(tool_trace),
         "tool_call_count": _tool_call_count(tool_trace),
         "manual_search": manual,

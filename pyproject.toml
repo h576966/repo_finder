@@ -1,7 +1,7 @@
 [project]
 name = "source-scout"
 version = "0.2.0"
-description = "Local source reuse scouting and assessment tool"
+description = "Compact local checks and optional read-only code exploration for Codex"
 requires-python = ">=3.11"
 dependencies = [
     "fastmcp>=3.4.2,<4.0.0",

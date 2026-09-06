@@ -1,4 +1,5 @@
 import asyncio
+import math
 import os
 from collections.abc import Awaitable
 from typing import Annotated, Any, Literal, TypeVar
@@ -7,15 +8,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from . import (
-    assessor,
-    bundles,
-    catalog_assessments,
-    catalog_assets,
-    catalog_search,
-    deepseek,
-    fastcontext,
-)
+from . import deepseek, fastcontext
 from .cli_status import _api_status, _error_status
 from .constants import _now_iso
 from .failures import FailureDetails, failure_from_exception
@@ -27,18 +20,37 @@ from .models import (
 )
 from .target_profile import TargetProfileError, build_target_profile
 
-mcp = FastMCP("SourceScout")
+mcp = FastMCP(
+    "SourceScout",
+    instructions=(
+        "Codex owns reasoning, edits and verification. Use rg for exact text and Serena for symbols. "
+        "Run source-scout check in the terminal. Remote exploration is disabled unless explicitly enabled; "
+        "supply a concrete reason for each selected call. Citations are navigation, not proof of completion."
+    ),
+)
+reuse_mcp = FastMCP("SourceScoutReuse")
 DEFAULT_MCP_DEADLINE_SECONDS = 270.0
 _T = TypeVar("_T")
 
-DEFAULT_MCP_TOOL_NAMES = (
+DEFAULT_MCP_TOOL_NAMES = ("explore_local_code", "model_status")
+REUSE_MCP_TOOL_NAMES = (
+    *DEFAULT_MCP_TOOL_NAMES,
     "find_reusable_code",
     "assess_reusable_code",
     "get_source_bundle",
     "record_reuse_outcome",
-    "explore_local_code",
-    "model_status",
 )
+
+
+def create_server(profile: str = "sidecar") -> FastMCP:
+    if profile == "sidecar":
+        return mcp
+    if profile != "reuse":
+        raise ValueError("Unknown MCP profile; use sidecar or reuse.")
+    server = FastMCP("SourceScoutReuse", instructions="Explicit legacy catalog reuse profile.")
+    server.mount(mcp)
+    server.mount(reuse_mcp)
+    return server
 
 
 def _mcp_deadline_seconds() -> float:
@@ -46,7 +58,8 @@ def _mcp_deadline_seconds() -> float:
     if not raw:
         return DEFAULT_MCP_DEADLINE_SECONDS
     try:
-        return max(0.01, float(raw))
+        value = float(raw)
+        return max(0.01, value) if math.isfinite(value) else DEFAULT_MCP_DEADLINE_SECONDS
     except ValueError:
         return DEFAULT_MCP_DEADLINE_SECONDS
 
@@ -97,6 +110,7 @@ async def explore_local_code(
         int,
         Field(description="Maximum FastContext exploration turns", ge=1, le=12),
     ] = fastcontext.DEFAULT_MAX_TURNS,
+    reason: Annotated[str, Field(description="Concrete reason rg/Serena did not suffice")] = "",
 ) -> LocalExploreResult:
     if not task.strip():
         raise _structured_tool_error(ValueError("Task description is required."), stage="validation")
@@ -108,13 +122,15 @@ async def explore_local_code(
                 task=task,
                 project_path=project_path,
                 max_turns=max_turns,
+                reason=reason,
+                deadline_seconds=max(0.001, _mcp_deadline_seconds() - 5.0),
             )
         )
     except (fastcontext.FastContextError, deepseek.ModelError, OSError, TimeoutError) as exc:
         raise _structured_tool_error(exc, stage="exploration") from exc
 
 
-@mcp.tool(
+@reuse_mcp.tool(
     description=(
         "Assess a reusable-code candidate for a task. May write local assessment cache and analysis "
         "run metadata in the Source Scout catalog."
@@ -147,6 +163,8 @@ async def assess_reusable_code(
         Field(description="Optional local target project path for deterministic compatibility profiling"),
     ] = None,
 ) -> dict[str, Any]:
+    from . import assessor
+
     if not candidate_id.strip():
         raise ToolError("candidate_id is required.")
     if not task.strip():
@@ -174,7 +192,7 @@ async def assess_reusable_code(
     return assessor.assessment_to_jsonable(result)
 
 
-@mcp.tool(
+@reuse_mcp.tool(
     description=(
         "Find reusable code candidates from the local Source Scout catalog. Records a local "
         "'returned' reuse outcome for candidates it returns."
@@ -195,6 +213,8 @@ async def find_reusable_code(
         Field(description="Maximum number of reusable code candidates to return", ge=1, le=5),
     ] = 3,
 ) -> FindReusableCodeResult:
+    from . import catalog_assessments, catalog_search
+
     if not task.strip():
         raise ToolError("Task description is required.")
     try:
@@ -238,7 +258,7 @@ async def find_reusable_code(
     )
 
 
-@mcp.tool(
+@reuse_mcp.tool(
     description=(
         "Create a task-specific local source bundle for a candidate and record an 'opened_bundle' "
         "reuse outcome in the local Source Scout catalog."
@@ -251,6 +271,8 @@ async def get_source_bundle(
         Field(description="Assessment id returned by assess_reusable_code"),
     ],
 ) -> SourceBundleResult:
+    from . import bundles, catalog_assessments
+
     if not assessment_id.strip():
         raise ToolError("assessment_id is required.")
     result = bundles.create_source_bundle(assessment_id)
@@ -263,7 +285,7 @@ async def get_source_bundle(
     return result
 
 
-@mcp.tool(
+@reuse_mcp.tool(
     description="Record a local reuse outcome for a candidate and task signature.",
     annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
 )
@@ -290,6 +312,8 @@ async def record_reuse_outcome(
         Field(description="Optional notes about why the candidate succeeded or failed"),
     ] = None,
 ) -> RecordReuseOutcomeResult:
+    from . import catalog_assessments, catalog_assets
+
     if not task_signature.strip():
         raise ToolError("task_signature is required.")
     asset = catalog_assets.get_asset_detail(candidate_id)

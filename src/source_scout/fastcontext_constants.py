@@ -1,6 +1,6 @@
-PROMPT_VERSION = "fastcontext-refine-v3"
-SCHEMA_VERSION = "fastcontext-evidence-v1"
-ANALYZER_VERSION = "fastcontext-harness-v2"
+PROMPT_VERSION = "fastcontext-refine-v4"
+SCHEMA_VERSION = "fastcontext-evidence-v2"
+ANALYZER_VERSION = "fastcontext-harness-v3"
 
 DEFAULT_MAX_TURNS = 7
 MAX_TOOL_CALLS_PER_TURN = 5

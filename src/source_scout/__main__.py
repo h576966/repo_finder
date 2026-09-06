@@ -6,10 +6,10 @@ import sys
 from dataclasses import asdict
 
 from . import cli_checks as _cli_checks
-from . import fastcontext
 from .cli_output import _format_local_explore_text
 from .cli_status import _api_status, status_is_healthy
 from .failures import failure_from_exception
+from .fastcontext_constants import DEFAULT_MAX_TURNS
 
 _check_commands = _cli_checks._check_commands
 _run_check_commands = _cli_checks._run_check_commands
@@ -25,19 +25,24 @@ def _require_github_token() -> None:
     sys.exit(1)
 
 
-def _run_mcp(transport: str, port: int) -> None:
-    from .server import mcp
+def _run_mcp(transport: str, port: int, profile: str = "sidecar") -> None:
+    from fastmcp import settings
+
+    from .server import create_server
+
+    settings.check_for_updates = "off"
+    mcp = create_server(profile)
 
     if transport == "http":
         print(f"Starting MCP server on http://127.0.0.1:{port}/mcp")
-        mcp.run(transport="http", host="127.0.0.1", port=port)
+        mcp.run(transport="http", host="127.0.0.1", port=port, show_banner=False)
     else:
-        mcp.run()
+        mcp.run(show_banner=False)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description=("Source Scout - catalog-first local reuse layer for TS/JS/Python source."),
+        description=("Source Scout - compact checks and optional read-only code exploration for Codex."),
     )
     parser.add_argument(
         "--transport",
@@ -55,6 +60,8 @@ def main() -> None:
 
     check_parser = subparsers.add_parser("check", help="Run local development checks")
     check_parser.add_argument("--with-local-explore-eval", action="store_true")
+    check_parser.add_argument("--format", choices=["text", "json"], default="text")
+    check_parser.add_argument("--timeout-seconds", type=float, default=300.0)
 
     scout_parser = subparsers.add_parser("scout", help="Discover raw candidate repositories")
     scout_parser.add_argument("--domain", default="personal-code", choices=["personal-code", "nextjs-ui"])
@@ -96,7 +103,7 @@ def main() -> None:
         help="Run a FastContext local exploration golden eval suite",
     )
     local_eval_parser.add_argument("--suite", default="source-scout")
-    local_eval_parser.add_argument("--max-turns", type=int, default=fastcontext.DEFAULT_MAX_TURNS)
+    local_eval_parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
     local_eval_parser.add_argument("--label", default=None)
     local_eval_parser.add_argument("--output", default=None)
     local_eval_parser.add_argument("--limit-tasks", type=int, default=None)
@@ -165,7 +172,7 @@ def main() -> None:
     refine_parser.add_argument("--label", default=None)
     refine_parser.add_argument("--output", default=None)
     refine_parser.add_argument("--limit-tasks", type=int, default=None)
-    refine_parser.add_argument("--max-turns", type=int, default=fastcontext.DEFAULT_MAX_TURNS)
+    refine_parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
 
     explore_local_parser = subparsers.add_parser(
         "explore-local",
@@ -173,13 +180,15 @@ def main() -> None:
     )
     explore_local_parser.add_argument("--task", required=True)
     explore_local_parser.add_argument("--project-path", default=".")
-    explore_local_parser.add_argument("--max-turns", type=int, default=fastcontext.DEFAULT_MAX_TURNS)
+    explore_local_parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
     explore_local_parser.add_argument("--format", choices=["json", "text"], default="json")
     explore_local_parser.add_argument("--trace-path", default=None)
+    explore_local_parser.add_argument("--reason", default="", help="Why rg/Serena did not suffice")
 
     serve_parser = subparsers.add_parser("serve-mcp", help="Run the MCP server")
     serve_parser.add_argument("--transport", choices=["stdio", "http"], default=None)
     serve_parser.add_argument("--port", type=int, default=None)
+    serve_parser.add_argument("--profile", choices=["sidecar", "reuse"], default="sidecar")
 
     gc_parser = subparsers.add_parser("gc", help="Garbage-collect old local snapshots")
     gc_parser.add_argument("--keep-per-repo", type=int, default=2)
@@ -192,11 +201,12 @@ def main() -> None:
         if args.command == "serve-mcp":
             transport = args.transport or parser.get_default("transport")
             port = args.port or parser.get_default("port")
-        _run_mcp(str(transport), int(port))
+        _run_mcp(str(transport), int(port), getattr(args, "profile", "sidecar"))
         return
 
     if args.command == "check":
-        _run_check_commands(args.with_local_explore_eval)
+        _run_check_commands(args.with_local_explore_eval, output_format=args.format,
+                            timeout_seconds=args.timeout_seconds)
         return
 
     if args.command == "scout":
@@ -383,6 +393,8 @@ def main() -> None:
     if args.command == "refine-evidence":
         from pathlib import Path
 
+        from . import fastcontext
+
         if args.suite:
             if args.candidate_id or args.task:
                 refine_parser.error("--suite cannot be combined with --candidate-id or --task.")
@@ -419,6 +431,7 @@ def main() -> None:
         return
 
     if args.command == "explore-local":
+        from . import fastcontext
         from .deepseek import ModelError
 
         try:
@@ -428,6 +441,7 @@ def main() -> None:
                     project_path=args.project_path,
                     max_turns=args.max_turns,
                     trace_path=args.trace_path,
+                    reason=args.reason,
                 )
             )
         except (fastcontext.FastContextError, ModelError, OSError, ValueError, TimeoutError) as exc:
@@ -438,6 +452,8 @@ def main() -> None:
             print(_format_local_explore_text(local_result))
         else:
             print(json.dumps(asdict(local_result), indent=2, sort_keys=True))
+        if local_result.status != "completed":
+            sys.exit(1)
         return
 
     if args.command == "gc":

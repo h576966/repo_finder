@@ -318,6 +318,7 @@ async def test_fastcontext_smoke_validates_exact_read_call() -> None:
 
 @pytest.mark.asyncio
 async def test_model_status_reports_assessment_and_exploration_smokes(monkeypatch) -> None:
+    monkeypatch.setenv("SOURCE_SCOUT_REMOTE_EXPLORATION", "true")
     async def fake_validate(config: deepseek.ModelConfig) -> dict[str, object]:
         return {
             "base_url": config.base_url,
@@ -347,6 +348,7 @@ async def test_model_status_reports_assessment_and_exploration_smokes(monkeypatc
 
 @pytest.mark.asyncio
 async def test_model_status_reports_configured_model_unavailable(monkeypatch) -> None:
+    monkeypatch.setenv("SOURCE_SCOUT_REMOTE_EXPLORATION", "true")
     async def fake_validate(config: deepseek.ModelConfig) -> dict[str, object]:
         return {
             "base_url": config.base_url,
@@ -420,6 +422,7 @@ async def test_model_status_reports_configured_model_unavailable(monkeypatch) ->
 async def test_model_status_classifies_failures(
     monkeypatch, error: deepseek.ModelError, expected: dict[str, object]
 ) -> None:
+    monkeypatch.setenv("SOURCE_SCOUT_REMOTE_EXPLORATION", "true")
     async def fail_validate(config: deepseek.ModelConfig) -> dict[str, object]:
         raise error
 

@@ -1,96 +1,42 @@
-# Project Instructions
+﻿# Project Instructions
 
-Local-first Codex development for Source Scout. Be concise, avoid
-over-engineering, and keep changes focused on the requested outcome.
-
-## Current Product Priority
-
-Optimize this loop:
-
-```text
-find_reusable_code -> assess_reusable_code -> get_source_bundle
-```
-
-Given a coding task, Source Scout should return one or a few evidence-backed
-source bundles that make Codex faster and less wasteful.
-
-Keep the product local-first, commit-pinned, bounded, and evidence-backed.
-Hosted dashboards, semantic index layers, generic repository ranking,
-autonomous integration, and multi-provider routing are outside the active
-product path unless a separate eval-backed need is established.
+Source Scout is a small Codex sidecar for reliable local check results and
+optional, bounded read-only code exploration. Codex owns reasoning, edits,
+test selection and final assessment. Do not sacrifice finished-change quality
+for fewer tokens. See `docs/source_scout_direction.md` and
+`docs/complexity-budget.md`.
 
 ## Workflow
 
-1. Plan before non-trivial changes. A short written plan is enough when the
-   direction is clear.
-2. Implement in small, focused steps. Prefer existing project patterns over new
-   abstractions.
-3. Review locally after meaningful changes. Prioritize correctness, security,
-   edge cases, and missing tests.
-4. Verify before done. Use `source-scout check` or `source_scout check` unless
-   explicitly impossible.
+1. Write a short plan before non-trivial changes; protect uncommitted work.
+2. Exact text/file: use `rg` or direct reads. Symbols/references: use Serena
+   when available. No mandatory tool cycle or reminder hooks.
+3. Use the optional investigator only for a concrete unresolved investigation
+   where simpler tools did not suffice. Project/process policy must enable it;
+   an API key alone does not. Supply a short reason with each selected call.
+   Standing user authorization applies; do not ask again per call.
+4. Treat citations as navigation. Codex reads the source and makes changes.
+5. Review locally for correctness, security, edge cases and missing tests.
+6. Run `source-scout check` before done. It runs Ruff, mypy and pytest in the
+   trusted working copy and saves logs/results under `.source_scout/checks/`.
+   A report verifies only its recorded working-copy identity; rerun after edits.
 
-## Review Policy
+## Constraints
 
-This is a single-developer project. Reviews are local/manual through Codex or
-direct code inspection only. Do not use CodeRabbit, `coderabbit`, or any
-external/hosted PR review service.
-
-## Model Role Boundaries
-
-- Deterministic code validates paths, line ranges, commit SHA, evidence hashes,
-  scores, verdicts, and persistence.
-- The exploration model scouts file and line evidence only.
-- The assessment model assesses validated evidence only; it does not write final scores.
-- Codex reads cited source, edits code, and runs tests.
-
-## FastContext Local Exploration
-
-Standalone local exploration is available through the global `fastcontext-local`
-Codex skill or:
-
-```powershell
-source-scout explore-local --project-path . --task "<task>"
-```
-
-Use it earlier for cold-start code comprehension, multi-file traces, impact
-analysis, and cases where direct `rg` does not find the needed code. Prefer
-`rg` first for exact symbols, exact files, commands, test names, config keys, or
-quick-answer tasks. Treat FastContext output as read-only navigation.
-
-The default local exploration budget is seven turns. After FastContext returns,
-read only the top one or two cited ranges first, with
-tight 30-80 line windows. Batch independent narrow reads when more than one
-range is needed, do not repeat broad repository-wide searches for the same
-question, and do not re-read regions already seen. If citations are sparse or
-off-target, refine once with concrete symbols, subsystem names, or filenames
-before falling back to manual `rg`.
-
-## Engineering Constraints
-
-- Do not add dependencies without discussion.
-- Do not refactor unrelated code.
-- Do not leave debug logs, TODO comments, or commented-out code.
+- Keep changes focused. Do not add dependencies without discussion.
+- No external/hosted PR review services, including CodeRabbit.
 - Do not execute arbitrary cloned repository code.
-- Tie source analysis to exact commit SHAs.
-- Keep generated data under `.source_scout/`.
-- Keep all model outputs versioned by model, prompt, schema, and analyzer
-  version.
+- Keep generated data under `.source_scout/`; never commit logs or keys.
+- Keep model output versioned by model, prompt, schema and analyzer.
+- The investigator only scouts permitted source; it never edits, assesses
+  candidates, selects tests or summarizes test logs in the default flow.
+- Use at most the configured call/deadline budget, including finalization.
+  Report missing context; do not chain investigators to bypass budgets.
+- Keep repo-map, rg and Python AST as support/fallback. No new index, LSP,
+  provider router, search product or dashboard.
+- Catalog feature development is frozen. Preserve CLI compatibility and data;
+  catalog MCP tools require explicit `serve-mcp --profile reuse`.
+- Do not run paid live evals, commit, push or create a PR unless requested.
 
-## Local Checks
-
-Use the local check wrapper as the default confidence gate:
-
-```powershell
-source-scout check
-```
-
-This runs:
-
-```powershell
-.\.venv\Scripts\python.exe -m ruff check .
-.\.venv\Scripts\python.exe -m mypy src
-.\.venv\Scripts\python.exe -m pytest -q
-```
-
-Use explicit eval commands only when tuning the relevant subsystem.
+The older global `fastcontext-local` skill must not override these routing and
+opt-in rules. Its exact migration is documented in `docs/source_scout_direction.md`.

@@ -1,0 +1,26 @@
+# Copy to .serena/project.yml only when installing the pinned Serena integration.
+project_name: source_scout
+language_servers: [python]
+language_backend: LSP
+encoding: utf-8
+read_only: true
+activation_command: null
+ignore_all_files_in_gitignore: true
+ignored_paths:
+  - .source_scout/**
+  - .venv/**
+  - .env
+  - .env.*
+  - '**/*.pem'
+  - '**/*.key'
+  - '**/credentials*'
+ls_workspace_folders: ['.']
+ls_additional_workspace_folders: []
+fixed_tools: []
+excluded_tools: []
+included_optional_tools: []
+default_modes: [no-memories]
+added_modes: []
+initial_prompt: ''
+read_only_memory_patterns: ['.*']
+ignored_memory_patterns: ['.*']

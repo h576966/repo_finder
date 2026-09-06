@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -301,6 +302,7 @@ def _fastcontext_response_format() -> dict[str, Any]:
                     "final_answer": {
                         "type": "object",
                         "properties": {
+                            "missing_context": {"type": "boolean"},
                             "citation_ids": {
                                 "type": "array",
                                 "items": {"type": "string"},
@@ -334,10 +336,13 @@ def parse_fastcontext_response(content: str) -> ParsedFastContextResponse:
             notes=[],
         )
 
+    final_answer = parsed.get("final_answer")
+    final_answer = final_answer if isinstance(final_answer, dict) else parsed
     return ParsedFastContextResponse(
         citations=_extract_citations(parsed),
         citation_ids=_extract_citation_ids(parsed),
         notes=_extract_notes(parsed),
+        missing_context=bool(final_answer.get("missing_context", False)),
     )
 
 
@@ -371,7 +376,13 @@ def _validated_evidence_paths(
         if line_note is not None:
             notes.append(line_note)
             continue
-        if observation_support is not None and observation_support.files:
+        if observation_support is not None:
+            observed_hash = observation_support.content_hashes.get(safe_rel)
+            if safe_rel in observation_support.stale_files or (
+                observed_hash and hashlib.sha256(path.read_bytes()).hexdigest() != observed_hash
+            ):
+                notes.append(f"Skipped stale citation; file changed since observation: {safe_rel}")
+                continue
             support_note = _support_validation_note(safe_rel, normalized, observation_support)
             if support_note is not None:
                 notes.append(support_note)
@@ -482,9 +493,14 @@ def _support_validation_note(
         return f"Skipped citation without observed line support: {citation.evidence_path()}"
     start_line = citation.start_line
     end_line = citation.end_line if citation.end_line is not None else start_line
-    if any(start <= end_line and start_line <= end for start, end in ranges):
-        return None
-    return f"Skipped citation outside observed line ranges: {citation.evidence_path()}"
+    cursor = start_line
+    for start, end in sorted(ranges):
+        if start > cursor:
+            break
+        cursor = max(cursor, end + 1)
+        if cursor > end_line:
+            return None
+    return f"Skipped citation without full observed line coverage: {citation.evidence_path()}"
 
 
 def _line_count(path: Path) -> int:
@@ -497,52 +513,60 @@ def _line_count(path: Path) -> int:
 def _observation_support(observations: list[dict[str, Any]]) -> ObservationSupport:
     files: set[str] = set()
     ranges: dict[str, list[tuple[int, int]]] = {}
+    hashes: dict[str, str] = {}
+    stale: set[str] = set()
     for observation in observations:
-        if not observation.get("ok"):
-            continue
         result = observation.get("result")
-        if not isinstance(result, dict):
+        if not observation.get("ok") or not isinstance(result, dict):
             continue
-        tool = str(observation.get("tool", ""))
-        if tool == "Read":
-            path = result.get("path")
-            if isinstance(path, str):
-                files.add(path)
-                start = _optional_int(result.get("start_line"))
-                end = _optional_int(result.get("end_line"))
-                if start is not None and end is not None and end >= start:
-                    ranges.setdefault(path, []).append((start, end))
+        tool = observation.get("tool")
+        entries = [result] if tool == "Read" else result.get("matches", [])
+        if not isinstance(entries, list):
             continue
-        matches = result.get("matches")
-        if not isinstance(matches, list):
-            continue
-        for match in matches:
-            if isinstance(match, str):
-                files.add(match)
+        for entry in entries:
+            if isinstance(entry, str):
+                files.add(entry)
                 continue
-            if not isinstance(match, dict):
+            if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
                 continue
-            path = match.get("path")
-            if not isinstance(path, str):
-                continue
+            path = entry["path"]
             files.add(path)
-            start = _optional_int(match.get("start_line") or match.get("line"))
-            end = _optional_int(match.get("end_line") or match.get("line"))
-            if start is not None and end is not None and end >= start:
-                ranges.setdefault(path, []).append((start, end))
-    return ObservationSupport(files=files, ranges=ranges)
+            content_hash = entry.get("content_sha256")
+            if not isinstance(content_hash, str):
+                continue
+            if path in hashes and hashes[path] != content_hash:
+                stale.add(path)
+            hashes[path] = content_hash
+            if tool == "Read":
+                # Only the numbered source lines actually returned, never range metadata alone.
+                for line in str(entry.get("content", "")).splitlines():
+                    match = re.match(r"^(\d+)\|", line)
+                    if match:
+                        number = int(match.group(1))
+                        ranges.setdefault(path, []).append((number, number))
+            elif tool == "Grep" and isinstance(entry.get("text"), str):
+                grep_line = _optional_int(entry.get("line"))
+                if grep_line is not None:
+                    ranges.setdefault(path, []).append((grep_line, grep_line))
+    return ObservationSupport(files, ranges, hashes, stale)
 
 
 def _merge_observation_support(
-    current: ObservationSupport,
-    incoming: ObservationSupport,
+    current: ObservationSupport, incoming: ObservationSupport
 ) -> ObservationSupport:
-    files = set(current.files)
-    files.update(incoming.files)
-    ranges = {path: list(path_ranges) for path, path_ranges in current.ranges.items()}
-    for path, path_ranges in incoming.ranges.items():
-        ranges.setdefault(path, []).extend(path_ranges)
-    return ObservationSupport(files=files, ranges=ranges)
+    files = current.files | incoming.files
+    ranges = {path: list(items) for path, items in current.ranges.items()}
+    hashes = dict(current.content_hashes)
+    stale = current.stale_files | incoming.stale_files
+    for path, content_hash in incoming.content_hashes.items():
+        if path in hashes and hashes[path] != content_hash:
+            stale.add(path)
+        hashes[path] = content_hash
+    for path, items in incoming.ranges.items():
+        ranges.setdefault(path, []).extend(items)
+    for path in stale:
+        ranges.pop(path, None)
+    return ObservationSupport(files, ranges, hashes, stale)
 
 
 def _evidence_from_observation_support(
@@ -566,58 +590,6 @@ def _evidence_from_observation_support(
         support.files,
         key=lambda path: _prioritized_path_sort_key(path, priority_paths),
     )[:limit]
-
-
-def _evidence_from_trajectory(
-    trajectory: list[dict[str, Any]],
-    limit: int = 5,
-) -> list[str]:
-    evidence: list[str] = []
-    seen: set[str] = set()
-    for turn in reversed(trajectory):
-        observations = turn.get("tool_observations", [])
-        if not isinstance(observations, list):
-            continue
-        for observation in reversed(observations):
-            if not isinstance(observation, dict) or not observation.get("ok"):
-                continue
-            for citation in _citations_from_observation(observation):
-                if citation in seen:
-                    continue
-                seen.add(citation)
-                evidence.append(citation)
-                if len(evidence) >= limit:
-                    return list(reversed(evidence))
-    return list(reversed(evidence))
-
-
-def _citations_from_observation(observation: dict[str, Any]) -> list[str]:
-    result = observation.get("result")
-    if not isinstance(result, dict):
-        return []
-    tool = str(observation.get("tool", ""))
-    if tool == "Read":
-        path = result.get("path")
-        start = _optional_int(result.get("start_line"))
-        end = _optional_int(result.get("end_line"))
-        if not isinstance(path, str) or start is None or end is None or end < start:
-            return []
-        capped_end = min(end, start + 79)
-        return [f"{path}:{start}-{capped_end}"]
-    matches = result.get("matches")
-    if not isinstance(matches, list):
-        return []
-    citations: list[str] = []
-    for match in matches:
-        if not isinstance(match, dict):
-            continue
-        path = match.get("path")
-        start = _optional_int(match.get("start_line") or match.get("line"))
-        end = _optional_int(match.get("end_line") or match.get("line"))
-        if not isinstance(path, str) or start is None or end is None or end < start:
-            continue
-        citations.append(f"{path}:{start}-{min(end, start + 79)}")
-    return citations
 
 
 def _merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -756,7 +728,7 @@ def _parse_citation_lines(text: str) -> list[FastContextCitation]:
         if not line:
             continue
         match = re.search(
-            r"(?P<path>[\w./\\()[\]@ -]+\.(?:ts|tsx|js|jsx|json|md|css|scss|mjs|cjs))"
+            r"(?P<path>[\w./\\()[\]@ -]+\.(?:py|ts|tsx|js|jsx|json|md|css|scss|mjs|cjs|toml|yml|yaml))"
             r"[:#L]+(?P<start>\d+)(?:[-:L]+(?P<end>\d+))?",
             line,
             flags=re.IGNORECASE,

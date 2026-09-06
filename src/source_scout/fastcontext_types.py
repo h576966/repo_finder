@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -31,12 +31,15 @@ class ParsedFastContextResponse:
     citations: list[FastContextCitation]
     citation_ids: list[str]
     notes: list[str]
+    missing_context: bool = False
 
 
 @dataclass(frozen=True)
 class ObservationSupport:
     files: set[str]
     ranges: dict[str, list[tuple[int, int]]]
+    content_hashes: dict[str, str] = field(default_factory=dict)
+    stale_files: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True)

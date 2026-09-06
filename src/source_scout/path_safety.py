@@ -6,6 +6,32 @@ from .constants import SKIP_DIRS
 EXTRA_SKIP_DIRS: set[str] = {".next", ".source_scout", "build", "coverage", "dist"}
 
 
+SENSITIVE_DIRS = {".ssh", ".aws", ".azure", ".gnupg", ".codex", ".serena"}
+SENSITIVE_NAMES = {
+    "credentials",
+    "credentials.json",
+    "secrets.json",
+    "secrets.yaml",
+    "secrets.yml",
+    "id_rsa",
+    "id_ed25519",
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
+}
+SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".keystore"}
+
+
+def is_sensitive_path(path: Path) -> bool:
+    return (
+        any(part.lower() in SENSITIVE_DIRS for part in path.parts)
+        or path.name.lower() == ".env"
+        or path.name.lower().startswith(".env.")
+        or path.name.lower() in SENSITIVE_NAMES
+        or path.suffix.lower() in SENSITIVE_SUFFIXES
+    )
+
+
 class PathSafetyError(ValueError):
     pass
 
@@ -62,6 +88,8 @@ def resolve_under_root(
     cleaned = normalize_workspace_reference(root_resolved, rel_path)
     if not cleaned:
         raise PathSafetyError("Path is required.")
+    if is_sensitive_path(Path(cleaned)):
+        raise PathSafetyError("Sensitive paths are not permitted as source context.")
 
     if Path(cleaned).is_absolute():
         candidate = Path(cleaned).resolve()
@@ -77,6 +105,8 @@ def resolve_under_root(
         raise PathSafetyError(f"Path escapes snapshot root: {rel_path}") from exc
 
     skip_dirs = default_skip_dirs(extra_skip_dirs)
+    if is_sensitive_path(relative):
+        raise PathSafetyError("Sensitive paths are not permitted as source context.")
     if any(part in skip_dirs for part in relative.parts):
         raise PathSafetyError(f"Path is under a skipped directory: {rel_path}")
     return candidate, relative.as_posix()
@@ -100,12 +130,14 @@ def should_skip_path(
     *,
     extra_skip_dirs: set[str] | None = None,
 ) -> bool:
+    if is_sensitive_path(path):
+        return True
     try:
         relative = path.resolve().relative_to(root.resolve())
     except ValueError:
         return True
     skip_dirs = default_skip_dirs(extra_skip_dirs)
-    return any(part in skip_dirs for part in relative.parts)
+    return is_sensitive_path(relative) or any(part in skip_dirs for part in relative.parts)
 
 
 def is_safe_relative_result(

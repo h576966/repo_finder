@@ -86,6 +86,11 @@ class LocalExploreResult:
     notes: list[str] = field(default_factory=list)
     tool_trace: list[dict[str, object]] = field(default_factory=list)
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    run_id: str | None = None
+    report_path: str | None = None
+    stop_reason: str | None = None
+    missing_context: bool = False
+    truncated: bool = False
 
 
 @dataclass

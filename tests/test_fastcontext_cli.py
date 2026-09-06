@@ -102,6 +102,7 @@ def test_explore_local_cli_invokes_fastcontext(monkeypatch, capsys, tmp_path: Pa
         project_path: str | Path = ".",
         max_turns: int = fastcontext.DEFAULT_MAX_TURNS,
         trace_path: str | Path | None = None,
+        reason: str = "",
     ) -> object:
         assert task == "Find MCP tools"
         assert project_path == str(tmp_path)

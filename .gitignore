@@ -40,6 +40,7 @@ Thumbs.db
 *.duckdb
 *.duckdb.wal
 .source_scout/
+.serena/
 
 # Package
 *.egg-info/

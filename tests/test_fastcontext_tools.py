@@ -284,7 +284,7 @@ def test_citation_validation_rejects_bad_ranges_and_unsupported_observations(tmp
     assert any("reversed line range" in note for note in notes)
     assert any("overly broad citation" in note for note in notes)
     assert any("beyond EOF" in note for note in notes)
-    assert any("outside observed line ranges" in note for note in notes)
+    assert any("without full observed line coverage" in note for note in notes)
     assert any("wildcard or glob citation" in note for note in notes)
     assert any("without exact line range" in note for note in notes)
 
