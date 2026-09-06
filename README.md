@@ -10,6 +10,50 @@ the default flow. No GitHub or DeepSeek key is required. Both `source-scout`
 and `source_scout` CLI names remain available, as does `python -m source_scout`.
 The repository's `source-scout.cmd` resolves its own virtual environment.
 
+## Personal implementation references
+
+The primary reuse path is an explicit personal or curated collection. It does
+not scan disks or GitHub accounts, execute source repositories, invoke a model,
+or depend on the legacy capability/assessment/bundle pipeline.
+
+```powershell
+# Snapshot HEAD, including only committed bytes.
+source-scout reference-add --source C:\code\retry-patterns --kind personal
+
+# A revision may be selected explicitly. GitHub commits must be full SHAs.
+source-scout reference-add --source https://github.com/acme/retry-patterns --kind curated --commit <sha>
+
+source-scout reference-find --task "bounded retry with decorrelated jitter" --project-path .
+source-scout reference-context --candidate-id <candidate-id> --task "bounded retry with decorrelated jitter" --project-path .
+```
+
+`reference-add` stores origin, selection kind, repository facts, an exact clean
+commit snapshot, observed license data and stable file identities. Explicitly
+selected private, archived, fork and template repositories are accepted; those
+facts are reported rather than filtered. Local origins without a verified
+GitHub remote never receive a fabricated permalink.
+
+`reference-find` returns at most three results. It searches source, paths,
+identifiers and manifests with deterministic BM25 evidence. An absolute
+task-evidence gate runs before personal priority and advisory target fit, so a
+weak singleton cannot pass through relative normalization. The result explicitly
+abstains when evidence is insufficient. `reference-context` revalidates the
+snapshot, commit and full-file hash, then returns bounded exact line ranges,
+snippet hashes, manifests, target facts, license observations and commit-pinned
+GitHub links where verified.
+
+Local add/find/context needs no API key or network. GitHub access is a separate
+explicit operation; public access can be anonymous and private access requires
+`GITHUB_TOKEN`:
+
+```powershell
+source-scout reference-github-search --task "bounded retry with decorrelated jitter" --max-results 3
+```
+
+Fallback inspects at most three results at resolved commits and does not persist
+them. Its output distinguishes no matches from network failure and prints the
+separate pinned `reference-add` command for a chosen repository.
+
 ## Local checks
 
 From the trusted Source Scout working copy:
@@ -65,12 +109,14 @@ patch quality, overall Codex cost or preservation of final-result quality.
 
 ```powershell
 source-scout serve-mcp
+source-scout serve-mcp --profile references
 source-scout serve-mcp --profile reuse
 ```
 
 | Profile | Tools |
 | --- | --- |
 | `sidecar` (default) | `explore_local_code` |
+| `references` (opt-in) | `find_reuse_references`, `get_reuse_context` |
 | `reuse` (explicit legacy) | Above plus `model_status`, `find_reusable_code`, `assess_reusable_code`, `get_source_bundle`, `record_reuse_outcome` |
 
 There is no MCP shell/check runner. Codex runs `source-scout check` in its normal
@@ -164,8 +210,9 @@ whole Codex workflow as offline. No verified cost-saving percentage is claimed.
 
 ## Preserved legacy catalog
 
-Catalog feature development is frozen. Existing catalog, snapshots and bundles
-are preserved; no migration/deletion is performed. The explicit reuse MCP
+The older discovery/assessment/bundle path remains frozen. Existing catalog,
+snapshots and bundles are preserved; the reference schema is additive and no
+destructive migration is performed. The explicit reuse MCP
 profile retains `find -> assess -> bundle -> outcome`. Deterministic code owns
 scores, verdict gates, source/SHA validation and persistence; legacy models
 interpret validated evidence. Assessment-gated, commit-pinned bundles remain.

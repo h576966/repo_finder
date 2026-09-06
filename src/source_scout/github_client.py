@@ -21,10 +21,11 @@ class GitHubClient:
         token = os.environ.get("GITHUB_TOKEN", "")
         self._headers: dict[str, str] = {
             "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "source-scout-mcp",
         }
+        if token:
+            self._headers["Authorization"] = f"Bearer {token}"
         self._client = httpx.AsyncClient(
             headers=self._headers,
             timeout=TIMEOUT,
@@ -87,10 +88,10 @@ class GitHubClient:
         url = f"{API_BASE}/repos/{owner}/{repo}"
         return await self._get(url)  # type: ignore[no-any-return]
 
-    async def get_readme(self, owner: str, repo: str) -> str | None:
+    async def get_readme(self, owner: str, repo: str, ref: str | None = None) -> str | None:
         url = f"{API_BASE}/repos/{owner}/{repo}/readme"
         try:
-            data: dict[str, Any] = await self._get(url)
+            data: dict[str, Any] = await self._get(url, params={"ref": ref} if ref else None)
         except httpx.HTTPStatusError:
             return None
 
@@ -127,13 +128,13 @@ class GitHubClient:
         return str(sha)
 
     async def get_repo_contents(
-        self, owner: str, repo: str, path: str = ""
+        self, owner: str, repo: str, path: str = "", ref: str | None = None
     ) -> list[dict[str, Any]] | dict[str, Any]:
         enc_path = quote(path, safe="") if path else ""
         url = f"{API_BASE}/repos/{owner}/{repo}/contents"
         if enc_path:
             url = f"{url}/{enc_path}"
-        return await self._get(url)  # type: ignore[no-any-return]
+        return await self._get(url, params={"ref": ref} if ref else None)  # type: ignore[no-any-return]
 
     async def get_file_content(self, owner: str, repo: str, path: str, max_lines: int = 30) -> str | None:
         enc_path = quote(path, safe="")

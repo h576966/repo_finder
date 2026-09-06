@@ -15,8 +15,10 @@ from .exploration_policy import ExplorationUseCase, LocalMethod
 from .failures import FailureDetails, failure_from_exception
 from .models import (
     FindReusableCodeResult,
+    FindReuseReferencesResult,
     LocalExploreResult,
     RecordReuseOutcomeResult,
+    ReuseContextResult,
     SourceBundleResult,
 )
 from .target_profile import TargetProfileError, build_target_profile
@@ -32,6 +34,14 @@ mcp = FastMCP(
     ),
 )
 reuse_mcp = FastMCP("SourceScoutReuse")
+reference_mcp = FastMCP(
+    "SourceScoutReferences",
+    instructions=(
+        "Deterministic implementation references. Find returns at most three evidence-backed local "
+        "matches; context revalidates exact commit-pinned bytes. Codex decides whether and how to "
+        "adapt ideas."
+    ),
+)
 DEFAULT_MCP_DEADLINE_SECONDS = 270.0
 _T = TypeVar("_T")
 
@@ -44,17 +54,69 @@ REUSE_MCP_TOOL_NAMES = (
     "get_source_bundle",
     "record_reuse_outcome",
 )
+REFERENCE_MCP_TOOL_NAMES = ("find_reuse_references", "get_reuse_context")
 
 
 def create_server(profile: str = "sidecar") -> FastMCP:
     if profile == "sidecar":
         return mcp
+    if profile == "references":
+        return reference_mcp
     if profile != "reuse":
-        raise ValueError("Unknown MCP profile; use sidecar or reuse.")
+        raise ValueError("Unknown MCP profile; use sidecar, references or reuse.")
     server = FastMCP("SourceScoutReuse", instructions="Explicit legacy catalog reuse profile.")
     server.mount(mcp)
     server.mount(reuse_mcp)
     return server
+
+
+@reference_mcp.tool(
+    description=(
+        "Find up to three deterministic matches in the explicitly added personal/curated reference "
+        "collection. Uses source, paths, identifiers, manifests and absolute relevance evidence. "
+        "Does not use models, network discovery, capability ontologies, assessments or bundles."
+    ),
+    annotations={"readOnlyHint": True},
+)
+def find_reuse_references(
+    task: Annotated[str, Field(description="Concrete implementation pattern to find")],
+    project_path: Annotated[
+        str | None,
+        Field(description="Optional target project for advisory deterministic compatibility facts"),
+    ] = None,
+    max_results: Annotated[int, Field(description="Maximum results", ge=1, le=3)] = 3,
+) -> FindReuseReferencesResult:
+    from .reuse_references import ReuseReferenceError
+    from .reuse_references import find_reuse_references as find
+
+    try:
+        return find(task, project_path=project_path, max_results=max_results)
+    except (ReuseReferenceError, TargetProfileError, OSError) as exc:
+        raise ToolError(str(exc)) from exc
+
+
+@reference_mcp.tool(
+    description=(
+        "Return bounded, exact line ranges and hashes from a commit-pinned reference returned by "
+        "find_reuse_references. Revalidates snapshot commit and bytes; no assessment or bundle required."
+    ),
+    annotations={"readOnlyHint": True},
+)
+def get_reuse_context(
+    candidate_id: Annotated[str, Field(description="Stable candidate ID returned by find_reuse_references")],
+    task: Annotated[str, Field(description="Task used to select relevant line windows")] = "",
+    project_path: Annotated[
+        str | None,
+        Field(description="Optional target project for advisory deterministic compatibility facts"),
+    ] = None,
+) -> ReuseContextResult:
+    from .reuse_references import ReuseReferenceError
+    from .reuse_references import get_reuse_context as get_context
+
+    try:
+        return get_context(candidate_id, task=task, project_path=project_path)
+    except (ReuseReferenceError, TargetProfileError, OSError) as exc:
+        raise ToolError(str(exc)) from exc
 
 
 def _mcp_deadline_seconds() -> float:

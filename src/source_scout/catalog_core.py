@@ -163,6 +163,31 @@ def initialize_catalog(conn: duckdb.DuckDBPyConnection | None = None) -> None:
         )
     """)
     active.execute("""
+        CREATE TABLE IF NOT EXISTS reference_sources (
+            snapshot_id TEXT PRIMARY KEY,
+            repo_id TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            selection_kind TEXT NOT NULL,
+            origin TEXT NOT NULL,
+            remote_url TEXT,
+            metadata TEXT NOT NULL,
+            added_at TEXT NOT NULL
+        )
+    """)
+    active.execute("""
+        CREATE TABLE IF NOT EXISTS implementation_references (
+            reference_id TEXT PRIMARY KEY,
+            snapshot_id TEXT NOT NULL,
+            repo_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            content_sha256 TEXT NOT NULL,
+            search_text TEXT NOT NULL,
+            manifest_paths TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (snapshot_id, path, content_sha256)
+        )
+    """)
+    active.execute("""
         CREATE TABLE IF NOT EXISTS reuse_outcomes (
             outcome_id TEXT PRIMARY KEY,
             asset_id TEXT,

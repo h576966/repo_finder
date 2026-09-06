@@ -6,6 +6,39 @@ Exact text/file -> rg/direct read. Symbol/references -> Serena. Difficult,
 unresolved cross-file/indirect/ownership/architecture relation -> selective investigator.
 No mandatory tool loop, reminder hooks, hosted review or automatic integration.
 
+## Implementation-reference path
+
+The focused reference iteration started from clean `main` at
+`2fef43a3e87682c9f262aeff4e806f6750c3abb6`. It adds an independent
+`reference-add -> reference-find -> reference-context` path for repositories
+selected by the user. Local repositories are resolved to a Git commit and
+cloned into the existing snapshot store with checkout conversion disabled;
+dirty working-tree bytes are never indexed. GitHub URLs are inspected and
+pinned before snapshotting. Source code is read as data and never executed.
+
+The catalog database and snapshot machinery are reused through additive
+`reference_sources` and `implementation_references` tables. Stable candidate
+identity includes analyzer version, snapshot, path and complete content hash.
+Re-adding the same commit keeps identity; a new commit creates a new snapshot.
+Context reads fail if the snapshot commit, cleanliness, safe path or hash no
+longer matches. Git index modes exclude symlinks even on Windows checkouts that
+materialize symlink blobs as ordinary files.
+
+Retrieval uses general tokens from source, filenames, identifiers, repository
+facts and manifests. Its raw BM25 threshold, term count and coverage gate are
+independent of current-candidate normalization, personal priority and target
+fit. Target language/framework/dependency observations only report matches,
+conflicts or unknowns. No capability query pack, model configuration,
+assessment ID, verdict or bundle participates in this path.
+
+The opt-in `references` MCP profile contains exactly
+`find_reuse_references` and `get_reuse_context`. Administration and bounded
+GitHub fallback stay in CLI. The default `sidecar` profile remains exactly
+`explore_local_code`; the old `reuse` profile and CLI contracts remain the
+legacy boundary. Packaging remains assessment-gated legacy functionality.
+GitHub fallback never starts after local abstention and never persists a hit;
+permanent addition is a separate explicit command.
+
 ## Local reality and compatibility
 
 Work began on `main` at `48c887b03b347fb1baf79fd56306053905876496`, with a clean
@@ -45,7 +78,8 @@ Policy is read per investigation; normal selective use needs no config edit.
 Unknown classification/method values are rejected, even if supplied in on mode.
 See README for ordinary CLI/MCP parameters and environment override examples.
 
-Only `explore_local_code` is exposed in the normal MCP profile. `model-status`
+Only `explore_local_code` is exposed in the normal sidecar MCP profile. The
+separate reference profile is explicitly enabled when wanted. `model-status`
 remains an explicit CLI debug command; the reuse profile retains `model_status`
 and the four catalog tools. Explicit health/smoke checks are available in
 selective/on mode and disabled in off mode; they are not part of normal routing.

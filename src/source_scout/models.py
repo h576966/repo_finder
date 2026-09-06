@@ -74,6 +74,65 @@ class RecordReuseOutcomeResult:
 
 
 @dataclass
+class ReuseReferenceCandidate:
+    candidate_id: str
+    snapshot_id: str
+    repo_id: str
+    commit_sha: str
+    path: str
+    content_sha256: str
+    relevance_score: float
+    matched_terms: list[str]
+    source_kind: str
+    selection_kind: str
+    origin: str
+    permalink: str | None
+    manifest_paths: list[str] = field(default_factory=list)
+    repository_facts: dict[str, Any] = field(default_factory=dict)
+    target_fit: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class FindReuseReferencesResult:
+    task: str
+    status: str
+    results: list[ReuseReferenceCandidate]
+    abstention_reason: str | None = None
+    target_profile_fingerprint: str = ""
+
+
+@dataclass
+class ReuseContextSnippet:
+    path: str
+    start_line: int
+    end_line: int
+    content: str
+    content_sha256: str
+    permalink: str | None = None
+
+
+@dataclass
+class ReuseContextResult:
+    candidate_id: str
+    snapshot_id: str
+    repo_id: str
+    commit_sha: str
+    source_kind: str
+    selection_kind: str
+    origin: str
+    path: str
+    content_sha256: str
+    snippets: list[ReuseContextSnippet]
+    manifests: list[dict[str, Any]]
+    repository_facts: dict[str, Any]
+    target_fit: dict[str, Any]
+    license: dict[str, Any]
+    missing_evidence: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    truncated: bool = False
+
+
+@dataclass
 class LocalExploreResult:
     task: str
     project_path: str

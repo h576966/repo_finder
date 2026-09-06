@@ -1,10 +1,9 @@
 ﻿# Project Instructions
 
-Source Scout is a small Codex sidecar for reliable local check results and
-optional, bounded read-only code exploration. Codex owns reasoning, edits,
-test selection and final assessment. Do not sacrifice finished-change quality
-for fewer tokens. See `docs/source_scout_direction.md` and
-`docs/complexity-budget.md`.
+Source Scout provides a small explicit collection of commit-pinned implementation
+references, reliable local check results and optional bounded read-only code
+exploration. Codex owns reasoning, adaptation, edits, test selection and final
+assessment. See `docs/source_scout_direction.md` and `docs/complexity-budget.md`.
 
 ## Workflow
 
@@ -36,8 +35,10 @@ for fewer tokens. See `docs/source_scout_direction.md` and
   Report missing context; do not chain investigators to bypass budgets.
 - Keep repo-map, rg and Python AST as support/fallback. No new index, LSP,
   provider router, search product or dashboard.
-- Catalog feature development is frozen. Preserve CLI compatibility and data;
-  catalog MCP tools require explicit `serve-mcp --profile reuse`.
+- Prioritize `reference-add -> reference-find -> reference-context`. Keep it
+  deterministic and independent of capability ontologies, assessment and bundles.
+- Preserve the older catalog CLI/data as legacy; its MCP tools require explicit
+  `serve-mcp --profile reuse`.
 - Do not run paid live evals, commit, push or create a PR unless requested.
 
 The older global `fastcontext-local` skill must not override these routing and

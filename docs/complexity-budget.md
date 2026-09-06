@@ -17,6 +17,9 @@ This iteration is a bounded Codex sidecar, not a new development platform.
   optional process; no Source Scout LSP, persistent symbol index or new search API.
 - Legacy: preserve catalog code/data/CLI, explicit reuse MCP profile, freeze
   feature work. Avoid unrelated refactors and directory/name migrations.
+- References: one additive DuckDB schema, existing commit snapshots, bounded
+  deterministic BM25 and exact excerpts. At most three find/fallback results;
+  no ontology, model assessment, bundle dependency, crawler or new index service.
 - Dependencies: no new Source Scout dependencies. The approved pinned Serena
   installation and its language-server components use a separate local environment.
 - Excluded: embeddings/vector databases, CocoIndex, RTK, SWE-Pruner, GitNexus,

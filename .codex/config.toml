@@ -13,6 +13,19 @@ PYTHONPATH = 'C:\AI\Dev\source_scout\src'
 SOURCE_SCOUT_EXPLORATION_DEADLINE_SECONDS = '240'
 SOURCE_SCOUT_MCP_DEADLINE_SECONDS = '270'
 
+# Explicitly opt in by setting enabled=true, then reconnecting MCP servers.
+[mcp_servers.source_scout_references]
+command = 'C:\AI\Dev\source_scout\.venv\Scripts\python.exe'
+args = ['-m', 'source_scout', 'serve-mcp', '--profile', 'references']
+cwd = 'C:\AI\Dev\source_scout'
+enabled = false
+enabled_tools = ['find_reuse_references', 'get_reuse_context']
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+
+[mcp_servers.source_scout_references.env]
+PYTHONPATH = 'C:\AI\Dev\source_scout\src'
+
 [mcp_servers.serena]
 command = 'C:\AI\Dev\source_scout\.source_scout\tools\serena-venv\Scripts\serena.exe'
 args = ['start-mcp-server', '--project', 'C:\AI\Dev\source_scout', '--context', 'C:\AI\Dev\source_scout\config\serena-context.yml', '--mode', 'no-memories', '--enable-web-dashboard', 'false', '--open-web-dashboard', 'false', '--enable-gui-log-window', 'false']

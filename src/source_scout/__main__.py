@@ -64,6 +64,33 @@ def main() -> None:
     check_parser.add_argument("--format", choices=["text", "json"], default="text")
     check_parser.add_argument("--timeout-seconds", type=float, default=300.0)
 
+    reference_add_parser = subparsers.add_parser(
+        "reference-add", help="Add one explicit local or GitHub repository as implementation references"
+    )
+    reference_add_parser.add_argument("--source", required=True)
+    reference_add_parser.add_argument("--kind", choices=["personal", "curated"], default="personal")
+    reference_add_parser.add_argument("--commit", default=None)
+
+    reference_find_parser = subparsers.add_parser(
+        "reference-find", help="Find deterministic matches in the explicit reference collection"
+    )
+    reference_find_parser.add_argument("--task", required=True)
+    reference_find_parser.add_argument("--project-path", default=None)
+    reference_find_parser.add_argument("--max-results", type=int, choices=range(1, 4), default=3)
+
+    reference_context_parser = subparsers.add_parser(
+        "reference-context", help="Read verified source context for a reference candidate"
+    )
+    reference_context_parser.add_argument("--candidate-id", required=True)
+    reference_context_parser.add_argument("--task", default="")
+    reference_context_parser.add_argument("--project-path", default=None)
+
+    github_fallback_parser = subparsers.add_parser(
+        "reference-github-search", help="Explicitly inspect up to three pinned GitHub fallback candidates"
+    )
+    github_fallback_parser.add_argument("--task", required=True)
+    github_fallback_parser.add_argument("--max-results", type=int, choices=range(1, 4), default=3)
+
     scout_parser = subparsers.add_parser("scout", help="Discover raw candidate repositories")
     scout_parser.add_argument("--domain", default="personal-code", choices=["personal-code", "nextjs-ui"])
     scout_parser.add_argument("--limit", type=int, default=500)
@@ -194,7 +221,7 @@ def main() -> None:
     serve_parser = subparsers.add_parser("serve-mcp", help="Run the MCP server")
     serve_parser.add_argument("--transport", choices=["stdio", "http"], default=None)
     serve_parser.add_argument("--port", type=int, default=None)
-    serve_parser.add_argument("--profile", choices=["sidecar", "reuse"], default="sidecar")
+    serve_parser.add_argument("--profile", choices=["sidecar", "references", "reuse"], default="sidecar")
 
     gc_parser = subparsers.add_parser("gc", help="Garbage-collect old local snapshots")
     gc_parser.add_argument("--keep-per-repo", type=int, default=2)
@@ -213,6 +240,40 @@ def main() -> None:
     if args.command == "check":
         _run_check_commands(args.with_local_explore_eval, output_format=args.format,
                             timeout_seconds=args.timeout_seconds)
+        return
+
+    if args.command in {"reference-add", "reference-find", "reference-context", "reference-github-search"}:
+        from . import reuse_references
+
+        value: object
+        try:
+            if args.command == "reference-add":
+                value = asyncio.run(
+                    reuse_references.add_reference_source(
+                        args.source, selection_kind=args.kind, commit=args.commit
+                    )
+                )
+            elif args.command == "reference-find":
+                value = reuse_references.find_reuse_references(
+                    args.task, project_path=args.project_path, max_results=args.max_results
+                )
+            elif args.command == "reference-context":
+                value = reuse_references.get_reuse_context(
+                    args.candidate_id, task=args.task, project_path=args.project_path
+                )
+            else:
+                value = asyncio.run(
+                    reuse_references.search_github_fallback(
+                        args.task, max_results=args.max_results
+                    )
+                )
+        except (reuse_references.ReuseReferenceError, OSError, ValueError) as exc:
+            print(json.dumps({"status": "error", "error": str(exc)}, sort_keys=True), file=sys.stderr)
+            sys.exit(1)
+        output = reuse_references.reference_to_jsonable(value)
+        print(json.dumps(output, indent=2, sort_keys=True))
+        if output.get("status") in {"abstained", "network_error", "error"}:
+            sys.exit(1)
         return
 
     if args.command == "scout":
