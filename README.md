@@ -57,7 +57,9 @@ two observations are outside the fingerprint. A saved report does not verify
 subsequent edits; run the command again. Logs are ignored by Git.
 
 `check --with-local-explore-eval` remains an explicit paid-eval option and also
-requires the exploration policy to be enabled. It is never part of normal checks.
+requires explicit `on` mode for the legacy unclassified eval tasks. It is never
+part of normal checks. Its path/line hit metric measures navigation, not finished
+patch quality, overall Codex cost or preservation of final-result quality.
 
 ## MCP profiles
 
@@ -68,13 +70,16 @@ source-scout serve-mcp --profile reuse
 
 | Profile | Tools |
 | --- | --- |
-| `sidecar` (default) | `explore_local_code`, `model_status` |
-| `reuse` (explicit legacy) | Above plus `find_reusable_code`, `assess_reusable_code`, `get_source_bundle`, `record_reuse_outcome` |
+| `sidecar` (default) | `explore_local_code` |
+| `reuse` (explicit legacy) | Above plus `model_status`, `find_reusable_code`, `assess_reusable_code`, `get_source_bundle`, `record_reuse_outcome` |
 
 There is no MCP shell/check runner. Codex runs `source-scout check` in its normal
 terminal. Normal CLI/check imports and sidecar startup do not initialize or
 import the catalog. Disabled exploration/model-status return `disabled` without
 model validation, network requests or source-context collection.
+`source-scout model-status` remains an explicit CLI/debug model-health operation;
+`--smoke-test` explicitly selects model requests. These debug operations are
+available in selective/on mode; off prevents them. They are outside normal routing.
 
 Project-local `.codex/config.toml` configures the Codex VS Code extension and
 CLI, retaining other/global MCP settings. Source Scout uses a 270-second outer
@@ -84,20 +89,45 @@ Scout dependency. See [setup and verified status](docs/source_scout_direction.md
 
 ## Optional remote investigation
 
-`.source-scout.toml` defaults to disabled. `SOURCE_SCOUT_REMOTE_EXPLORATION`
-overrides project policy; only `1`, `true` or `yes` enables it. An inherited API
-key does not activate it. To explicitly enable it in the current terminal:
+`.source-scout.toml` commits `mode = "selective"` under `[remote_exploration]`.
+Policy is read on every invocation before model configuration, API-key access,
+network validation or seed/source collection:
+
+| Mode | Investigator contract |
+| --- | --- |
+| `off` | Returns disabled with no source/model/network work. |
+| `selective` | Task, concrete reason, approved use case, and at least one attempted local method. |
+| `on` | Task and concrete reason; classification/local attempts may be omitted. All safety and budget limits remain. |
+
+| Selective use case | Unresolved question after local navigation |
+| --- | --- |
+| `cross_file_contract` | A definition/reference chain is known, but the contract between its files/modules remains unclear. |
+| `indirect_runtime_flow` | Callbacks, registration, dependency injection, events or similar dispatch prevent direct navigation from explaining runtime flow. |
+| `ambiguous_ownership` | Local search found multiple plausible components; ownership of the behavior remains unclear. |
+| `architecture_trace` | A concrete relation spans several subsystems and direct navigation cannot establish it. |
+
+Local methods are `rg`, `direct_read` and `serena`. They record caller-declared attempts, not proof of
+tool execution. Serena is not required: appropriate rg/direct reads suffice.
+For an unresolved contract after local navigation:
 
 ```powershell
-$env:SOURCE_SCOUT_REMOTE_EXPLORATION = 'true'
-source-scout explore-local --project-path . --task 'Trace the unresolved caller contract' --reason 'rg and symbol references did not resolve the cross-file contract'
-Remove-Item Env:SOURCE_SCOUT_REMOTE_EXPLORATION
+source-scout explore-local --project-path . --task 'Trace the unresolved caller contract' --reason 'rg and direct reads left the return contract unresolved' --use-case cross_file_contract --attempted-local-method rg --attempted-local-method direct_read
 ```
 
-For MCP, edit `SOURCE_SCOUT_REMOTE_EXPLORATION` in the source_scout environment
-section of `.codex/config.toml` and restart that server. Changing another
-terminal's environment does not affect an already-running MCP process.
-The inherited `DEEPSEEK_API_KEY` is used without storing it in project config.
+MCP uses the same fields (`use_case`, `attempted_local_methods`, `reason`). The
+project-local Codex configuration has no permanent mode override. Ordinary
+selective calls require no config edit or server restart. The inherited
+`DEEPSEEK_API_KEY` is used without storing it in project config.
+
+`SOURCE_SCOUT_REMOTE_EXPLORATION=off|selective|on` overrides project policy.
+For example, `$env:SOURCE_SCOUT_REMOTE_EXPLORATION = 'off'` forces off in the
+current terminal; `Remove-Item Env:SOURCE_SCOUT_REMOTE_EXPLORATION` restores
+project policy. Another terminal's environment does not affect a running MCP
+process. Legacy `false/0/no` map to off and `true/1/yes` map to on. In project
+TOML, legacy `enabled = false/true` maps to off/on; an explicit `mode` wins.
+Missing/unreadable/invalid policy or invalid override fails closed to off.
+An API key never overrides policy. Unknown use cases/local methods are rejected,
+including when supplied in on mode; omit them for an unclassified on-mode call.
 
 The existing `deepseek-v4-flash` client/model configuration is retained. The
 investigator receives the bounded task and necessary read-only observations,
@@ -121,14 +151,15 @@ missing support. Small output is not a claim of full context coverage.
 
 Each enabled run saves a versioned report and detailed trajectory under
 `.source_scout/explorations/<run-id>/report.json`, including requested/returned
-model, available input/cached-input/output usage, latency, known retries, reason
-and stop cause. Cached input is part of input, not an additional total. Unknown
+model, available input/cached-input/output usage, latency, known retries, policy
+mode/use case/local attempts/reason and stop cause. The local report schema is
+`source-scout-exploration-v2`. Cached input is part of input, not an additional total. Unknown
 usage/cost is `null`; synthetic fallback records are not counted as requests.
 `--trace-path` optionally writes an additional copy inside `.source_scout/`.
 CLI exit status is nonzero for disabled, unavailable or incomplete exploration.
 Details live locally, outside ordinary MCP output.
 
-This opt-in governs additional Source Scout calls. It does not describe the
+This policy governs additional Source Scout calls. It does not describe the
 whole Codex workflow as offline. No verified cost-saving percentage is claimed.
 
 ## Preserved legacy catalog

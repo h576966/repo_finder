@@ -13,6 +13,8 @@ fixed_tools:
   - find_referencing_symbols
   - find_implementations
   - find_declaration
-single_project: true
+# Serena's single_project mode also removes get_current_config. Keep root inspection;
+# fixed_tools omits activate_project, so this connection cannot switch projects.
+single_project: false
 tool_description_overrides:
   initial_instructions: Read Serena's active tool instructions when needed for this connection.

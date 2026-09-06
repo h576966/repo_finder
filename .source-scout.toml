@@ -1,2 +1,2 @@
 [remote_exploration]
-enabled = false
+mode = "selective"

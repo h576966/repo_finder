@@ -24,10 +24,14 @@ async def test_explore_local_code_tool_is_read_only_and_ephemeral(monkeypatch, t
         max_turns: int = fastcontext.DEFAULT_MAX_TURNS,
         reason: str = "",
         deadline_seconds: float | None = None,
+        use_case=None,
+        attempted_local_methods=None,
     ) -> LocalExploreResult:
         assert task == "Find MCP tools"
         assert project_path == str(tmp_path)
         assert max_turns == 2
+        assert use_case == "cross_file_contract"
+        assert attempted_local_methods == ["rg"]
         return LocalExploreResult(
             task=task,
             project_path=str(tmp_path),
@@ -46,12 +50,14 @@ async def test_explore_local_code_tool_is_read_only_and_ephemeral(monkeypatch, t
     tools = {tool.name: tool for tool in await server.mcp.list_tools()}
     assert "explore_local_code" in tools
     assert tools["explore_local_code"].annotations.readOnlyHint is True
-    assert "Read-only local" in str(tools["explore_local_code"].description)
+    assert "AFTER rg/direct reads or Serena" in str(tools["explore_local_code"].description)
 
     result = await server.explore_local_code(
         "Find MCP tools",
         str(tmp_path),
         max_turns=2,
+        use_case="cross_file_contract",
+        attempted_local_methods=["rg"],
     )
 
     assert result.evidence_paths == ["src/source_scout/server.py:1-20"]
@@ -367,7 +373,7 @@ async def test_model_status_tool_is_read_only_and_returns_health(monkeypatch: py
         return expected
 
     monkeypatch.setattr(server, "_api_status", fake_status)
-    tools = {tool.name: tool for tool in await server.mcp.list_tools()}
+    tools = {tool.name: tool for tool in await server.create_server("reuse").list_tools()}
 
     assert tools["model_status"].annotations.readOnlyHint is True
     assert await server.model_status(smoke_test=True) == expected

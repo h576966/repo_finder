@@ -11,10 +11,12 @@ for fewer tokens. See `docs/source_scout_direction.md` and
 1. Write a short plan before non-trivial changes; protect uncommitted work.
 2. Exact text/file: use `rg` or direct reads. Symbols/references: use Serena
    when available. No mandatory tool cycle or reminder hooks.
-3. Use the optional investigator only for a concrete unresolved investigation
-   where simpler tools did not suffice. Project/process policy must enable it;
-   an API key alone does not. Supply a short reason with each selected call.
-   Standing user authorization applies; do not ask again per call.
+3. Use the DeepSeek investigator only for unresolved cross-file contracts,
+   indirect runtime flow, ambiguous ownership or concrete architecture relations
+   after local navigation. Project default is selective: supply `use_case`, a
+   concrete `reason` and `attempted_local_methods` (rg, direct_read or serena).
+   Serena is optional; no mandatory call before every task. An API key alone
+   does not authorize a route. Standing authorization applies; do not ask again.
 4. Treat citations as navigation. Codex reads the source and makes changes.
 5. Review locally for correctness, security, edge cases and missing tests.
 6. Run `source-scout check` before done. It runs Ruff, mypy and pytest in the
@@ -39,4 +41,4 @@ for fewer tokens. See `docs/source_scout_direction.md` and
 - Do not run paid live evals, commit, push or create a PR unless requested.
 
 The older global `fastcontext-local` skill must not override these routing and
-opt-in rules. Its exact migration is documented in `docs/source_scout_direction.md`.
+selective-use rules. Its migration is documented in `docs/source_scout_direction.md`.

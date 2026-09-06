@@ -19,12 +19,18 @@ from tests.fastcontext_helpers import _response_message_json, _response_tool_cal
 
 @pytest.mark.asyncio
 async def test_profiles_expose_only_selected_tools():
+    assert server.DEFAULT_MCP_TOOL_NAMES == ("explore_local_code",)
     async with Client(server.create_server()) as client:
         assert {t.name for t in await client.list_tools()} == set(server.DEFAULT_MCP_TOOL_NAMES)
         with pytest.raises(Exception, match="[Uu]nknown|not found"):
             await client.call_tool("find_reusable_code", {"task": "x"})
+        with pytest.raises(Exception, match="[Uu]nknown|not found"):
+            await client.call_tool("model_status", {})
     async with Client(server.create_server("reuse")) as client:
-        assert {t.name for t in await client.list_tools()} == set(server.REUSE_MCP_TOOL_NAMES)
+        assert {t.name for t in await client.list_tools()} == {
+            "explore_local_code", "model_status", "find_reusable_code", "assess_reusable_code",
+            "get_source_bundle", "record_reuse_outcome",
+        } == set(server.REUSE_MCP_TOOL_NAMES)
     with pytest.raises(ValueError):
         server.create_server("other")
 

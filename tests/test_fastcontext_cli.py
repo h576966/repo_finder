@@ -103,11 +103,15 @@ def test_explore_local_cli_invokes_fastcontext(monkeypatch, capsys, tmp_path: Pa
         max_turns: int = fastcontext.DEFAULT_MAX_TURNS,
         trace_path: str | Path | None = None,
         reason: str = "",
+        use_case=None,
+        attempted_local_methods=None,
     ) -> object:
         assert task == "Find MCP tools"
         assert project_path == str(tmp_path)
         assert max_turns == 2
         assert trace_path == str(tmp_path / "trace.json")
+        assert use_case == "cross_file_contract"
+        assert attempted_local_methods == ["rg", "direct_read"]
         return fastcontext.LocalExploreResult(
             task=task,
             project_path=str(tmp_path),
@@ -138,6 +142,9 @@ def test_explore_local_cli_invokes_fastcontext(monkeypatch, capsys, tmp_path: Pa
             "text",
             "--trace-path",
             str(tmp_path / "trace.json"),
+            "--use-case", "cross_file_contract",
+            "--attempted-local-method", "rg",
+            "--attempted-local-method", "direct_read",
         ],
     )
     main_module.main()

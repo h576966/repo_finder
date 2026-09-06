@@ -16,6 +16,7 @@ from . import (
     fastcontext_validation,
 )
 from . import fastcontext_tools as fastcontext_tooling
+from .exploration_policy import ExplorationUseCase, LocalMethod
 from .fastcontext_constants import (
     ANALYZER_VERSION,
     DEFAULT_MAX_TURNS,
@@ -206,8 +207,14 @@ async def explore_local_project(
     trace_path: str | Path | None = None,
     reason: str = "",
     deadline_seconds: float | None = None,
+    use_case: ExplorationUseCase | None = None,
+    attempted_local_methods: list[LocalMethod] | None = None,
 ) -> LocalExploreResult:
-    from .exploration_policy import exploration_deadline_seconds, remote_exploration_enabled
+    from .exploration_policy import (
+        exploration_deadline_seconds,
+        remote_exploration_mode,
+        validate_investigation,
+    )
     from .exploration_trace import summarize_requests
 
     result = LocalExploreResult(
@@ -221,11 +228,14 @@ async def explore_local_project(
         stop_reason="policy_disabled",
     )
     # This must precede model configuration/validation and seed/source collection.
-    if not remote_exploration_enabled(project_path):
+    policy_mode = remote_exploration_mode(project_path)
+    if policy_mode == "off":
         result.notes = ["Remote exploration is disabled by project/process policy."]
         return result
-    if not task.strip() or not reason.strip():
-        raise FastContextError("task and a concrete reason for remote exploration are required.")
+    try:
+        validate_investigation(policy_mode, task, reason, use_case, attempted_local_methods)
+    except ValueError as exc:
+        raise FastContextError(str(exc)) from exc
     if not 1 <= max_turns <= 12:
         raise FastContextError("max_turns must be between 1 and 12.")
     root = Path(project_path).expanduser().resolve()
@@ -321,6 +331,10 @@ async def explore_local_project(
         report_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             **asdict(result),
+            "report_schema_version": "source-scout-exploration-v2",
+            "policy_mode": policy_mode,
+            "use_case": use_case,
+            "attempted_local_methods": list(dict.fromkeys(attempted_local_methods or [])),
             "reason": reason.strip(),
             "deadline_seconds": deadline,
             "call_budget": max_turns,

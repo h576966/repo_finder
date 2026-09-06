@@ -8,6 +8,7 @@ from dataclasses import asdict
 from . import cli_checks as _cli_checks
 from .cli_output import _format_local_explore_text
 from .cli_status import _api_status, status_is_healthy
+from .exploration_policy import LOCAL_METHODS, SELECTIVE_USE_CASES
 from .failures import failure_from_exception
 from .fastcontext_constants import DEFAULT_MAX_TURNS
 
@@ -184,6 +185,11 @@ def main() -> None:
     explore_local_parser.add_argument("--format", choices=["json", "text"], default="json")
     explore_local_parser.add_argument("--trace-path", default=None)
     explore_local_parser.add_argument("--reason", default="", help="Why rg/Serena did not suffice")
+    explore_local_parser.add_argument("--use-case", choices=SELECTIVE_USE_CASES)
+    explore_local_parser.add_argument(
+        "--attempted-local-method", dest="attempted_local_methods", action="append",
+        choices=LOCAL_METHODS, help="Local method already attempted; repeat for multiple methods",
+    )
 
     serve_parser = subparsers.add_parser("serve-mcp", help="Run the MCP server")
     serve_parser.add_argument("--transport", choices=["stdio", "http"], default=None)
@@ -442,6 +448,8 @@ def main() -> None:
                     max_turns=args.max_turns,
                     trace_path=args.trace_path,
                     reason=args.reason,
+                    use_case=args.use_case,
+                    attempted_local_methods=args.attempted_local_methods,
                 )
             )
         except (fastcontext.FastContextError, ModelError, OSError, ValueError, TimeoutError) as exc:

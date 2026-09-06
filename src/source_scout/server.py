@@ -11,6 +11,7 @@ from pydantic import Field
 from . import deepseek, fastcontext
 from .cli_status import _api_status, _error_status
 from .constants import _now_iso
+from .exploration_policy import ExplorationUseCase, LocalMethod
 from .failures import FailureDetails, failure_from_exception
 from .models import (
     FindReusableCodeResult,
@@ -24,17 +25,20 @@ mcp = FastMCP(
     "SourceScout",
     instructions=(
         "Codex owns reasoning, edits and verification. Use rg for exact text and Serena for symbols. "
-        "Run source-scout check in the terminal. Remote exploration is disabled unless explicitly enabled; "
-        "supply a concrete reason for each selected call. Citations are navigation, not proof of completion."
+        "Run source-scout check in the terminal. Use the remote investigator only for unresolved "
+        "cross-file contracts, indirect runtime flow, ambiguous ownership or architecture relations "
+        "after local navigation. Supply use_case, attempted_local_methods and a concrete reason. "
+        "Project policy controls access. Citations are navigation, not proof of completion."
     ),
 )
 reuse_mcp = FastMCP("SourceScoutReuse")
 DEFAULT_MCP_DEADLINE_SECONDS = 270.0
 _T = TypeVar("_T")
 
-DEFAULT_MCP_TOOL_NAMES = ("explore_local_code", "model_status")
+DEFAULT_MCP_TOOL_NAMES = ("explore_local_code",)
 REUSE_MCP_TOOL_NAMES = (
     *DEFAULT_MCP_TOOL_NAMES,
+    "model_status",
     "find_reusable_code",
     "assess_reusable_code",
     "get_source_bundle",
@@ -73,7 +77,7 @@ def _structured_tool_error(exc: Exception, *, stage: str) -> ToolError:
     return ToolError(failure_from_exception(exc, stage=stage).to_json())
 
 
-@mcp.tool(
+@reuse_mcp.tool(
     description="Read-only health and optional smoke checks for the configured Source Scout model.",
     annotations={"readOnlyHint": True},
 )
@@ -92,8 +96,11 @@ async def model_status(
 
 @mcp.tool(
     description=(
-        "Read-only local FastContext exploration. Finds relevant files and line ranges in a local "
-        "project without writing Source Scout catalog state."
+        "Read-only investigation with DeepSeek of unresolved cross-file contracts, indirect runtime "
+        "flow, ambiguous ownership or concrete architecture relations AFTER rg/direct reads or Serena "
+        "navigation. Not general code search, symbol lookup, review or test verification. Selective "
+        "policy requires an approved use_case, concrete reason and attempted_local_methods. "
+        "Returns bounded source citations with explicit missing context; full journal stays local."
     ),
     annotations={"readOnlyHint": True},
 )
@@ -111,6 +118,19 @@ async def explore_local_code(
         Field(description="Maximum FastContext exploration turns", ge=1, le=12),
     ] = fastcontext.DEFAULT_MAX_TURNS,
     reason: Annotated[str, Field(description="Concrete reason rg/Serena did not suffice")] = "",
+    use_case: Annotated[
+        ExplorationUseCase | None,
+        Field(description=(
+            "Required in selective mode: cross_file_contract = known definition/reference chain but "
+            "unresolved inter-file contract; indirect_runtime_flow = callbacks/registration/DI/events "
+            "defeat direct navigation; ambiguous_ownership = local search found multiple plausible "
+            "owners; architecture_trace = concrete relation unresolved across several subsystems."
+        )),
+    ] = None,
+    attempted_local_methods: Annotated[
+        list[LocalMethod] | None,
+        Field(description="Local methods already attempted; at least one required in selective mode"),
+    ] = None,
 ) -> LocalExploreResult:
     if not task.strip():
         raise _structured_tool_error(ValueError("Task description is required."), stage="validation")
@@ -123,6 +143,8 @@ async def explore_local_code(
                 project_path=project_path,
                 max_turns=max_turns,
                 reason=reason,
+                use_case=use_case,
+                attempted_local_methods=attempted_local_methods,
                 deadline_seconds=max(0.001, _mcp_deadline_seconds() - 5.0),
             )
         )

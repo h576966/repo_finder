@@ -9,10 +9,12 @@ if TYPE_CHECKING:
 
 
 async def _api_status(smoke_test: bool) -> dict[str, object]:
-    from .exploration_policy import remote_exploration_enabled
+    from .exploration_policy import remote_exploration_mode
 
-    if not remote_exploration_enabled():
+    mode = remote_exploration_mode()
+    if mode == "off":
         return {"status": "disabled", "healthy": False, "reachable": None,
+                "policy_mode": mode,
                 "reason": "Remote exploration is disabled by policy; no model requests were made."}
     from . import deepseek, fastcontext
 
@@ -24,6 +26,7 @@ async def _api_status(smoke_test: bool) -> dict[str, object]:
         return _error_status(config, failure)
 
     result: dict[str, object] = {
+        "policy_mode": mode,
         "healthy": bool(status.get("model_available")),
         "reachable": True,
         "configured": True,
