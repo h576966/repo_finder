@@ -184,6 +184,28 @@ async def test_commonjs_and_cts_are_source_evidence(tmp_path, suffix):
 
 
 @pytest.mark.asyncio
+async def test_windows_cmd_is_source_evidence(tmp_path):
+    root, _ = _repository(
+        tmp_path,
+        files={
+            "source-scout.cmd": (
+                "@echo off\n"
+                "set PROJECT_PYTHON=%~dp0.venv\\Scripts\\python.exe\n"
+                "if not exist \"%PROJECT_PYTHON%\" echo virtual environment missing\n"
+                "\"%PROJECT_PYTHON%\" -m source_scout %*\n"
+            ),
+        },
+    )
+    added = await implementation_references.add_reference_source(root)
+    assert added["reference_count"] == 1
+    result = implementation_references.find_implementation_references(
+        "Windows command wrapper repository virtual environment missing Python"
+    )
+    assert result.status == "matches"
+    assert result.results[0].path == "source-scout.cmd"
+
+
+@pytest.mark.asyncio
 async def test_attributes_do_not_change_git_blob_hashes_or_execute_filters(tmp_path, monkeypatch):
     root, commit = _repository(
         tmp_path,

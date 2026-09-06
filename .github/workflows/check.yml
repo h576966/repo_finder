@@ -8,6 +8,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install -e ".[all,dev]"
+      - run: python -m venv .venv
+      - run: .venv\Scripts\python.exe -m pip install -e ".[all,dev]"
       - name: Local checks (no external HTTP or model calls)
-        run: python -m source_scout check --format json
+        run: .venv\Scripts\python.exe -m source_scout check --format json

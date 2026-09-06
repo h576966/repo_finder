@@ -36,6 +36,7 @@ REFERENCE_SOURCE_SUFFIXES = {
     ".c",
     ".cc",
     ".cjs",
+    ".cmd",
     ".cpp",
     ".cs",
     ".css",
