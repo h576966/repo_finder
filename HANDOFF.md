@@ -1,63 +1,68 @@
 # Current handoff
 
-Snapshot: 2026-09-07. Base: `1352c6f8b8d4f5748cee83d57ac077a5e1ba4503` on `main`.
-This describes the accompanying workflow changes on top of that base, not live
-commit, push or CI status. Verify the current revision and relevant diff before
-continuing; suggestions below are not authorization to execute them.
+2026-09-07. Base `6a85997fe934d42c694bc2297e9b26d93d161741` on `main`.
+Clean entry tree matched `origin/main`. Only this handoff and
+`docs/validation-2026-09-07.md` are local uncommitted changes. Verify Git state.
 
-## Changes and decisions
+## Work and conclusion
 
-- Added one replaceable handoff and `docs/agent-workflow.md` with a ready-to-copy
-  ChatGPT Ask Agent instruction and bounded acceptance scenarios. No hooks,
-  automatic commits, extra skill or runtime changes.
-- Project instructions now cover handoff before completion/commit, push-only and
-  review exclusions, result reuse, and an explicit post-check handoff-only exception.
-  Reports keep their original identity; no verification bypass was added to code.
-- Source Scout skills now assess utility at a natural work-unit boundary; the
-  investigation fallback ban on extra model probes does not ban local tests.
-- The preceding base commit added Python 3.12+ policy, Codex usage feedback and
-  evidence-based validation. Source Scout remains a personal local Windows tool.
+- Completed historical evidence/oracle review and the directly authorized twelve
+  investigations: four unchanged tasks, three fixed rounds, existing selective
+  policy/model/budgets. No replacement runs, SDK retries or budget changes.
+- Eleven completed, one explicitly incomplete; structural score 9/12. Codex's
+  separately frozen semantic criteria: three sufficient, nine partial explanations.
+  Keep implementation and oracle unchanged; counts are not a general quality rate.
+- Deadline enforcement in `fastcontext.py` is absent in all three deadline answers;
+  only one acknowledges the missing relation. Catalog lifetime and normalized
+  snippet/provenance explanations remain partial despite required-file passes.
+- Observed task time 58.1773 seconds, 27 requests, 250,390 input / 4,040 output
+  tokens; cached input 61,184 is a subset. Cost unknown. Three requests were the
+  existing within-budget priority-citation correction, not relaunched experiments.
+- Historical answers remain preserved: current re-score 2/4, substantive omissions
+  in pinned_context/policy_deadline, no justification for weakening the oracle.
+- References offline corpus tests four top hits and two abstentions, not actual
+  adaptation utility. No comparison with ordinary Codex navigation was started.
 
-## Verification and limits
+## Evidence and limitations
 
-- `source-scout check --format json` passed on 2026-09-07: Ruff, mypy and 279
-  offline tests, zero failed/skipped. Local report:
-  `.source_scout/checks/0e2a3460b3204d9d9a9f444a11bab29e/report.json` (pre-delivery rerun).
-  The checkout was unchanged during checks. Only this handoff's results were
-  updated afterward and reviewed separately; the report is not exact-tree proof
-  of this final documentation. No runtime code changed in this work unit.
-- All three modified skills passed the skill validator; the Source Scout plugin
-  passed manifest validation. Installed skill hashes match repository sources.
-- Walked through the eight scenarios in `docs/agent-workflow.md`; made the
-  required-check failure gate explicit for push-only as well as commit-and-push.
-  This was instruction review, not independent agent execution. No real commit,
-  push or fresh ChatGPT conversation was performed to test those branches.
-- Historical evidence in `docs/development-notes.md`: the 2026-09-06 paid navigation
-  diagnostic completed 4/4 tasks with no invalid citations, but required-path
-  scoring passed only 2/4. Pinned context missed `implementation_references.py`;
-  deadline ownership missed `fastcontext.py`. Completion is not demonstrated utility.
-- The owner subsequently requested commit and push of these workflow changes.
-  Confirm actual delivery in Git/GitHub; no additional paid evals or retrieval/
-  ranking changes are in scope. Fresh ChatGPT uptake remains untested.
+- `.source_scout/validation-20260907/` holds protocol, original/pre-run/post-run
+  locks, three raw suite reports/logs, source audit, Codex assessments and marked
+  usage/append-only feedback. Journals remain under `.source_scout/explorations/`.
+  `completion-status.json` supersedes the preserved pre-authorization block record.
+- Pre-run and post-run lock contents match exactly. Twelve usage entries are
+  `kind=evaluation` with identical source-code digest. Every observed source line
+  and file hash was checked; all final ranges are valid, but that is not proof of
+  complete explanations. No answer was presentation-truncated.
+- The pre-live handoff was in the locked tree. Offline seed reconstruction includes
+  assessment lines for reference_evidence/policy_deadline: potential input leakage.
+  Full initial prompts were not saved. This is not a clean blind evaluation;
+  no further paid runs were used to correct the limitation.
+- No product/tests/prompts/ranking/model/oracle changes, dependencies, real-data
+  cleanup, commit or push. No automatic product fix follows these observations.
 
-## Outside Git and remaining work
+## Verification
 
-- Global Codex instructions and `git-ship` were updated locally; they are not part
-  of this repository's commits. Git Ship now separates push-only and checkpoint
-  behavior, reviews the staged scope and makes validation limits explicit.
-- Refreshed installed `source-scout@personal` to `0.3.0+codex.20260907164805`
-  using the existing installer. Start a new Codex task for updated skills.
-  MCP settings are byte-identical; global config differs only in line endings.
-  Installer backups and global-instruction backups are under the owner's
-  `.codex/backups/`, outside this repository. Existing data/logs were preserved.
-- ChatGPT project settings cannot be changed through the available task tools.
-  The instruction in `docs/agent-workflow.md` must be copied into that project;
-  saving it locally does not activate it. Synced project mirrors were not edited.
+- Base Windows CI `34145850752`: passed Python 3.12 and 3.14; not validation of
+  these local documents.
+- Final local `source-scout check --format json` passed: Ruff, mypy, 279 offline
+  tests, zero failed/skipped. Report:
+  `.source_scout/checks/29cba51fc10440058915ca4e8b04d41e/report.json`.
+  Contents were unchanged during checks. Only this results paragraph was updated
+  afterward and reviewed under the `AGENTS.md` handoff exception; the report is
+  not exact-tree validation of this final documentation edit.
 
-## Next bounded suggestion
+## Still-relevant local setup
 
-After the owner activates the ChatGPT instruction and shares/pushes this handoff,
-try one fresh Ask conversation: request a small next Codex task with model/effort,
-and verify that it distinguishes passing checks from the incomplete 2/4 navigation
-result. Observe the listed delivery scenarios during ordinary work before adding
-more policy. Do not start a broad refactor or heuristic adjustment from this alone.
+- Preceding `docs/agent-workflow.md` ChatGPT instruction still needs owner activation
+  and fresh-conversation verification; not performed by this pass.
+- Installed skill resolved to `0.3.0+codex.20260907164805`; the older catalog path
+  no longer exists. Current investigation skill was read. No plugin refresh here.
+- Global Codex instructions and `git-ship` changes/backups are outside Git, carried
+  from the preceding handoff and not reverified. Backups remain in `.codex/backups/`.
+- Historical reports, real catalog data and snapshots were not changed or cleaned.
+
+## One bounded next suggestion
+
+Review the saved deadline answers against the existing finalization/completeness
+contract locally before specifying any product change. Keep assessment notes out
+of any future evaluated source tree. This suggestion authorizes no further runs.
