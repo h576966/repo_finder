@@ -69,6 +69,8 @@ def test_tracked_local_explore_suite_loads_by_alias() -> None:
     assert suite["suite_id"] == "local-explore-source-scout"
     assert len(suite["tasks"]) == 4
     assert suite["tasks"][0]["expected_citations"]
+    assert suite["tasks"][0]["use_case"] == "cross_file_contract"
+    assert suite["tasks"][0]["attempted_local_methods"] == ["rg", "direct_read"]
 
 
 def test_tracked_local_explore_suite_keeps_underscore_alias() -> None:
@@ -85,6 +87,24 @@ def test_validate_suite_rejects_missing_expected_citations() -> None:
                 "tasks": [{"id": "bad", "task": "Find code"}],
             }
         )
+
+
+@pytest.mark.parametrize(
+    "field,value,error",
+    [
+        ("use_case", "general_review", "invalid use_case"),
+        ("attempted_local_methods", ["guess"], "invalid attempted_local_methods"),
+    ],
+)
+def test_validate_suite_rejects_invalid_investigation_route(field, value, error) -> None:
+    task = {
+        "id": "bad-route",
+        "task": "Trace a contract",
+        "expected_citations": [{"path": "src/foo.py"}],
+        field: value,
+    }
+    with pytest.raises(ValueError, match=error):
+        local_explore_eval.validate_suite({"suite_id": "bad", "tasks": [task]})
 
 
 def test_score_citations_reports_budget_violations(tmp_path: Path) -> None:
@@ -126,6 +146,55 @@ def test_score_citations_reports_budget_violations(tmp_path: Path) -> None:
     assert scoring["citation_budget_violation_count"] == 2
     assert metrics["over_budget_task_count"] == 1
     assert metrics["citation_budget_violation_count"] == 2
+
+
+def test_metrics_require_every_required_path(tmp_path: Path) -> None:
+    for name in ["required_a.py", "required_b.py"]:
+        (tmp_path / name).write_text("line\n", encoding="utf-8")
+
+    scoring = local_explore_eval._score_citations(
+        tmp_path,
+        [
+            local_explore_eval.ExpectedCitation("required_a.py", 1, 1),
+            local_explore_eval.ExpectedCitation("required_b.py", 1, 1),
+        ],
+        [],
+        [local_explore_eval.ReturnedCitation("required_a.py", 1, 1, "required_a.py:1-1")],
+    )
+    metrics = local_explore_eval._metrics(
+        [
+            {
+                "status": "completed",
+                "passed": False,
+                "any_expected_path_hit": scoring["any_expected_path_hit"],
+                "all_required_paths_hit": scoring["all_required_paths_hit"],
+                "any_line_overlap_hit": scoring["any_line_overlap_hit"],
+                "manual_search": {"file_count": 1},
+                "manual_search_file_reduction": 0.0,
+                "duration_seconds": 0.1,
+                "tool_call_count": 1,
+                "turn_count": 1,
+                "tool_trace": [],
+                **scoring,
+            }
+        ]
+    )
+
+    assert scoring["any_expected_path_hit"] is True
+    assert scoring["all_required_paths_hit"] is False
+    assert metrics["path_hits"] == 0
+    assert metrics["path_hit_rate"] == 0.0
+    assert (
+        local_explore_eval._passes_threshold(
+            metrics,
+            {
+                "path_hit_rate": 1.0,
+                "line_overlap_rate": 0.0,
+                "max_bad_citations_per_task": 0,
+            },
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio

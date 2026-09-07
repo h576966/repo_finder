@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 ERROR_SCHEMA_VERSION = "source-scout-error-v1"
@@ -15,11 +15,14 @@ class FailureDetails:
     retryable: bool
     status_code: int | None = None
     schema_version: str = ERROR_SCHEMA_VERSION
+    usage: dict[str, str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         if self.status_code is None:
             result.pop("status_code")
+        if self.usage is None:
+            result.pop("usage")
         return result
 
     def to_json(self) -> str:
@@ -27,6 +30,11 @@ class FailureDetails:
 
 
 def failure_from_exception(exc: Exception, *, stage: str) -> FailureDetails:
+    failure = _classify_exception(exc, stage=stage)
+    return replace(failure, usage=getattr(exc, "usage", None))
+
+
+def _classify_exception(exc: Exception, *, stage: str) -> FailureDetails:
     from . import deepseek
     from .fastcontext_types import FastContextError
 

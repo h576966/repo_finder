@@ -11,15 +11,24 @@
     {
       "id": "reference_evidence",
       "task": "Trace how source evidence gates a reference match before target fit is computed.",
+      "use_case": "cross_file_contract",
+      "attempted_local_methods": ["rg", "direct_read"],
       "expected_citations": [
         {
           "path": "src/source_scout/implementation_references.py"
+        }
+      ],
+      "acceptable_citations": [
+        {
+          "path": "src/source_scout/models.py"
         }
       ]
     },
     {
       "id": "shared_catalog",
       "task": "Trace connection and process lock lifetimes for one reference add.",
+      "use_case": "architecture_trace",
+      "attempted_local_methods": ["rg", "direct_read"],
       "expected_citations": [
         {
           "path": "src/source_scout/catalog_core.py"
@@ -27,11 +36,18 @@
         {
           "path": "src/source_scout/file_lock.py"
         }
+      ],
+      "acceptable_citations": [
+        {
+          "path": "src/source_scout/implementation_references.py"
+        }
       ]
     },
     {
       "id": "pinned_context",
       "task": "Trace how a pinned source snippet obtains canonical bytes without checkout filters.",
+      "use_case": "cross_file_contract",
+      "attempted_local_methods": ["rg", "direct_read"],
       "expected_citations": [
         {
           "path": "src/source_scout/snapshotter.py"
@@ -39,17 +55,29 @@
         {
           "path": "src/source_scout/implementation_references.py"
         }
+      ],
+      "acceptable_citations": [
+        {
+          "path": "src/source_scout/github_client.py"
+        }
       ]
     },
     {
       "id": "policy_deadline",
       "task": "Trace project off policy and the common investigation request and finalization deadline.",
+      "use_case": "architecture_trace",
+      "attempted_local_methods": ["rg", "direct_read"],
       "expected_citations": [
         {
           "path": "src/source_scout/exploration_policy.py"
         },
         {
           "path": "src/source_scout/fastcontext.py"
+        }
+      ],
+      "acceptable_citations": [
+        {
+          "path": "src/source_scout/exploration_trace.py"
         }
       ]
     }

@@ -4,7 +4,7 @@ import asyncio
 import math
 import os
 from collections.abc import Awaitable
-from typing import Annotated, Any, TypeVar
+from typing import Annotated, Any
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -20,12 +20,16 @@ INSTRUCTIONS = (
     "Codex owns reasoning, edits and verification. Use rg/direct reads and Serena directly. "
     "Use investigate_code for a concrete unresolved source relation after local navigation. "
     "Implementation References searches only explicitly selected personal/curated sources. "
-    "Citations are navigation; read the source and assess it yourself. No mandatory tool chain."
+    "Citations are navigation; read the source and assess it yourself. No mandatory tool chain. "
+    "After using a result, Codex records a brief assessment with the local CLI: "
+    "source-scout feedback --report <usage.report_path> "
+    "--outcome helped|partly_helped|did_not_help|unassessed "
+    "--observation <what helped or was missing> [--evidence <source/test evidence>]. "
+    "Do not infer usefulness from completed status alone or ask the user to supply routine feedback."
 )
 investigator_mcp = FastMCP("SourceScoutInvestigation", instructions=INSTRUCTIONS)
 reference_mcp = FastMCP("SourceScoutReferences", instructions=INSTRUCTIONS)
 DEFAULT_MCP_DEADLINE_SECONDS = 270.0
-_T = TypeVar("_T")
 INVESTIGATOR_MCP_TOOL_NAMES = ("investigate_code",)
 REFERENCE_MCP_TOOL_NAMES = ("find_implementation_references", "get_implementation_reference")
 DEFAULT_MCP_TOOL_NAMES = (*INVESTIGATOR_MCP_TOOL_NAMES, *REFERENCE_MCP_TOOL_NAMES)
@@ -62,7 +66,7 @@ def find_implementation_references(
             )
         )
     except (ValueError, OSError) as exc:
-        raise ToolError(str(exc)) from exc
+        raise _structured_tool_error(exc, stage="references") from exc
 
 
 @reference_mcp.tool(
@@ -81,7 +85,7 @@ def get_implementation_reference(
             get_implementation_reference(reference_id, task=task, target_project_path=target_project_path)
         )
     except (ValueError, OSError) as exc:
-        raise ToolError(str(exc)) from exc
+        raise _structured_tool_error(exc, stage="references") from exc
 
 
 def _mcp_deadline_seconds() -> float:
@@ -95,7 +99,7 @@ def _mcp_deadline_seconds() -> float:
         return DEFAULT_MCP_DEADLINE_SECONDS
 
 
-async def _with_mcp_deadline(awaitable: Awaitable[_T]) -> _T:
+async def _with_mcp_deadline[T](awaitable: Awaitable[T]) -> T:
     async with asyncio.timeout(_mcp_deadline_seconds()):
         return await awaitable
 

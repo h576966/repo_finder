@@ -15,13 +15,15 @@ Use a fresh basetemp path for a new run. Catalog fixtures are opt-in. The autous
 test fixture supplies dummy model credentials, removes external API credentials
 and blocks external socket connections, while retaining local MCP IPC. GitHub
 and DeepSeek use HTTP mock transports in standard tests. No paid eval runs in
-checks. CI runs on Windows with Python 3.12, installs dependencies, then runs the
-same offline contracts. Windows is the supported platform; Linux compatibility
-is outside the current verification scope.
+checks. CI runs on Windows at the supported floor, Python 3.12, and the current
+stable Python 3.14, installs dependencies, then runs the same offline contracts.
+Windows is the supported platform; Linux compatibility is outside the current
+verification scope.
 
-Baseline `ec5266d78157b5c0a6c7dafc08b7cd34f25d7116` had 385 tests. The current
-suite collects 245: exclusive assessment/scoring/bundling/refinement/eval tests
-were retired, and product regressions now cover metadata false positives,
+Baseline `ec5266d78157b5c0a6c7dafc08b7cd34f25d7116` had 385 tests. Exclusive
+assessment/scoring/bundling/refinement/eval tests were retired; the current count
+is recorded by each identity-bound check rather than maintained here. Product
+regressions cover metadata false positives,
 canonical CRLF/filter-safe blobs, bounded Unicode/one-line responses, cjs/cts,
 unknown ecosystem fit, two-process add/find, lock release and rollback,
 historical schema/ID/hash compatibility, retired GC, Windows long paths,
@@ -32,7 +34,15 @@ retry and process termination contracts remain. Counts alone are not coverage.
 `eval-navigation --suite source-scout` is an explicit paid navigation diagnostic,
 not product acceptance. Its portable v2 fixture names current source relations;
 invalid citations must be zero. Historical reuse suites, personal worktree paths
-and `check --with-local-explore-eval` are removed. No live diagnostic was run.
+and `check --with-local-explore-eval` are removed. A requested live diagnostic on
+2026-09-06 completed all four tasks in 18.57 seconds with nine model requests and
+no invalid citations. Correct required-path scoring passes two tasks and rejects
+two incomplete traces: pinned context missed `implementation_references.py`, and
+deadline ownership missed `fastcontext.py`. This result justifies broader repeated
+evaluation before changing investigation behavior; it does not justify heuristic
+or ranking changes.
+`evals/golden/references_v1.json` is a deterministic offline retrieval and
+abstention contract over a fixed source corpus; it runs in the standard test suite.
 
 Versioned contracts: implementation reference schema/index v2; investigation
 report v3, evidence schema v3, prompt v5, analyzer v4; Git materialization v2.

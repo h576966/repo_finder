@@ -1,13 +1,14 @@
 # Source Scout
 
-Source Scout gives Codex implementation examples from explicitly selected Git
+Source Scout is a personal, local Windows tool, not a general-purpose package or
+public distribution. It gives Codex implementation examples from explicitly selected Git
 repositories and bounded investigation of unresolved source relations. Codex
 owns reasoning, adaptation, edits and verification. Use ordinary text tools and
 Serena directly when they answer the question.
 
 ## Install
 
-Windows is the supported platform. Python 3.11+ and Git are required.
+Windows is the supported platform. Python 3.12+ and Git are required.
 From this trusted checkout:
 
 ```powershell
@@ -132,6 +133,37 @@ share finalization and a maximum 240-second deadline. SDK retries are zero.
 Disabled, incomplete, stale, failed and timed-out outcomes remain explicit; do
 not retry, switch providers, raise budgets or chain investigations automatically.
 Full journals stay under the source root's `.source_scout/explorations/`.
+
+## Usage and Codex feedback
+
+Reference find/context and investigation calls save small local records under
+`SOURCE_SCOUT_HOME/usage/<id>/result.json`. Without that setting, references use
+the current directory's `.source_scout/usage/`; investigations use the source
+root's `.source_scout/usage/`. Responses include `usage.report_path` (or
+`usage.error` if writing failed). Structured CLI/MCP errors include the journal
+path when available; it is also reported on stderr. Logging never invokes a model.
+
+Records contain the task, operation, current Python source fingerprint, timing,
+status and returned source identities/ranges. Investigation records link to the
+existing detailed report for model usage and observations. They do not duplicate
+source excerpts, prompts or credentials. Test/eval records have a separate `kind`;
+normal usage is `usage`. Local files may contain task text and private paths.
+
+Codex supplies the assessment after using and checking the result:
+
+```powershell
+source-scout feedback --report <usage.report_path> --outcome partly_helped --observation "Found the callee but missed callback registration" --evidence "Direct read of src/registry.py:25-40 established the missing relation"
+```
+
+Outcomes are `helped`, `partly_helped`, `did_not_help`, and `unassessed`. No
+feedback means unassessed. Each submission creates a new `feedback-<id>.json`
+beside the original record; earlier assessments and results are preserved.
+The assessor is always `codex`; this is an agent judgment supported by its
+observation and optional evidence, not independent proof of correctness.
+Codex records ordinary feedback without asking the owner. The owner can join
+later review and selection of regression/eval cases. Use both successful and
+unsuccessful cases, excluding `test`/`evaluation` records from real-use samples.
+There is no automatic tuning, scoring service, upload or retention cleanup.
 
 ## Development and migration
 

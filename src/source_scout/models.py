@@ -38,6 +38,7 @@ class FindImplementationReferencesResult:
     truncated: bool = False
     warnings: list[str] = field(default_factory=list)
     schema_version: str = "implementation-references-v2"
+    usage: dict[str, str] | None = None
 
 
 @dataclass
@@ -73,6 +74,7 @@ class ImplementationReferenceContext:
     schema_version: str = "implementation-references-v2"
     hash_basis: str = "git-blob-bytes"
     historical_content_sha256: str | None = None
+    usage: dict[str, str] | None = None
 
 
 @dataclass
@@ -93,3 +95,4 @@ class LocalExploreResult:
     stop_reason: str | None = None
     missing_context: bool = False
     truncated: bool = False
+    usage: dict[str, str] | None = None

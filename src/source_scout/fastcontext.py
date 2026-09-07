@@ -40,6 +40,7 @@ from .fastcontext_types import (
 )
 from .investigation_anchors import InvestigationAnchor, anchor_seed
 from .models import LocalExploreResult
+from .usage_journal import journaled
 
 execute_tool = fastcontext_tooling.execute_tool
 glob_paths = fastcontext_tooling.glob_paths
@@ -110,6 +111,7 @@ async def smoke_test(
     return {"ok": True, "tool_call": calls[0]}
 
 
+@journaled
 async def explore_local_project(
     task: str,
     project_path: str | Path = ".",

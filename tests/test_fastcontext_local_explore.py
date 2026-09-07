@@ -84,6 +84,10 @@ async def test_explore_local_project_returns_ephemeral_citations(tmp_path: Path)
     assert trace[1]["tool_calls"] == []
     assert trace[1]["final_citations"] == ["src/components/data-table.tsx:1-4"]
     assert stored["accounting"]["request_count"] == 2
+    usage = json.loads(Path(result.usage["report_path"]).read_text())
+    assert usage["result"]["report_path"] == result.report_path
+    assert usage["result"]["evidence_paths"] == result.evidence_paths
+    assert "trajectory" not in usage["result"]
 
     assert not (root / ".source_scout" / "cache.duckdb").exists()
 

@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from . import deepseek, eval_support, fastcontext
+from .exploration_policy import LOCAL_METHODS, SELECTIVE_USE_CASES
+from .usage_journal import evaluation_usage
 
 REPO_ROOT = eval_support.REPO_ROOT
 SUITE_ALIASES = {
@@ -182,12 +184,20 @@ def _validate_task(task: Any, index: int) -> dict[str, Any]:
         task_id,
         required=False,
     )
+    use_case = str(task.get("use_case", "")).strip() or None
+    if use_case is not None and use_case not in SELECTIVE_USE_CASES:
+        raise ValueError(f"Task {task_id} has an invalid use_case.")
+    attempted_local_methods = _string_list(task.get("attempted_local_methods"))
+    if any(method not in LOCAL_METHODS for method in attempted_local_methods):
+        raise ValueError(f"Task {task_id} has invalid attempted_local_methods.")
     return {
         "id": task_id,
         "task": task_text,
         "project_path": str(task.get("project_path", "")).strip(),
         "expected_citations": expected,
         "acceptable_citations": acceptable,
+        "use_case": use_case,
+        "attempted_local_methods": attempted_local_methods,
         "manual_search_terms": _string_list(task.get("manual_search_terms")),
         "task_type": _task_type(task, task_text),
         "target_family": _target_family(task, task_text),
@@ -268,16 +278,22 @@ async def _evaluate_task(
     result: Any = None
     error_tool_trace: list[dict[str, object]] = []
     try:
-        explore = fastcontext.explore_local_project(
-            reason="Explicitly selected local exploration evaluation task",
-            task=str(task["task"]),
-            project_path=project_root,
-            max_turns=max_turns,
-        )
-        if task_timeout_seconds is None:
-            result = await explore
-        else:
-            result = await asyncio.wait_for(explore, timeout=task_timeout_seconds)
+        explore_kwargs: dict[str, Any] = {
+            "reason": "Explicitly selected local exploration evaluation task",
+            "task": str(task["task"]),
+            "project_path": project_root,
+            "max_turns": max_turns,
+        }
+        if task.get("use_case") is not None:
+            explore_kwargs["use_case"] = task["use_case"]
+        if task.get("attempted_local_methods"):
+            explore_kwargs["attempted_local_methods"] = task["attempted_local_methods"]
+        explore = fastcontext.explore_local_project(**explore_kwargs)
+        with evaluation_usage():
+            if task_timeout_seconds is None:
+                result = await explore
+            else:
+                result = await asyncio.wait_for(explore, timeout=task_timeout_seconds)
     except TimeoutError:
         error = f"Timed out after {task_timeout_seconds:g} seconds."
     except fastcontext.FastContextLoopError as exc:
@@ -336,6 +352,7 @@ async def _evaluate_task(
         error is None
         and result_status == "completed"
         and bool(report["any_expected_path_hit"])
+        and bool(report["all_required_paths_hit"])
         and bool(report["any_line_overlap_hit"])
         and int(report["invalid_citation_count"]) == 0
     )
@@ -610,7 +627,7 @@ def _metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(task_reports)
     completed = sum(1 for task in task_reports if task["status"] == "completed")
     passed = sum(1 for task in task_reports if task["passed"])
-    path_hits = sum(1 for task in task_reports if task["any_expected_path_hit"])
+    path_hits = sum(1 for task in task_reports if task["all_required_paths_hit"])
     line_hits = sum(1 for task in task_reports if task["any_line_overlap_hit"])
     bad_citations = sum(int(task["bad_citation_count"]) for task in task_reports)
     invalid_citations = sum(int(task["invalid_citation_count"]) for task in task_reports)
@@ -684,7 +701,7 @@ def _group_metrics(task_reports: list[dict[str, Any]], key: str) -> dict[str, di
             "completed_tasks": sum(1 for task in tasks if task["status"] == "completed"),
             "passed_tasks": sum(1 for task in tasks if task["passed"]),
             "path_hit_rate": round(
-                sum(1 for task in tasks if task["any_expected_path_hit"]) / total,
+                sum(1 for task in tasks if task["all_required_paths_hit"]) / total,
                 4,
             )
             if total

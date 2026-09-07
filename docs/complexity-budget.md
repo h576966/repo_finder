@@ -18,6 +18,7 @@ DB server, provider router, LSP/index server, ontology, dashboard or reminder ho
 | Anchors | 1–6 relative regular source files, range <=160 lines, optional validated symbol hint; never observation evidence |
 | Navigation | rg, bounded repo-map and Python AST support; optional separate Serena process |
 | Checks | This repository's Ruff/mypy/pytest, existing process control, bounded summaries, complete local logs |
+| Usage feedback | Local result files and separate Codex assessments; no model, database or new MCP operation |
 
 Historical raw administrative export is row-paginated and preserves stored data;
 it is not a source presentation endpoint. No new packaging feature is retained.

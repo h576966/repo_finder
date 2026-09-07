@@ -1,0 +1,40 @@
+{
+  "suite_id": "implementation-references-v1",
+  "description": "Deterministic offline retrieval and abstention contract over a fixed noisy source corpus.",
+  "tasks": [
+    {
+      "id": "windows_launcher",
+      "task": "Windows command launcher repository virtual environment Python",
+      "expected_path": "scripts/source-scout.cmd",
+      "expected_text": "PROJECT_PYTHON"
+    },
+    {
+      "id": "token_rotation",
+      "task": "rotate OAuth refresh token and revoke old token",
+      "expected_path": "src/auth/token_rotation.py",
+      "expected_text": "rotate_oauth_refresh_token"
+    },
+    {
+      "id": "retry_backoff",
+      "task": "decorrelated jitter retry delay schedule",
+      "expected_path": "src/retry/backoff.py",
+      "expected_text": "decorrelated_jitter_retry_delay"
+    },
+    {
+      "id": "event_dispatch",
+      "task": "plugin event dispatcher callback registry",
+      "expected_path": "src/events/dispatcher.py",
+      "expected_text": "register_callback"
+    },
+    {
+      "id": "absent_gpu",
+      "task": "WebGPU SPIR-V shader pipeline",
+      "expected_status": "abstained"
+    },
+    {
+      "id": "absent_kubernetes",
+      "task": "Kubernetes reconciliation operator controller",
+      "expected_status": "abstained"
+    }
+  ]
+}

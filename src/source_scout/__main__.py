@@ -66,6 +66,13 @@ def main() -> None:
     check.add_argument("--format", choices=["text", "json"], default="text")
     check.add_argument("--timeout-seconds", type=float, default=300.0)
 
+    feedback = sub.add_parser("feedback", help="Append Codex's assessment of one recorded usage")
+    feedback.add_argument("--report", required=True)
+    feedback.add_argument("--outcome", required=True,
+                          choices=["helped", "partly_helped", "did_not_help", "unassessed"])
+    feedback.add_argument("--observation", required=True)
+    feedback.add_argument("--evidence", default="")
+
     refs = sub.add_parser("references", help="Manage and inspect explicit implementation references")
     refsub = refs.add_subparsers(dest="reference_command", required=True)
     add = refsub.add_parser("add", help="Pin one explicitly selected local/GitHub repository")
@@ -130,7 +137,11 @@ def main() -> None:
         _run_check_commands(output_format=args.format, timeout_seconds=args.timeout_seconds)
         return
     try:
-        if args.command == "references":
+        if args.command == "feedback":
+            from .usage_journal import write_feedback
+
+            result = write_feedback(args.report, args.outcome, args.observation, args.evidence)
+        elif args.command == "references":
             result = _references(args)
         elif args.command in {"investigate", "explore-local"}:
             from . import fastcontext

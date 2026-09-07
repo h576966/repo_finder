@@ -29,6 +29,7 @@ from .models import (
 from .path_safety import PathSafetyError, resolve_under_root, should_skip_path
 from .reference_bounds import MAX_EXCERPT_BYTES, MAX_TASK_CHARS, bounded_response, json_size, metadata_view
 from .target_profile import TargetProfileV1, build_target_profile, npm_unambiguous_major
+from .usage_journal import journaled
 
 SelectionKind = Literal["personal", "curated"]
 REFERENCE_ANALYZER_VERSION = "implementation-reference-v2"
@@ -268,6 +269,7 @@ async def add_reference_source(
     }
 
 
+@journaled
 def find_implementation_references(
     task: str,
     *,
@@ -348,6 +350,7 @@ def find_implementation_references(
     )
 
 
+@journaled
 def get_implementation_reference(
     reference_id: str,
     *,

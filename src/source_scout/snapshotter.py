@@ -111,7 +111,7 @@ def read_blob(root: Path, commit: str, rel_path: str, *, limit: int = MAX_BLOB_B
                 raise SnapshotError("Pinned source is not a regular Git blob.")
             if blob.size > limit:
                 raise SnapshotError(f"Pinned source exceeds {limit} bytes: {rel_path}")
-            raw = blob.data_stream.read(limit + 1)
+            raw = _read_blob_bytes(blob, limit + 1)
         if len(raw) > limit:
             raise SnapshotError(f"Pinned source exceeds {limit} bytes: {rel_path}")
         return bytes(raw)
@@ -145,7 +145,7 @@ def validate_snapshot(root: Path, commit: str) -> dict[str, Any]:
                     raise SnapshotError("Pinned snapshot has changed files or paths.")
                 with path.open("rb") as stream:
                     actual = stream.read(MAX_BLOB_BYTES + 1)
-                if actual != blob.data_stream.read(MAX_BLOB_BYTES + 1):
+                if actual != _read_blob_bytes(blob, MAX_BLOB_BYTES + 1):
                     raise SnapshotError(
                         "Pinned snapshot has changed files; refusing uncertain source context."
                     )
@@ -226,7 +226,7 @@ def clone_snapshot(
                 if safe_path != blob.path:
                     raise SnapshotError("Unsafe Git tree path.")
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(blob.data_stream.read(MAX_BLOB_BYTES + 1))
+                destination.write_bytes(_read_blob_bytes(blob, MAX_BLOB_BYTES + 1))
         try:
             staging.rename(target)
         except OSError as exc:
@@ -259,6 +259,17 @@ def clone_snapshot(
     finally:
         if staging.exists():
             _remove_generated_path(staging, expected_parent=staging_parent)
+
+
+def _read_blob_bytes(blob: Any, limit: int) -> bytes:
+    """Read one GitDB stream and explicitly release its Windows file mapping."""
+    object_stream = blob.data_stream
+    try:
+        return bytes(object_stream.read(limit))
+    finally:
+        close = getattr(object_stream.stream, "close", None)
+        if callable(close):
+            close()
 
 
 def _remove_generated_path(path: Path, *, expected_parent: Path) -> None:

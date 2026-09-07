@@ -4,6 +4,7 @@ import shutil
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 
 import git
 import httpx
@@ -13,6 +14,24 @@ from fastmcp import Client
 from source_scout import catalog, implementation_references, server, snapshotter
 
 pytestmark = pytest.mark.usefixtures("isolated_catalog")
+
+
+def test_git_blob_reader_closes_underlying_stream() -> None:
+    class TrackingStream:
+        closed = False
+
+        def read(self, limit: int) -> bytes:
+            return b"payload"[:limit]
+
+        def close(self) -> None:
+            self.closed = True
+
+    stream = TrackingStream()
+    object_stream = SimpleNamespace(read=stream.read, stream=stream)
+    blob = SimpleNamespace(data_stream=object_stream)
+
+    assert snapshotter._read_blob_bytes(blob, 4) == b"payl"
+    assert stream.closed is True
 
 
 @pytest.mark.asyncio
@@ -90,7 +109,11 @@ async def test_local_add_find_context_is_commit_pinned_and_model_free(monkeypatc
     second = implementation_references.find_implementation_references(
         "bounded decorrelated jitter retry schedule"
     )
-    assert asdict(first) == asdict(second)
+    first_payload, second_payload = asdict(first), asdict(second)
+    assert first_payload.pop("usage") != second_payload.pop("usage")
+    assert first_payload == second_payload
+    journal = json.loads(Path(first.usage["report_path"]).read_text(encoding="utf-8"))
+    assert journal["result"]["results"][0]["reference_id"] == first.results[0].reference_id
     assert first.status == "matches" and len(first.results) == 1
     candidate = first.results[0]
     assert candidate.path == "src/retry_budget.py"
@@ -107,6 +130,10 @@ async def test_local_add_find_context_is_commit_pinned_and_model_free(monkeypatc
     assert context.snippets[0].end_line >= context.snippets[0].start_line
     assert all(snippet.permalink is None for snippet in context.snippets)
     assert context.license["status"] == "files_present_spdx_unknown"
+    recorded_context = json.loads(Path(context.usage["report_path"]).read_text(encoding="utf-8"))
+    assert recorded_context["result"]["snippets"][0]["content_sha256"] == context.snippets[0].content_sha256
+    assert "content" not in recorded_context["result"]["snippets"][0]
+    assert "manifests" not in recorded_context["result"]
 
 
 @pytest.mark.asyncio

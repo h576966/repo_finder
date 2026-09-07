@@ -28,3 +28,13 @@ are only stopping heuristics. For unavailable, incomplete, invalid or timed-out
 results, report the missing relation and continue local navigation. Do not launch
 smoke tests, switch providers, raise budgets, retry via CLI, or chain investigations
 to bypass a limit. Preserve CLI process IDs until completion when execution yields.
+
+After checking the returned sources, record Codex's own feedback locally:
+`source-scout feedback --report <usage.report_path> --outcome <outcome>
+--observation <concrete benefit or missing relation> [--evidence <source/test evidence>]`.
+Use `helped`, `partly_helped`, `did_not_help`, or `unassessed`. Include incomplete
+results and explain what still needed local investigation. Completed status and
+valid citation ranges alone do not establish usefulness. Do not ask the user to
+write routine feedback. Leave unassessed when evidence is insufficient; briefly
+mention `usage.error` if logging failed. Feedback is for later review and does
+not trigger another model call or alter investigation behavior.

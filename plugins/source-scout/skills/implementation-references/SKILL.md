@@ -27,3 +27,14 @@ Equivalent local commands are `source-scout references find --task <task>
 For stale source, missing evidence, clipped presentation or transport failure,
 report the actual limitation. Do not turn relative rank or metadata into proof.
 References use no model. No remote operation is appropriate for offline-only data.
+
+After assessing the result, record Codex's own feedback locally:
+`source-scout feedback --report <usage.report_path> --outcome <outcome>
+--observation <concrete benefit or missing evidence> [--evidence <source/test evidence>]`.
+Use `helped`, `partly_helped`, `did_not_help`, or `unassessed`. Assess searches
+and opened contexts, including abstentions; a search with no hits is not proof
+that no relevant implementation exists. Mention related usage report paths when
+find/context belong together. Do not ask the user for routine feedback or infer
+usefulness from ranking or green tests alone. If you cannot assess it, leave it
+unassessed. If `usage.error` is returned, mention the logging failure briefly.
+Feedback records observations for later review; it does not change retrieval.

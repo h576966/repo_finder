@@ -1,6 +1,7 @@
 # Project Instructions
 
-Be concise; avoid over-engineering. Source Scout provides Implementation References
+Be concise; avoid over-engineering. Source Scout is a personal, local Windows tool,
+not a general-purpose package or public distribution. It provides Implementation References
 and selective Code Investigation for Codex across projects/worktrees. Codex owns
 reasoning, adaptation, edits, test selection and final assessment. Read
 `docs/source_scout_direction.md` and `docs/complexity-budget.md`.
@@ -18,6 +19,9 @@ reasoning, adaptation, edits, test selection and final assessment. Read
    personal/curated sources; read `get_implementation_reference` citations and
    make your own assessment. Abstention never triggers automatic GitHub crawling.
 5. Review correctness, security, edge cases and missing tests locally.
+   After using Source Scout, Codex records its assessment with `source-scout feedback`
+   using `usage.report_path`, an outcome and a concrete observation. Do not ask the
+   owner for routine feedback. Missing/insufficient evidence stays unassessed.
 6. Run `source-scout check` in this trusted working copy before done. It runs this
    project's Ruff/mypy/offline pytest and stores logs/results under
    `.source_scout/checks/`. A report verifies only its recorded working-copy
@@ -41,6 +45,8 @@ offline. A key alone does not authorize a route; honor off/selective/on policy.
   or real user-data cleanup. Retired pipelines and the reuse MCP profile stay retired.
 - No arbitrary cloned code execution, hosted PR review services, new dependencies
   without discussion, new index/LSP/server/router, dashboard or reminder hooks.
+- Optimize for the owner's actual local workflow; do not add distribution machinery,
+  broad compatibility layers or speculative abstractions.
 - Keep generated data under `.source_scout/`; never commit logs or keys.
 - Do not run paid live evals, commit, push or create a PR unless requested.
 

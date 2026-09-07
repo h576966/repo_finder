@@ -7,7 +7,9 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def offline_credentials(monkeypatch):
+def offline_credentials(monkeypatch, tmp_path):
+    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / "collection"))
+    monkeypatch.setenv("SOURCE_SCOUT_USAGE_KIND", "test")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)

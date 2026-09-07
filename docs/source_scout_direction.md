@@ -1,6 +1,8 @@
 # Product direction — 2026-09-06
 
-Source Scout supports semi-autonomous Codex work across projects and worktrees.
+Source Scout is a personal, local Windows tool. It is not intended as a public
+package or general platform; decisions optimize for the owner's actual workflow.
+It supports semi-autonomous Codex work across projects and worktrees.
 It has two capabilities: Implementation References and Code Investigation.
 Codex owns decisions, adaptations, changes and verification. No automatic search,
 review, testing or model escalation policy belongs in the product.
@@ -25,10 +27,15 @@ roots and target project paths are call-specific; shared collection storage does
 not imply shared project state.
 
 The old application is removed, not relocated: no broad scout/qualify, capability
-ontology/scoring, assessor/verdict, automatic refinement, outcome writer,
+ontology/scoring, assessor/verdict, automatic refinement, legacy reuse outcome writer,
 assessment-gated packaging or exclusive reuse eval. Historical tables are kept
 for read/export, with additive schema compatibility only. Existing reports,
 bundles and snapshots retain their identity and location. No real data GC runs.
+
+Usage records and append-only Codex feedback are local evidence for later
+improvements. Codex owns routine assessment; the owner can participate in later
+review. Missing feedback stays unassessed. This journal neither scores nor tunes
+the product and never uses the historical reuse-outcome tables.
 
 Serena remains separately pinned at
 `be609b625740846dc2750cc13291966cf1216b00`. Every session starts its own process

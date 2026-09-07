@@ -1,8 +1,8 @@
 [project]
 name = "source-scout"
 version = "0.3.0"
-description = "Implementation References and selective Code Investigation for Codex"
-requires-python = ">=3.11"
+description = "Personal local Implementation References and Code Investigation tool for Codex"
+requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
@@ -30,13 +30,13 @@ build-backend = "hatchling.build"
 
 [tool.ruff]
 line-length = 110
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

@@ -16,4 +16,7 @@ def _format_local_explore_text(result: object) -> str:
         lines.append("")
         lines.append("Notes:")
         lines.extend(f"- {note}" for note in notes)
+    usage = getattr(result, "usage", None)
+    if usage:
+        lines.append(f"Usage: {usage.get('report_path') or usage.get('error')}")
     return "\n".join(lines)
