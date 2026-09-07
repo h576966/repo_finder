@@ -26,10 +26,12 @@ An API key alone does not authorize the route.
 Read useful cited source directly and assess it yourself. Observed range counts
 are only stopping heuristics. For unavailable, incomplete, invalid or timed-out
 results, report the missing relation and continue local navigation. Do not launch
-smoke tests, switch providers, raise budgets, retry via CLI, or chain investigations
-to bypass a limit. Preserve CLI process IDs until completion when execution yields.
+extra model smoke tests, switch providers, raise budgets, retry via CLI, or chain
+investigations to bypass a limit. This does not restrict ordinary local project
+tests. Preserve CLI process IDs until completion when execution yields.
 
-After checking the returned sources, record Codex's own feedback locally:
+After checking sources and assessing actual utility, normally at the end of the
+work unit, record Codex's own feedback locally:
 `source-scout feedback --report <usage.report_path> --outcome <outcome>
 --observation <concrete benefit or missing relation> [--evidence <source/test evidence>]`.
 Use `helped`, `partly_helped`, `did_not_help`, or `unassessed`. Include incomplete

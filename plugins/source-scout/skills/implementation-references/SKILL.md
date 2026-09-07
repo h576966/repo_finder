@@ -28,7 +28,8 @@ For stale source, missing evidence, clipped presentation or transport failure,
 report the actual limitation. Do not turn relative rank or metadata into proof.
 References use no model. No remote operation is appropriate for offline-only data.
 
-After assessing the result, record Codex's own feedback locally:
+After assessing actual utility, normally at the end of the work unit when relevant
+verification is available, record Codex's own feedback locally:
 `source-scout feedback --report <usage.report_path> --outcome <outcome>
 --observation <concrete benefit or missing evidence> [--evidence <source/test evidence>]`.
 Use `helped`, `partly_helped`, `did_not_help`, or `unassessed`. Assess searches

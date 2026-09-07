@@ -1,8 +1,10 @@
 # Development notes — 2026-09-06
 
 Install `.[all,dev]` in the trusted working copy and run `source-scout check`
-before completion. The report records the actual tracked and non-ignored file
-identity before and after checks. Rerun after edits. Do not run cloned source
+after project changes. The report records the actual tracked and non-ignored file
+identity before and after checks. Follow `AGENTS.md` for result reuse and the narrow
+final handoff-only update exception; never relabel a report as exact-tree proof
+after an edit. Do not run cloned source
 code or use this runner as a generic verification engine for another project.
 
 ```powershell

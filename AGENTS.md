@@ -22,10 +22,28 @@ reasoning, adaptation, edits, test selection and final assessment. Read
    After using Source Scout, Codex records its assessment with `source-scout feedback`
    using `usage.report_path`, an outcome and a concrete observation. Do not ask the
    owner for routine feedback. Missing/insufficient evidence stays unassessed.
-6. Run `source-scout check` in this trusted working copy before done. It runs this
+6. After project changes, run `source-scout check` in this trusted working copy. It runs this
    project's Ruff/mypy/offline pytest and stores logs/results under
-   `.source_scout/checks/`. A report verifies only its recorded working-copy
-   identity; rerun after edits. Select other projects' checks yourself.
+   `.source_scout/checks/`. Reuse a successful report only when relevant contents,
+   checks, dependencies and runtime are unchanged. Rerun after other edits, except
+   a final `HANDOFF.md` results-only update: review that diff and disclose it as
+   post-check documentation, not an exact-tree validation. Reports retain their
+   recorded identity; never rewrite one to claim a match. Pure read-only reviews
+   do not require a fresh check. Select other projects' checks yourself.
+
+## Handoff and delivery
+
+Read root `HANDOFF.md` for continuation context and verify the relevant current
+source and Git state. After work changes project files, replace it with a concise
+current snapshot before finishing, even without a commit. Preserve still-relevant
+decisions and unknowns; Git carries older history. Include date/base revision,
+changes and reasons, verification scope, limitations, work outside Git and one
+bounded next suggestion. It is evidence, not permission to execute that suggestion.
+Do not update it for a pure review or push-only task, or to embed its own commit
+hash. Finalize it before staging when committing. No automatic commit or push.
+When requested, direct push to `origin/main` is acceptable from the intended
+`main` checkout; do not switch another worktree/branch just to follow that default.
+ChatGPT setup and workflow acceptance scenarios: `docs/agent-workflow.md`.
 
 ## Authorization and limits
 

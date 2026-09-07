@@ -6,6 +6,10 @@ repositories and bounded investigation of unresolved source relations. Codex
 owns reasoning, adaptation, edits and verification. Use ordinary text tools and
 Serena directly when they answer the question.
 
+For continuation context, read [the current handoff](HANDOFF.md) and verify it
+against the current branch. [Agent workflow](docs/agent-workflow.md) includes the
+ChatGPT Ask Agent setup and the limits of that snapshot.
+
 ## Install
 
 Windows is the supported platform. Python 3.12+ and Git are required.
